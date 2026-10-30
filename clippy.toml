@@ -1,0 +1,13 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Code-health limits, for production code: every crate root warns on these two and allows
+# them under cfg(test); too_many_arguments is on by default. The gate's -D warnings makes them
+# errors. A unit over a limit carries `#[expect(clippy::…, reason = "…")]` (docs/contributing.md).
+# Clippy's cognitive complexity counts about 0.6 of the complexity-analyzer's (measured on 193
+# units, 2026-10-21): 10 here catches 14 of the 17 units the analyzer puts over its limit of 16.
+cognitive-complexity-threshold = 10
+too-many-lines-threshold = 60
+too-many-arguments-threshold = 6

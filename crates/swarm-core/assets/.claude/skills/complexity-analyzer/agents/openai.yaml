@@ -1,0 +1,7 @@
+interface:
+  display_name: "Complexity analyzer"
+  short_description: "Rank complex functions, suggest fixes"
+  default_prompt: "Use $complexity-analyzer to find the most complex functions in this repo."
+
+policy:
+  allow_implicit_invocation: false

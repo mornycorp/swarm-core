@@ -1,0 +1,29 @@
+#!/bin/sh
+# A pinned copy from swarm-core (crates/swarm-core/assets/scripts/hooks/pre-push): edit it
+# there, then `cargo xtask swarm-core bump` and `cargo xtask swarm-core sync-assets`.
+#
+# Optional pre-push hook: before a push of an issue branch
+# (`<n>-<slug>`), warn when another agent holds issue n: its open pull request, or its live claim
+# on the tracking branch (`cargo xtask claim --check`). It never blocks a push unless
+# {{env}}_CLAIM_STRICT=1, and never when it can't check (offline, no gh).
+# {{env}}_CLAIM_CHECK=off skips it.
+#
+# Install, once per clone (its worktrees share it):
+#   cp scripts/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+# or use the repository's hooks directly: git config core.hooksPath scripts/hooks
+
+[ "${{env}}_CLAIM_CHECK" = "off" ] && exit 0
+strict=""
+[ "${{env}}_CLAIM_STRICT" = "1" ] && strict="--strict"
+
+status=0
+# Git gives one line per ref pushed: <local ref> <local sha> <remote ref> <remote sha>.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/heads/[0-9]*-*)
+            branch="${remote_ref#refs/heads/}"
+            cargo xtask claim --check --branch "$branch" $strict </dev/null || status=1
+            ;;
+    esac
+done
+exit $status

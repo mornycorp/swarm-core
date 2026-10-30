@@ -1,0 +1,17 @@
+# A starting point from swarm-core's templates (`cargo xtask swarm-core init`): this repo's
+# own now. The `ci` contract (swarm-core's docs/ci-contract.md) needs the `ci` profile and
+# its junit file at `target/nextest/ci/junit.xml`, which `gate` keeps beside its log for
+# `cargo xtask gate-times`; the rest is yours to tune.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The gate's test step: run every test, so one failure doesn't hide the others, and name the
+# failures again at the end for `gate --rerun-failed` to read.
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "fail"
+
+[profile.ci.junit]
+path = "junit.xml"
