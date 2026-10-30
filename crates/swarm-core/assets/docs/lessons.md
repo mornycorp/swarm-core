@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # Lessons for a new swarm
 
-> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-30 · **Change:** minor (names no consumer) · **Target:** M1
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (a front end building the core's logic) · **Target:** M1
 
 The early design mistakes the first two swarms made: how each was found, what it cost, and the
 guardrail now in place (a rule, a check, or an item on the architecture review's checklist). It
@@ -90,6 +90,27 @@ known traps: a trap a review finds that isn't listed here is added, with the iss
     under load rerun alone on the same HEAD; to fix a flake, make the failing condition
     deterministic in a test, never loop it (a swarm's AGENTS.md test rules).
 
+## 5. A front end building the core's logic
+
+- **The mistake:** a swarm's UI front end needed rows, row heights, hit-testing and drag state
+  before the core had a layout or an interaction module, so it built them itself: which rows are
+  on screen, what lies under the pointer, a track's height (taken from the bars the last frame
+  happened to draw), the scroller's pixel-to-axis mapping (a second, inexact copy of the core's),
+  and the drag in progress. It didn't reach into the engine or mirror its types, so none of the
+  review's traps named it, and every UI task after it (pinning, selection, the minimap, the
+  keyboard) would have extended it there, out of reach of the CLI, the control channel and MCP.
+- **How it was found:** the architecture review at the first ~20 merges (2026-10-30), reading
+  the UI crate against the spec's "the widget owns the layout and all interaction" and the
+  architecture's layer table, which gave both to the core.
+- **What it cost:** caught early: about 5–8 agent-hours to move into the core, against roughly
+  40 hours of planned UI work that would have built on it.
+- **The guardrail:**
+  - **Review:** a new item on the architecture review's checklist: logic the spec or the
+    architecture gives the core (layout, hit-testing, interaction state, any mapping between
+    pixels and the model), built in a front end.
+  - **Rule:** a front end that needs an answer the engine doesn't give asks for the command
+    (an issue, or the algorithm in the core first), rather than computing it.
+
 ## Adding a lesson
 
 A lesson is an early design or process mistake that cost a swarm real time, with its guardrail in
@@ -105,6 +126,7 @@ there, then bump.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Lesson 5: a front end building the core's logic (layout, hit-testing, interaction state), and its checklist item |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): pull requests, `gh`, PRs as `#n` |
 | 2026-10-30 | minor | swarm-foundation renamed swarm-core: the crate, `cargo xtask swarm-core` (was `foundation`), `docs/swarm-core-assets.md`, and `sc#n` for its issues (was `f#n`) |
