@@ -226,13 +226,18 @@ fn is_target_dir(dir: &Path) -> bool {
     dir.join("CACHEDIR.TAG").is_file() || dir.join("debug").is_dir() || dir.join("release").is_dir()
 }
 
-/// The newest write to `dir`'s build: its own time and its directories' to three deep (a profile,
-/// a target triple's profile, and their `deps`, `.fingerprint`, `build` and `incremental`, whose
-/// own times move as rustc writes into them; their contents aren't walked).
+/// The newest write to `dir`'s build: the times of its `deps`, `.fingerprint`, `build` and
+/// `incremental` to three deep (under a profile, or a target triple's profile), which move as rustc
+/// writes into them; their contents aren't walked. Their parents' own times don't count: cargo
+/// makes and removes a lock file in the profile dir on every run, a `cargo xtask …` that compiles
+/// nothing included, so two agents polling `capacity` once kept each other at 0 builds (sc#1).
 fn newest_write(dir: &Path, depth: u32) -> Option<SystemTime> {
-    let mut newest = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
     let leaf = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| matches!(n, "deps" | ".fingerprint" | "build" | "incremental"));
-    if depth == 0 || leaf {
+    if leaf {
+        return std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+    }
+    let mut newest = None;
+    if depth == 0 {
         return newest;
     }
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -980,6 +985,10 @@ mod tests {
             }
         };
         age(&a.join("target").join("agent-old"));
+        // Only cargo ran here (its lock file moved the profile dir's time), no rustc: not a build.
+        let idle = a.join("target").join("agent-idle");
+        mk(&idle);
+        open_dir(&idle.join("debug").join("deps")).and_then(|f| f.set_modified(old)).unwrap();
         let since = SystemTime::now() - RECENT;
         let ours = a.join("target").join("agent-ours");
         let busy = busy_target_dirs(&[a.clone(), b.clone(), dir.join("missing")], &[&ours], since);
