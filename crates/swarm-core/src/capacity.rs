@@ -4,11 +4,14 @@
 //!
 //! - **Report:** logical cores, free memory, free disk on the target dir's drive, and the builds
 //!   running now: other cargo target dirs (in any worktree of this clone) written in the last
-//!   [`RECENT`], and the `cargo` and `rustc` processes.
+//!   [`RECENT`], and the `cargo`, `rustc` and `cargo-nextest` processes. With no `rustc` and no
+//!   `cargo-nextest` running anywhere, no build is running, whatever the dirs' times say.
 //! - **Suggest:** about one more build per [`CORES_PER_BUILD`] free cores and [`GB_PER_BUILD`] GB
 //!   of free memory, at most [`MAX_MORE`], and none with under [`MIN_DISK_GB`] GB of disk free
-//!   ([`suggest`]). A build running now holds its cores; free memory already counts it. A figure
-//!   that can't be read counts as none: the suggestion errs towards fewer builds.
+//!   ([`suggest`]). A machine sets its own figures with `SWARM_CORES_PER_BUILD` and
+//!   `SWARM_GB_PER_BUILD` ([`Costs`]). A build running now holds its cores; free memory already
+//!   counts it. A figure that can't be read counts as none: the suggestion errs towards fewer
+//!   builds.
 //! - **Set up** (`--helper <name>`): refused in the clone's main worktree (the owner's checkout:
 //!   the first entry of `git worktree list --porcelain`), on a detached HEAD, or when the
 //!   suggestion is 0. Otherwise a worktree `<this worktree>-<name>` beside this one, on a new
@@ -21,7 +24,8 @@
 //!   branch whose id starts with [`READ_PREFIX`].
 //!
 //! Cores come from the standard library; memory and disk from the OS's own tools: `/proc/meminfo`
-//! and `df` on Linux, `sysctl`, `vm_stat` and `df` on macOS; on Windows one PowerShell (CIM for
+//! and `df` on Linux, `sysctl`, `vm_stat` (free, inactive, speculative and purgeable pages) and
+//! `df` on macOS; on Windows one PowerShell (CIM for
 //! memory, `Get-PSDrive` for disk). Processes from `ps`, or that PowerShell's `Get-Process`. Each
 //! call has a deadline. No new crates.
 //!
@@ -74,16 +78,52 @@ pub struct Machine {
     pub free_disk: Option<u64>,
     /// Other target dirs written in the last [`RECENT`].
     pub busy_dirs: Vec<PathBuf>,
-    /// Running `cargo` and `rustc` processes (`None`: couldn't list them).
+    /// Running `cargo`, `rustc` and `cargo-nextest` processes (`None`: couldn't list them).
     pub cargo: Option<u64>,
     pub rustc: Option<u64>,
+    pub nextest: Option<u64>,
+    /// What a build takes on this machine: [`Costs::from_env`].
+    pub costs: Costs,
 }
 
 impl Machine {
-    /// Builds running now: the busy target dirs, or one when none is but rustc is compiling.
+    /// Builds running now: the busy target dirs, or one when none is but rustc is compiling. None
+    /// at all while no `rustc` and no `cargo-nextest` runs anywhere on the machine, whatever the
+    /// target dirs' times say: a worker between builds, editing, holds no cores, and counting its
+    /// dir for 5 minutes after each build kept a gate waiting 35 minutes for room (sc#3).
     pub fn builds(&self) -> u64 {
+        if self.rustc == Some(0) && self.nextest == Some(0) {
+            return 0;
+        }
         let dirs = self.busy_dirs.len() as u64;
         if dirs == 0 && self.rustc.is_some_and(|n| n > 0) { 1 } else { dirs }
+    }
+}
+
+/// What one build takes, in cores and GB of memory: [`CORES_PER_BUILD`] and [`GB_PER_BUILD`],
+/// calibrated on the owner's Windows desktop, unless this machine says otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Costs {
+    pub cores: u64,
+    pub gb: u64,
+    /// Whether either came from the environment, for the report.
+    pub from_env: bool,
+}
+
+impl Default for Costs {
+    fn default() -> Self {
+        Costs { cores: CORES_PER_BUILD, gb: GB_PER_BUILD, from_env: false }
+    }
+}
+
+impl Costs {
+    /// The machine's own figures: `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` (whole numbers
+    /// 1 to 256; both swarms read the same two, as they share the machine), else the defaults. A
+    /// value that isn't one is ignored.
+    pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Costs {
+        let read = |name: &str| var(name).and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| (1..=256).contains(n));
+        let (cores, gb) = (read("SWARM_CORES_PER_BUILD"), read("SWARM_GB_PER_BUILD"));
+        Costs { cores: cores.unwrap_or(CORES_PER_BUILD), gb: gb.unwrap_or(GB_PER_BUILD), from_env: cores.is_some() || gb.is_some() }
     }
 }
 
@@ -99,20 +139,23 @@ fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / GB as f64)
 }
 
-/// The suggestion's arithmetic: min(free cores / 8, free GB / 5, 3), 0 under 20 GB of disk.
+/// The suggestion's arithmetic: min(free cores / 8, free GB / 5, 3), 0 under 20 GB of disk, with
+/// the machine's own [`Costs`] for the 8 and the 5.
 pub fn suggest(m: &Machine) -> Suggestion {
     let builds = m.builds();
-    let busy = builds.saturating_mul(CORES_PER_BUILD);
+    let (per_core, per_gb) = (m.costs.cores.max(1), m.costs.gb.max(1));
+    let busy = builds.saturating_mul(per_core);
     let free_cores = m.cores.saturating_sub(busy);
-    let by_cores = free_cores / CORES_PER_BUILD;
-    let mut basis = vec![format!(
-        "cores: {} logical - {CORES_PER_BUILD} x {builds} build(s) running = {free_cores} free; / {CORES_PER_BUILD} per build = {by_cores}",
-        m.cores
-    )];
+    let by_cores = free_cores / per_core;
+    let mut basis =
+        vec![format!("cores: {} logical - {per_core} x {builds} build(s) running = {free_cores} free; / {per_core} per build = {by_cores}", m.cores)];
+    if m.costs.from_env {
+        basis.push("costs: from SWARM_CORES_PER_BUILD / SWARM_GB_PER_BUILD".to_owned());
+    }
     let by_memory = match m.free_memory {
         Some(free) => {
-            let n = free / (GB_PER_BUILD * GB);
-            basis.push(format!("memory: {} free / {GB_PER_BUILD} GB per build = {n}", gb(free)));
+            let n = free / per_gb.saturating_mul(GB);
+            basis.push(format!("memory: {} free / {per_gb} GB per build = {n}", gb(free)));
             n
         }
         None => {
@@ -149,11 +192,12 @@ pub fn parse_meminfo(text: &str) -> (Option<u64>, Option<u64>) {
     (field("MemAvailable").or_else(|| field("MemFree")), field("MemTotal"))
 }
 
-/// Free memory from macOS's `vm_stat`: free, inactive and speculative pages, at its page size.
+/// Free memory from macOS's `vm_stat`: free, inactive, speculative and purgeable pages (purgeable
+/// memory is given back the moment it's asked for), at its page size.
 pub fn parse_vm_stat(text: &str) -> Option<u64> {
     let page: u64 = text.lines().next()?.split("page size of ").nth(1)?.split_whitespace().next()?.parse().ok()?;
     let pages = |name: &str| -> u64 { text.lines().find_map(|l| l.strip_prefix(name)?.trim().trim_end_matches('.').parse::<u64>().ok()).unwrap_or(0) };
-    let free = pages("Pages free:").saturating_add(pages("Pages inactive:")).saturating_add(pages("Pages speculative:"));
+    let free = ["Pages free:", "Pages inactive:", "Pages speculative:", "Pages purgeable:"].iter().fold(0u64, |n, name| n.saturating_add(pages(name)));
     free.checked_mul(page)
 }
 
@@ -163,8 +207,8 @@ pub fn parse_df(text: &str) -> Option<u64> {
     kb.checked_mul(1024)
 }
 
-/// What the OS's tools said: free and total memory and free disk (bytes), and the `cargo` and
-/// `rustc` processes running; `None` for what they couldn't say.
+/// What the OS's tools said: free and total memory and free disk (bytes), and the `cargo`,
+/// `rustc` and `cargo-nextest` processes running; `None` for what they couldn't say.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Figures {
     pub free_memory: Option<u64>,
@@ -172,37 +216,40 @@ pub struct Figures {
     pub free_disk: Option<u64>,
     pub cargo: Option<u64>,
     pub rustc: Option<u64>,
+    pub nextest: Option<u64>,
 }
 
 /// The numbers the Windows PowerShell script printed, one a line: available memory (bytes, the standby
-/// cache included, as Linux's `MemAvailable`), total memory (KB), free disk (bytes), `cargo` and
-/// `rustc` processes; an empty line is one it couldn't read.
+/// cache included, as Linux's `MemAvailable`), total memory (KB), free disk (bytes), `cargo`,
+/// `rustc` and `cargo-nextest` processes; an empty line is one it couldn't read.
 pub fn parse_windows(text: &str) -> Figures {
     let mut n = text.lines().map(|l| l.trim().parse::<u64>().ok());
     let mut next = || n.next().flatten();
-    Figures { free_memory: next(), total_memory: next().and_then(|k| k.checked_mul(1024)), free_disk: next(), cargo: next(), rustc: next() }
+    Figures { free_memory: next(), total_memory: next().and_then(|k| k.checked_mul(1024)), free_disk: next(), cargo: next(), rustc: next(), nextest: next() }
 }
 
 /// Every Windows figure from one PowerShell (its start is most of the time; `tasklist` alone took
 /// 5 to 18 s here): `{disk}` is the free disk's expression.
 const WINDOWS_SCRIPT: &str = "$m = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory; $o = Get-CimInstance Win32_OperatingSystem; \
     $m.AvailableBytes; $o.TotalVisibleMemorySize; {disk}; \
-    @(Get-Process -Name cargo -ErrorAction SilentlyContinue).Count; @(Get-Process -Name rustc -ErrorAction SilentlyContinue).Count";
+    @(Get-Process -Name cargo -ErrorAction SilentlyContinue).Count; @(Get-Process -Name rustc -ErrorAction SilentlyContinue).Count; \
+    @(Get-Process -Name cargo-nextest -ErrorAction SilentlyContinue).Count";
 
-/// How many processes are `cargo` and how many `rustc`, from `ps -A -o comm=`'s one name a line
-/// (a path on macOS; `.exe` and CSV quotes are tolerated).
-pub fn count_processes(text: &str) -> (u64, u64) {
-    let (mut cargo, mut rustc) = (0, 0);
+/// How many processes are `cargo`, `rustc` and `cargo-nextest`, from `ps -A -o comm=`'s one name
+/// a line (a path on macOS; `.exe` and CSV quotes are tolerated).
+pub fn count_processes(text: &str) -> (u64, u64, u64) {
+    let (mut cargo, mut rustc, mut nextest) = (0, 0, 0);
     for line in text.lines() {
         let name = line.trim().trim_start_matches('"').split('"').next().unwrap_or_default();
         let name = name.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
         match name.strip_suffix(".exe").unwrap_or(&name) {
             "cargo" => cargo += 1,
             "rustc" => rustc += 1,
+            "cargo-nextest" => nextest += 1,
             _ => {}
         }
     }
-    (cargo, rustc)
+    (cargo, rustc, nextest)
 }
 
 /// The worktrees `git worktree list --porcelain` lists, the main one first.
@@ -330,11 +377,11 @@ fn figures(path: &Path) -> Figures {
         std::fs::read_to_string("/proc/meminfo").map(|t| parse_meminfo(&t)).unwrap_or((None, None))
     };
     let free_disk = tool("df", &["-Pk", &at]).as_deref().and_then(parse_df);
-    let (cargo, rustc) = tool("ps", &["-A", "-o", "comm="]).map_or((None, None), |t| {
-        let (c, r) = count_processes(&t);
-        (Some(c), Some(r))
+    let (cargo, rustc, nextest) = tool("ps", &["-A", "-o", "comm="]).map_or((None, None, None), |t| {
+        let (c, r, n) = count_processes(&t);
+        (Some(c), Some(r), Some(n))
     });
-    Figures { free_memory, total_memory, free_disk, cargo, rustc }
+    Figures { free_memory, total_memory, free_disk, cargo, rustc, nextest }
 }
 
 /// Read the machine, for a checkout at `root` building into `target`.
@@ -350,7 +397,17 @@ pub fn read(root: &Path, target: &Path) -> Machine {
     let mine = our_target_dir();
     let ours: Vec<&Path> = std::iter::once(target).chain(mine.as_deref()).collect();
     let busy_dirs = busy_target_dirs(&worktrees, &ours, since);
-    Machine { cores, free_memory: f.free_memory, total_memory: f.total_memory, free_disk: f.free_disk, busy_dirs, cargo: f.cargo, rustc: f.rustc }
+    Machine {
+        cores,
+        free_memory: f.free_memory,
+        total_memory: f.total_memory,
+        free_disk: f.free_disk,
+        busy_dirs,
+        cargo: f.cargo,
+        rustc: f.rustc,
+        nextest: f.nextest,
+        costs: Costs::from_env(|name| std::env::var(name).ok()),
+    }
 }
 
 /// The report: what was read, then the suggestion and its basis.
@@ -370,13 +427,17 @@ pub fn report(m: &Machine, s: &Suggestion, target: &Path) -> String {
     ));
     let count = |n: Option<u64>| n.map_or_else(|| "?".to_owned(), |n| n.to_string());
     out.push_str(&format!(
-        "  builds: {} running now: {} other target dir(s) written in the last {} min; {} cargo and {} rustc process(es) (this command's cargo among them)\n",
+        "  builds: {} running now: {} other target dir(s) written in the last {} min; {} cargo, {} rustc and {} cargo-nextest process(es) (this command's cargo among them)\n",
         m.builds(),
         m.busy_dirs.len(),
         RECENT.as_secs() / 60,
         count(m.cargo),
-        count(m.rustc)
+        count(m.rustc),
+        count(m.nextest)
     ));
+    if m.builds() == 0 && !m.busy_dirs.is_empty() {
+        out.push_str("          (no rustc or cargo-nextest running: those dirs are idle, not builds)\n");
+    }
     for d in &m.busy_dirs {
         out.push_str(&format!("          {}\n", d.display().to_string().replace('\\', "/")));
     }
@@ -690,8 +751,11 @@ mod tests {
             total_memory: None,
             free_disk: disk_gb.map(|g| g * GB),
             busy_dirs: (0..busy).map(|i| PathBuf::from(format!("t{i}"))).collect(),
-            cargo: Some(0),
-            rustc: Some(0),
+            // Processes unread: the busy dirs decide.
+            cargo: None,
+            rustc: None,
+            nextest: None,
+            costs: Costs::default(),
         }
     }
 
@@ -740,34 +804,76 @@ mod tests {
         assert!(suggest(&machine(64, Some(128), Some(19), 0)).basis.join("\n").contains("under 20 GB, so 0"));
     }
 
+    /// No rustc and no cargo-nextest anywhere: the busy dirs are a worker between builds, not
+    /// builds (sc#3). A test run, or rustc, and they count again.
+    #[test]
+    fn busy_dirs_with_nothing_compiling_or_testing_are_idle() {
+        let mut m = machine(12, Some(24), Some(500), 1);
+        m.rustc = Some(0);
+        m.nextest = Some(0);
+        assert_eq!((m.builds(), suggest(&m).more), (0, 1), "the 12-core Mac takes one build");
+        assert!(report(&m, &suggest(&m), Path::new("t")).contains("those dirs are idle, not builds"));
+        let testing = Machine { nextest: Some(1), ..m.clone() };
+        assert_eq!((testing.builds(), suggest(&testing).more), (1, 0));
+        let compiling = Machine { rustc: Some(3), ..m.clone() };
+        assert_eq!(compiling.builds(), 1);
+        // A process list that couldn't be read leaves it to the dirs.
+        let unread = Machine { nextest: None, ..m };
+        assert_eq!(unread.builds(), 1);
+    }
+
+    /// The machine's own costs from SWARM_CORES_PER_BUILD and SWARM_GB_PER_BUILD; a bad value is
+    /// ignored.
+    #[test]
+    fn a_machine_can_say_what_a_build_costs_it() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
+        assert_eq!(Costs::from_env(env(&[])), Costs::default());
+        assert_eq!(Costs::from_env(env(&[("SWARM_CORES_PER_BUILD", " 6 ")])), Costs { cores: 6, gb: GB_PER_BUILD, from_env: true });
+        assert_eq!(Costs::from_env(env(&[("SWARM_GB_PER_BUILD", "4")])), Costs { cores: CORES_PER_BUILD, gb: 4, from_env: true });
+        for bad in ["0", "257", "-1", "six", ""] {
+            assert_eq!(Costs::from_env(|_: &str| Some(bad.to_owned())), Costs::default(), "{bad}");
+        }
+        // 6 cores a build: an idle 12-core machine takes two, and one running leaves room for one.
+        let mut m = machine(12, Some(24), Some(500), 0);
+        m.costs = Costs { cores: 6, gb: 5, from_env: true };
+        assert_eq!(suggest(&m).more, 2);
+        assert!(suggest(&m).basis.join("\n").contains("costs: from SWARM_CORES_PER_BUILD"));
+        let one = Machine { busy_dirs: vec![PathBuf::from("t0")], ..m };
+        assert_eq!(suggest(&one).more, 1);
+    }
+
     #[test]
     fn os_figures_parse() {
         let meminfo = "MemTotal:       65793324 kB\nMemFree:         1000000 kB\nMemAvailable:   40000000 kB\n";
         assert_eq!(parse_meminfo(meminfo), (Some(40_000_000 * 1024), Some(65_793_324 * 1024)));
         assert_eq!(parse_meminfo("MemFree: 10 kB\n"), (Some(10_240), None));
         assert_eq!(parse_meminfo("garbage"), (None, None));
-        let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                               10000.\nPages active:                            50000.\nPages inactive:                          20000.\nPages speculative:                        1000.\n";
-        assert_eq!(parse_vm_stat(vm), Some(31_000 * 16_384));
+        let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                               10000.\nPages active:                            50000.\nPages inactive:                          20000.\nPages speculative:                        1000.\nPages throttled:                             0.\nPages purgeable:                          2000.\n";
+        assert_eq!(parse_vm_stat(vm), Some(33_000 * 16_384));
         assert_eq!(parse_vm_stat("no header"), None);
         let df =
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/disk3s5    971350180 500000000 400000000      56% /System/Volumes/Data\n";
         assert_eq!(parse_df(df), Some(400_000_000 * 1024));
         assert_eq!(parse_df("Filesystem\n"), None);
-        let w = parse_windows("10031513600\r\n33457472\r\n1197333721088\r\n7\r\n4\r\n");
+        let w = parse_windows("10031513600\r\n33457472\r\n1197333721088\r\n7\r\n4\r\n1\r\n");
         let all = Figures {
             free_memory: Some(10_031_513_600),
             total_memory: Some(33_457_472 * 1024),
             free_disk: Some(1_197_333_721_088),
             cargo: Some(7),
             rustc: Some(4),
+            nextest: Some(1),
         };
         assert_eq!(w, all);
         // No drive letter: its line is empty, and the rest keep their places.
-        assert_eq!(parse_windows("10031513600\n33457472\n\n7\n0\n"), Figures { free_disk: None, rustc: Some(0), ..all });
+        assert_eq!(parse_windows("10031513600\n33457472\n\n7\n0\n1\n"), Figures { free_disk: None, rustc: Some(0), ..all });
+        // An older script's five lines: no nextest figure.
+        assert_eq!(parse_windows("10031513600\n33457472\n1197333721088\n7\n4\n").nextest, None);
         assert_eq!(parse_windows(""), Figures::default());
         let tasklist = "\"cargo.exe\",\"1\",\"Console\",\"1\",\"10 K\"\n\"rustc.exe\",\"2\",\"Console\",\"1\",\"10 K\"\n\"rustc.exe\",\"3\",\"Console\",\"1\",\"10 K\"\n\"cargo-watch.exe\",\"4\"\n";
-        assert_eq!(count_processes(tasklist), (1, 2));
-        assert_eq!(count_processes("cargo\n/Users/r/.rustup/toolchains/stable/bin/rustc\nrustc\nrust-analyzer\n"), (1, 2));
+        assert_eq!(count_processes(tasklist), (1, 2, 0));
+        assert_eq!(count_processes("cargo\n/Users/r/.rustup/toolchains/stable/bin/rustc\nrustc\nrust-analyzer\n"), (1, 2, 0));
+        assert_eq!(count_processes("/Users/r/.cargo/bin/cargo-nextest\n\"cargo-nextest.exe\",\"9\"\ncargo-nextest-x\n"), (0, 0, 2));
         let porcelain = "worktree D:/dev/app-swarm\nHEAD abc\nbranch refs/heads/main\n\nworktree D:/dev/app-swarm-alder\nHEAD def\ndetached\n";
         assert_eq!(parse_worktrees(porcelain), [PathBuf::from("D:/dev/app-swarm"), PathBuf::from("D:/dev/app-swarm-alder")]);
         let porcelain = "worktree D:/dev/gpu-swarm/.claude/worktrees/x\nHEAD abc\nbranch refs/heads/main\n\nworktree D:/dev/gpu-swarm/.claude/worktrees/x-alder\nHEAD def\ndetached\n";

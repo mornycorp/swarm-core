@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-30 · **Change:** major (GitLab to GitHub: claims, PRs and checks through gh) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-30 · **Change:** minor (capacity: idle dirs aren't builds; a machine's own costs) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -418,14 +418,19 @@ worktree of its own, where that speeds it up on its machine (owner, 2026-10-18).
     agent, spending tokens and the shared GitHub account's calls.
 - **How many:** `cargo xtask capacity` decides, not a guess. It reports the logical cores, free
   memory, free disk on the target dir's drive and the builds running now (other target dirs in
-  the clone's worktrees written in the last 5 minutes, and the `cargo` and `rustc` processes),
-  then suggests how many more builds the machine takes: about one per 8 free cores (a running
-  build holds 8) and 5 GB of free memory, at most 3, and none with under 20 GB of disk free or a
-  figure it couldn't read; each number is printed with its basis. The 5 GB is measured ([development.md › How many builds at once](development.md#how-many-builds-at-once)): on the
+  the clone's worktrees written in the last 5 minutes, and the `cargo`, `rustc` and
+  `cargo-nextest` processes; with no `rustc` and no `cargo-nextest` running anywhere, none, as a
+  worker between builds holds no cores), then suggests how many more builds the machine takes:
+  about one per 8 free cores (a running build holds 8) and 5 GB of free memory, at most 3, and
+  none with under 20 GB of disk free or a figure it couldn't read; each number is printed with
+  its basis. A machine unlike the owner's desktop sets its own 8 and 5 with
+  `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` (whole numbers, read by both swarms): on
+  2026-10-30 a 12-core Mac took one build by the 8, and a gate waited 35 minutes behind a worker
+  that was only editing between builds. The 5 GB is measured ([development.md › How many builds at once](development.md#how-many-builds-at-once)): on the
   owner's 32 GB desktop, two gates at once passed and four filled the memory and failed. It
   limits build helpers only. It reads
   the OS's own tools, no new crates: `/proc/meminfo` (`MemAvailable`), `df` and `ps` on Linux;
-  `sysctl`, `vm_stat` (free, inactive and speculative pages), `df` and `ps` on macOS; on Windows
+  `sysctl`, `vm_stat` (free, inactive, speculative and purgeable pages), `df` and `ps` on macOS; on Windows
   one PowerShell (CIM's available memory, standby cache included, `Get-PSDrive` and
   `Get-Process`), about 3 seconds.
 - **Set up:** `cargo xtask capacity --helper <name> --note "<what it does>" [--kind build|read]
@@ -1003,6 +1008,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | `capacity`: no build runs while no `rustc` or `cargo-nextest` does; `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` set a machine's own costs; macOS free memory counts purgeable pages |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
 | 2026-10-30 | major | GitLab to GitHub (owner, 2026-10-30): the claim is a label and a draft PR (`gh`, `--repo`); `ready` marks a PR ready for review, which starts its checks; `prwatch` (was `mrwatch`) reads merge states (`dirty`, `behind`, `clean`, `blocked`), checks and comments; `land` cancels the head's workflow runs and rebases on the server only a PR that is `behind`; PRs are `#n`; duplicates are closed with `Duplicate of #n` |
 | 2026-10-30 | minor | swarm-foundation renamed swarm-core: the crate, `cargo xtask swarm-core` (was `foundation`), `docs/swarm-core-assets.md`, and `sc#n` for its issues (was `f#n`) |
@@ -1012,7 +1018,5 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 | 2026-10-28 | minor | Ending a session (new): `cargo xtask finish` checks nothing is owed, installs the tools in `.git/swarm-tools/` (`install-tools`), removes the agent's clean worktrees and merged branches, then logs `session.stop`; `mrwatch` says when; a worker's step 4 and Tracking › Your session end with it (sc#10) |
 | 2026-10-28 | minor | What the code does for every consumer (sc#5): every gate kind that builds takes the machine lock (`Kind::builds`, the smoke included), and the lock's file, wait, renewal and `lock drop` order; a project's causes `gpu` and `python`; the full gate's `fullgate-outcome:` hand-over; `ready`'s `ready-<sha>` sub-agent and rebased xtask; `stack`'s merged branches; `land`'s retries, cancelled pipelines and merge of `main`; the helper worktree beside yours. The project's own settings named as its own: the repo lock's age, the stack record and the full gate's checkout (rendered from `Project`), the worktree layout, gate times, the ready watch's mode, the merge check's minutes, the next issue's order, the gate kinds' planner; sync twins labelled `sync` and titled `[sync]` |
 | 2026-10-28 | minor | Watching your MRs: after `ready`, push only for a line that asks it; `land` merges only the gated change, and a push while it lands stops it (sc#9) |
-| 2026-10-27 | minor | The periodic full gate › One at a time: the race, then the lock, `refs/fullgate/lock`, taken by compare-and-swap, never released, a stopped or stale holder swapped out |
-| 2026-10-27 | major | The protocol both swarms share moves into swarm-core: from the first consumer's docs/swarm.md (roles, starting a worker, watching MRs, helpers, the coordinator's loop, staying awake, the periodic full gate, limits) and AGENTS.md §4 and §6 (picking work, the claim, tracking, parallel agents); each consumer keeps a pinned copy (`cargo xtask swarm-core sync-assets`) and its own parts in its docs/swarm.md. Step 9: a change to what Swarm Core holds is a Swarm Core MR, then a bump in each consumer |
 
 Older rows are in the first consumer's history of `docs/swarm.md` and `AGENTS.md`.
