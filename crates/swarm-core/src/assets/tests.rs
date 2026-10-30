@@ -143,6 +143,15 @@ fn both_consumers_render_every_asset() {
     );
 }
 
+/// GitHub refuses a label whose description is over 100 characters, and the script stops there.
+#[test]
+fn every_label_description_fits_github() {
+    for line in asset("scripts/github-labels.sh").text.lines().filter(|l| l.starts_with("label ")) {
+        let description = line.rsplit('"').nth(1).unwrap_or_default();
+        assert!(description.chars().count() <= 100, "{} characters: {line}", description.chars().count());
+    }
+}
+
 #[test]
 fn a_duration_reads_in_hours_or_minutes() {
     assert_eq!(
