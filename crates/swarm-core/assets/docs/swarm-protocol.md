@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-30 · **Change:** minor (capacity: idle dirs aren't builds; a machine's own costs) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-30 · **Change:** minor (the review's checklist: a front end building the core's logic) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -747,7 +747,10 @@ On each finished pull request:
       - consumers keeping their own mirrors of engine types;
       - persisted data (settings, UI state, caches) without a version;
       - stringly-typed errors, classified by their message;
-      - work on the UI thread that should be a job; shared state with no owner.
+      - work on the UI thread that should be a job; shared state with no owner;
+      - logic the spec or the architecture gives the core (layout, hit-testing, interaction
+        state, a pixel-to-model mapping) built in a front end, because the core piece isn't
+        there yet.
 
       A trap it finds that isn't on the list goes on it, and into [lessons.md](lessons.md), with
       the issue that found it.
@@ -1008,6 +1011,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | The architecture review's checklist: a front end building logic the core owns (lessons.md §5) |
 | 2026-10-30 | minor | `capacity`: no build runs while no `rustc` or `cargo-nextest` does; `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` set a machine's own costs; macOS free memory counts purgeable pages |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
 | 2026-10-30 | major | GitLab to GitHub (owner, 2026-10-30): the claim is a label and a draft PR (`gh`, `--repo`); `ready` marks a PR ready for review, which starts its checks; `prwatch` (was `mrwatch`) reads merge states (`dirty`, `behind`, `clean`, `blocked`), checks and comments; `land` cancels the head's workflow runs and rebases on the server only a PR that is `behind`; PRs are `#n`; duplicates are closed with `Duplicate of #n` |
