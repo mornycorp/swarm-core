@@ -48,8 +48,8 @@ machine lacks (the protocol's [Picking work](swarm-protocol.md#picking-work)).
 - **tooling:** what this repo's planner counts as tooling (`Hooks::gate_kind` in `xtask/`): until
   it has one, nothing is, and every code change is smoked.
 - **smoke:** anything else. This repo's `cargo xtask ci --smoke` runs: fmt, clippy, the build,
-  <!-- layers, the generated docs' checks, the golden tests (a step named golden), a short
-  headless run of the CLI -->.
+  `layers`, <!-- the generated docs' checks, the golden tests (a step named golden), a short
+  headless run of the CLI ({{cli}}) -->.
 - **full:** the whole `cargo xtask ci`, the periodic full gate's.
 
 The shared files that conflict most in a stack are AGENTS.md §6's.

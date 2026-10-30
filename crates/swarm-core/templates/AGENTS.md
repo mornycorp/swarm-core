@@ -13,6 +13,7 @@ protocol and commands. Read this file first, then [docs/swarm-protocol.md](docs/
 | Read | Why |
 |---|---|
 | `docs/owner-directions.md` | **The owner's standing directions and decisions:** read it with this file |
+| `docs/architecture.md` | **The layers, how a command flows, typed contracts, the UI and automation:** read it before your first change |
 | `ROADMAP.md` | One page: the stage, the headline numbers, what's next |
 | `docs/gaps.md` | Every known shortfall, ranked: **the work list to pick from** |
 | `docs/roadmap.md` | Milestones, gates, **Current focus** |
@@ -25,15 +26,17 @@ protocol and commands. Read this file first, then [docs/swarm-protocol.md](docs/
 
 ## 2. Workspace map
 
-<!-- The crates and binaries, one line each, and the layers they sit in if you enforce layers. -->
+The crates and their layers, generated from the layers table in `xtask/` (`Hooks::layers`;
+`cargo xtask layers` fails when this is stale, `--write` rewrites it):
 
-| Path | What |
-|---|---|
-| `xtask/` | `cargo xtask`: this repo's own commands (`ci`, …) and the swarm's, from swarm-core |
+<!-- crate-map:start (cargo xtask layers --write) -->
+<!-- crate-map:end -->
+
+**Layering is enforced** by `cargo xtask layers`, a step of `ci` ([docs/architecture.md](docs/architecture.md#layers)): a
+crate depends only on strictly lower layers, nothing below the UI layer uses a UI crate, and a
+new crate is registered in the table at the lowest layer it fits.
 
 ## 3. Golden rules
-
-<!-- The rules every change keeps. A few that served the swarms before you (docs/lessons.md): -->
 
 1. **Never crash.** A bad file, input or parameter is an error the user or agent can act on, never
    a panic. Non-test code doesn't `unwrap`, `expect` or `panic!`.
@@ -42,6 +45,13 @@ protocol and commands. Read this file first, then [docs/swarm-protocol.md](docs/
    persisted state carries a version.
 3. **Tests are the gate.** Every change comes with tests; prefer ones that cross a real boundary.
 4. **Dependencies are deliberate.** Prefer the standard library and what `Cargo.lock` already has.
+5. **Everything is a command.** New behaviour is a typed engine command first; the UI, the CLI
+   (`{{cli}}`), the control channel and MCP call it by id, and consumers read its typed result,
+   never a `Value` by field ([docs/architecture.md](docs/architecture.md#how-a-command-flows)).
+6. **The UI is thin and data-driven.** Its state is plain data the control channel reads and sets;
+   what a pane draws is what a command returns, and a test checks they are equal.
+7. **Verify UI changes visually**: an offscreen snapshot or the app driven over its control
+   channel; attach the images to the PR.
 
 ## 4. Picking work
 

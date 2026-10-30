@@ -4,7 +4,7 @@
 //! new repo, then change every value marked `CHANGE`. `cargo test` builds it here, so it keeps up
 //! with Swarm Core's API.
 //!
-//! Its `ci` is a starting point: fmt, clippy, nextest and the pinned assets' check, with
+//! Its `ci` is a starting point: fmt, clippy, nextest, `layers` and the pinned assets' check, with
 //! `--changed` narrowed by Swarm Core's plan. A consumer adds its own steps (a smoke's golden
 //! tests and headless run, its generated docs' checks, layers) as it grows.
 #![forbid(unsafe_code)]
@@ -55,8 +55,24 @@ const ASSET_VARS: &[(&str, &str)] = &[
     ("mr_docs", "Technical docs current; progress summaries left to the coordinator"),
 ];
 
-/// This swarm's behaviour where it differs from Swarm Core's defaults: here, only its package
-/// prefix and its placeholders. Add `gate_kind` (a tooling gate), `extra_causes`, `around_ci`,
+/// The workspace's layers, top first (docs/architecture.md, `cargo xtask layers`). CHANGE: to the
+/// new repo's crates; register every new crate at the lowest layer it fits.
+const LAYERS: &[swarm_core::layers::Entry] = &[
+    swarm_core::layers::Entry { package: "my-app", layer: None, kind: "app", summary: "the desktop app and its control server" },
+    swarm_core::layers::Entry { package: "my-cli", layer: None, kind: "app", summary: "the headless CLI: commands, run, serve, mcp" },
+    swarm_core::layers::Entry { package: "xtask", layer: None, kind: "tool", summary: "cargo xtask: ci, layers, and the swarm's commands from swarm-core" },
+    swarm_core::layers::Entry { package: "my-ui", layer: Some(4), kind: "L4", summary: "the UI shell: panes, menus, UI state as data" },
+    swarm_core::layers::Entry {
+        package: "my-engine",
+        layer: Some(3),
+        kind: "L3",
+        summary: "the session and the typed command registry: every action is a command",
+    },
+    swarm_core::layers::Entry { package: "my-model", layer: Some(0), kind: "L0", summary: "the domain's data and pure algorithms" },
+];
+
+/// This swarm's behaviour where it differs from Swarm Core's defaults: here, its package prefix,
+/// its placeholders and its layers. Add `gate_kind` (a tooling gate), `extra_causes`, `around_ci`,
 /// `full_gate_capable`, `full_gate_env` as the repo needs them (`swarm_core::Hooks`).
 struct Ours;
 
@@ -69,6 +85,17 @@ impl Hooks for Ours {
     fn asset_vars(&self) -> &'static [(&'static str, &'static str)] {
         ASSET_VARS
     }
+
+    fn layers(&self) -> Option<swarm_core::layers::Table> {
+        Some(swarm_core::layers::Table {
+            entries: LAYERS,
+            ui_layer: 4,
+            ui_crates: &["egui", "eframe", "winit"],
+            dev_only: &[],
+            reply_readers: &["crates/ui/src/", "apps/"],
+            allowed_reads: &[],
+        })
+    }
 }
 
 fn main() -> ExitCode {
@@ -77,12 +104,14 @@ fn main() -> ExitCode {
     let root = root();
     let result = match args.split_first() {
         Some((&"ci", rest)) => ci(&root, rest),
+        Some((&"layers", rest)) => swarm_core::layers::run(&Ours, &root, rest),
         // The swarm's commands: claim, event, gate, stack, land, prwatch, swarm-core, …
         Some((command, rest)) if swarm_core::serves(command) => swarm_core::run(&PROJECT, &Ours, &root, command, rest),
         _ => {
             println!(
                 "cargo xtask ci [--changed --base <ref> [--plan [--head <ref>]] | --smoke] [--test-alone \"<binary id> <test>\"]… [--doctests] [--only <step>,…]"
             );
+            println!("{}", swarm_core::layers::USAGE);
             for (_, usage) in swarm_core::COMMANDS {
                 println!("{usage}");
             }
@@ -222,6 +251,7 @@ fn steps(c: &Ci, scope: &[String]) -> Vec<(String, Vec<String>)> {
     } else {
         gate.push(("test".into(), scoped(&["nextest", "run", "--profile", "ci"], &[])));
     }
+    gate.push(("layers".into(), args(&["xtask", "layers"])));
     gate.push(("assets".into(), args(&["xtask", "swarm-core", "sync-assets", "--check"])));
     let mut out: Vec<(String, Vec<String>)> = c.alone.iter().map(|t| (format!("alone {}", t.spec()), t.nextest_args())).collect();
     if c.doctests {

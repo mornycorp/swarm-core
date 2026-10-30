@@ -65,6 +65,7 @@ machine, and the first coordinator and workers.
 | 4 | `swarm-core` (`--version`, `bump`, `sync-assets [--check]`) | `changed` (with `changed::lock`, `changed::reads`), `pin`, `assets` |
 | new swarms (sc#7) | `swarm-core init` | `templates` (and `examples/consumer_xtask.rs`) |
 | ending a session (sc#10) | `finish`, `install-tools` | `finish` |
+| architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template) |
 
 A consumer describes itself in a `Project` (a `const`) and implements `Hooks`, whose methods all
 have defaults:
@@ -83,6 +84,8 @@ have defaults:
   package prefix, the files its packages read from outside their directory, its runtime edges
   (a package whose tests launch or load another's build), the files xtask's tests read through the root, and any class of its own.
 - `asset_vars`: the consumer's values for the assets' placeholders (`product`, `cli`, …).
+- `layers`: the consumer's crates and their layers, its UI crates, and where command replies are
+  read, for `cargo xtask layers` (`layers::Table`); none, and `layers` checks nothing.
 
 **`ci --changed`'s plan** (`changed`): the consumer's `ci` runs the steps; Swarm Core says for
 which packages. The changed files map to packages or classes (docs, tooling, data read from

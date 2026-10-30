@@ -30,6 +30,7 @@ pub mod gate;
 pub mod gate_times;
 pub mod github;
 pub mod land;
+pub mod layers;
 pub mod lock;
 pub mod machine_lock;
 pub mod needs;
@@ -150,6 +151,12 @@ pub trait Hooks {
     fn capabilities(&self, root: &Path) -> Vec<capabilities::Capability> {
         let _ = root;
         Vec::new()
+    }
+    /// The project's architecture, as `cargo xtask layers` checks it ([`layers`]): its packages'
+    /// layers, its UI crates, its dev-only crates and where command replies are read. The default:
+    /// none, so `layers` checks nothing.
+    fn layers(&self) -> Option<layers::Table> {
+        None
     }
 }
 

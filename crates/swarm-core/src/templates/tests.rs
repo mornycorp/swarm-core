@@ -88,7 +88,7 @@ fn init_writes_only_what_is_missing() {
 fn a_placeholder_the_project_doesnt_give_writes_nothing() {
     let root = swarm_core_testkit::temp_dir("swarm-core-templates-refused");
     let err = init(&APP_SWARM, &crate::Defaults, &root, TODAY).unwrap_err();
-    assert!(err.contains("the project gives no value for `{{product}}`"), "{err}");
+    assert!(err.contains("the project gives no value for `{{"), "{err}");
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
 }
 

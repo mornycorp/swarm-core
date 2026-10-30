@@ -69,7 +69,9 @@ missing, so it never overwrites the repo's own.
      `tracking_queue`, `stack_state`) so two swarms on one machine never share one. List the docs
      `cargo xtask` generates in `generated`, so `stack` regenerates one that conflicts.
    - **The `Hooks`** (`swarm_core::Hooks`): every method has a default. Start with
-     `changed` (the package prefix) and `asset_vars` (the placeholders' values); add a
+     `changed` (the package prefix), `asset_vars` (the placeholders' values) and `layers` (the
+     crates' layers, which `cargo xtask layers` enforces: wire it as a command and a `ci` step, as
+     the example does); add a
      `gate_kind` planner when docs and tooling changes should skip the smoke, and `extra_causes`,
      `around_ci`, `full_gate_capable` or `full_gate_env` when the gate needs them.
    - **The dispatch**: `swarm_core::serves(command)` then `swarm_core::run(&PROJECT,
@@ -82,7 +84,7 @@ reads what it prints. [docs/ci-contract.md](ci-contract.md) is everything the tw
 forms it is called with (`--changed --base <ref>`, `--smoke`, none, the rerun's `--test-alone`,
 `--doctests` and `--only`), the `CI summary` it ends with, and nextest's lines and junit file.
 
-- The example's `ci` keeps the contract with fmt, clippy, nextest and the pinned copies' check, and
+- The example's `ci` keeps the contract with fmt, clippy, nextest, `layers` and the pinned copies' check, and
   narrows `--changed` with Swarm Core's plan (`swarm_core::changed`). Grow it with the
   repo's own steps (the smoke's golden tests and headless run, generated docs' checks).
 - `ci` records its checkout in the target dir (`swarm_core::checkout::claim`), so two
@@ -112,8 +114,12 @@ cargo xtask swarm-core init            # write each one the repo doesn't have ye
 
 Then make them the repo's own, before the first agent starts:
 
-- `AGENTS.md`: what the product is, its crates, its golden rules, its shared files (§6). Keep §4
-  and §5: the protocol links to them.
+- `AGENTS.md`: what the product is, its golden rules, its shared files (§6); `cargo xtask layers
+  --write` fills in its crate map. Keep §4 and §5: the protocol links to them.
+- `docs/architecture.md`: the layers and what each means for this product, how a command flows,
+  typed contracts, the UI and automation (the CLI, the control channel, MCP). **Decide the layers
+  before the first issue**: every swarm on Swarm Core builds an engine of typed commands that every
+  front end drives, and retrofitting it costs far more ([lessons.md](../crates/swarm-core/assets/docs/lessons.md) §1).
 - `docs/owner-directions.md`: the owner's first directions (step 8).
 - `docs/gaps.md`, `docs/roadmap.md`, `ROADMAP.md`: the first milestone and its gaps, ranked; the
   protocol's workers pick from them ([progress-docs.md](../crates/swarm-core/assets/docs/progress-docs.md)
