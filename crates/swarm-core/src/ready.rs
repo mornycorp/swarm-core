@@ -25,7 +25,7 @@
 //!    Its log, `.rc` record and junit file are kept as `<target>/gate-logs/ready-<head>.*`. A
 //!    failure that is only failed tests is rerun once, each test alone, then the doctests and the
 //!    steps it skipped, as `ready-<head>-rerun`; a pass goes on to step 4
-//!    (cmaughan/swarm-core#14, [`own_gate`]).
+//!    (mornycorp/swarm-core#14, [`own_gate`]).
 //! 4. **Check the base once more**: the gate takes minutes, and a PR merged
 //!    meanwhile makes the branch stale before it is pushed. So it fetches again; when the base
 //!    moved, it rebases once more. Clean, with the PR's own diff unchanged (`git patch-id` of
@@ -233,7 +233,7 @@ fn ci_command(project: &Project, root: &Path, built_from: &str, args: &[String])
 /// found this exe built from the tree's xtask rules, by content, so it says so to a consumer that
 /// checks by modification time (`{prefix}_XTASK_STALE=ok`): a rebase that replays commits onto a
 /// base without them writes their files again, the same bytes with new times
-/// (cmaughan/swarm-core#2).
+/// (mornycorp/swarm-core#2).
 fn this_ci_command(project: &Project, exe: &Path, root: &Path, args: &[String]) -> Command {
     let mut ci = Command::new(exe);
     ci.current_dir(root).env(project.env_name("XTASK_STALE"), "ok").arg("ci").args(args);
@@ -337,7 +337,7 @@ fn gated_push(dir: &Path, base: &str, gate: &mut dyn FnMut() -> Result<(), Strin
 }
 
 /// Mark ready, log `submit`: the branch is pushed. Its note names the tests that passed only when
-/// rerun alone (`reran`), for the coordinator (cmaughan/swarm-core#14).
+/// rerun alone (`reran`), for the coordinator (mornycorp/swarm-core#14).
 fn submit(project: &Project, root: &Path, o: &Opts, pr: &Value, reran: &[own_gate::Reran]) -> Result<(), String> {
     mark_ready(&mut || github::pr(project, o.mr), &mut || github::mark_ready(project, o.mr))?;
     println!("ready: #{} pushed and ready for review; GitHub Actions runs its checks", o.mr);

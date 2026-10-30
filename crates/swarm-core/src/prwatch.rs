@@ -9,7 +9,7 @@
 //!   open list (merged: rebase what is stacked on it; closed). The first poll only records.
 //! - **What its issues need**: the issues its open claimed issues name on a
 //!   `Needs` line ([`crate::needs`]), often another agent's, or another repository's
-//!   (`cmaughan/swarm-core#4`): a line when one closes (start what
+//!   (`mornycorp/swarm-core#4`): a line when one closes (start what
 //!   waited on it) or gets a PR. One more call a poll when it has claimed issues (them, with the
 //!   issues they need), and two for each other repository they name.
 //! - **Cost:** one GitHub GraphQL call per poll (the repository's open PRs, each with its merge

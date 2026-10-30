@@ -136,7 +136,7 @@ fn a_failed_test_is_rerun_alone_through_the_contract() {
     assert!(gate::rerun_evidence(&logs, &rc).unwrap().contains("fake::flaky::under_load"), "{rc}");
 }
 
-/// cmaughan/swarm-core#14: `ready`'s gate keeps its log, `.rc` and junit file as
+/// mornycorp/swarm-core#14: `ready`'s gate keeps its log, `.rc` and junit file as
 /// `ready-<head>.*`, and a test that failed under load is rerun once, alone, then the doctests and
 /// the steps it skipped, with `ready`'s own scope, as `ready-<head>-rerun`. Once a HEAD; a test
 /// that fails again alone, or `--no-rerun`, stops it.

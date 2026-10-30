@@ -28,8 +28,8 @@ missing, so it never overwrites the repo's own.
 
 - **A GitHub repository** for the repo, `owner/name`.
 - **Read access to Swarm Core** for every machine and person that builds: it is a private
-  repository, and cargo fetches it from `https://github.com/cmaughan/swarm-core.git`. Ask
-  Swarm Core's owner to add the account as a collaborator on `cmaughan/swarm-core`.
+  repository, and cargo fetches it from `https://github.com/mornycorp/swarm-core.git`. Ask
+  Swarm Core's owner to add the account as a collaborator on `mornycorp/swarm-core`.
 - **gh**, authenticated, and git using its token: `gh auth login`, then `gh auth setup-git`.
 
 ## 2. The xtask
@@ -43,7 +43,7 @@ missing, so it never overwrites the repo's own.
 
    [workspace.dependencies]
    # The swarm tooling (claims, tracking, the gates, stack and land), pinned by revision.
-   swarm-core = { git = "https://github.com/cmaughan/swarm-core.git", rev = "<Swarm Core's main, 40 hex digits>" }
+   swarm-core = { git = "https://github.com/mornycorp/swarm-core.git", rev = "<Swarm Core's main, 40 hex digits>" }
    serde_json = "1"
    ```
 
@@ -153,13 +153,14 @@ PR is marked ready, and a new run of a ref cancels the one still going. Swarm Co
 repository, so the job points its URL at a read-only token before cargo runs:
 
 ```sh
-git config --global url."https://x-access-token:${SWARM_CORE_TOKEN}@github.com/cmaughan/swarm-core".insteadOf "https://github.com/cmaughan/swarm-core"
+git config --global url."https://x-access-token:${SWARM_CORE_TOKEN}@github.com/mornycorp/swarm-core".insteadOf "https://github.com/mornycorp/swarm-core"
 ```
 
 With `net.git-fetch-with-cli`, cargo's fetch goes through that rewrite. **The token** is a
-fine-grained personal access token with **Contents: read** on `cmaughan/swarm-core` only,
-stored as the repo's `SWARM_CORE_TOKEN` Actions secret (Settings › Secrets and variables ›
-Actions). Until it is there, every run fails to fetch Swarm Core.
+fine-grained personal access token whose resource owner is `mornycorp`, with **Contents: read**
+on `mornycorp/swarm-core` only (the organization may have to approve it), stored as the repo's
+`SWARM_CORE_TOKEN` Actions secret (Settings › Secrets and variables › Actions), or once as an
+organization secret for every swarm in `mornycorp`. Until it is there, every run fails to fetch Swarm Core.
 
 ## 8. Each machine, then the first agents
 

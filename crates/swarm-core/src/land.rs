@@ -810,7 +810,7 @@ impl Effects for Real<'_> {
 
 /// `main`'s commit, fetched now, when gate `sub` (its `<sub>.rc` in `logs`) was a full gate that
 /// passed and `main` is exactly the tree it tested: every PR of its stack landed, onto the `main`
-/// it was stacked on (cmaughan/swarm-core#15). `land` then closes the gate with
+/// it was stacked on (mornycorp/swarm-core#15). `land` then closes the gate with
 /// [`fullgate::landed`], so the periodic full gate counts it as a pass of `main`. `None` for any
 /// other kind, or another tree (a stack landed in part, a `main` that moved meanwhile).
 pub fn verified_main(project: &Project, root: &Path, logs: &Path, sub: &str) -> Result<Option<String>, String> {
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(merge_message("Code", false), None);
     }
 
-    /// cmaughan/swarm-core#15: a full gate whose merges left `main` at exactly the tree it
+    /// mornycorp/swarm-core#15: a full gate whose merges left `main` at exactly the tree it
     /// tested verifies that commit of `main` (the server's merge commit: another commit, the same
     /// tree); a smoke's, one landed onto a `main` that moved since, and a failed one don't.
     #[test]

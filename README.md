@@ -9,7 +9,7 @@ to it from its own `cargo xtask`:
 
 ```toml
 [workspace.dependencies]
-swarm-core = { git = "https://github.com/cmaughan/swarm-core.git", rev = "<sha>" }
+swarm-core = { git = "https://github.com/mornycorp/swarm-core.git", rev = "<sha>" }
 ```
 
 `cargo xtask swarm-core bump` in a consumer moves the pin to this repo's `main`.
@@ -42,6 +42,12 @@ moves in the same PR as the rename:
 
 The tracking format doesn't change: an event's `mr` field holds the PR's number. Issue numbers
 in this repo's docs before the move (`#7`, `sc#15`, …) are the GitLab project's.
+
+**Moved to mornycorp** (2026-10-30): the repository is `mornycorp/swarm-core`. A consumer changes
+its workspace dependency's `git` URL to `https://github.com/mornycorp/swarm-core.git` (and the
+`[patch."…"]` key in any user-level cargo config), bumps, and runs `sync-assets`; its CI's
+`insteadOf` line and `SWARM_CORE_TOKEN` (now a token on `mornycorp`) follow. GitHub redirects the
+old URL for now, but don't rely on it.
 
 **Starting a new swarm:** [docs/new-swarm.md](docs/new-swarm.md) walks a new repo through it from
 Swarm Core alone: the xtask that wires it in (from
@@ -122,5 +128,5 @@ own.
 (`crates/swarm-core/fake/xtask.rs`) tests Swarm Core's side.
 
 **Cross-repository needs:** an issue's `Needs` line may name another repository's issue in full,
-`owner/repo#n` (`cmaughan/swarm-core#4`). `claim` notes it while it is open, and `prwatch`
+`owner/repo#n` (`mornycorp/swarm-core#4`). `claim` notes it while it is open, and `prwatch`
 says when it closes or gets a PR. A short name (`ns#381`) is not a need.

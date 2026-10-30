@@ -95,7 +95,7 @@ pub trait Hooks {
         fullgate::FullGateEnv::default()
     }
 
-    /// The drift interval (cmaughan/swarm-core#15): a passed full gate older than this many
+    /// The drift interval (mornycorp/swarm-core#15): a passed full gate older than this many
     /// seconds makes the periodic full gate due again, even of an unchanged `main` (a driver, a
     /// reference build or the machine may have moved). The default: [`fullgate::DRIFT`], a day.
     fn full_gate_drift_secs(&self) -> i64 {
@@ -104,7 +104,7 @@ pub trait Hooks {
 
     /// Why the inputs the full gate reads beyond `main` changed since its last pass stopped at
     /// `last_pass` (a Unix time; `None`: none passed), if they did: a driver, a reference build,
-    /// pinned tools (cmaughan/swarm-core#15). Some: the gate is due now. The default: none.
+    /// pinned tools (mornycorp/swarm-core#15). Some: the gate is due now. The default: none.
     fn full_gate_inputs_changed(&self, root: &Path, last_pass: Option<i64>) -> Option<String> {
         let _ = (root, last_pass);
         None

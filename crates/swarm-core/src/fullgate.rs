@@ -8,7 +8,7 @@
 //!   since the last passed full gate, which is more than [`MIN_AGE`] old, or the drift interval
 //!   passed since it ([`Drift`], a day by default), or the gate's inputs changed. A landed
 //!   `--full` gate that left `main` at its tree is a pass of that commit
-//!   (cmaughan/swarm-core#15, [`landed`]), so only merges no full gate verified move `main`
+//!   (mornycorp/swarm-core#15, [`landed`]), so only merges no full gate verified move `main`
 //!   on, and within the drift interval an unchanged `main` is never gated twice.
 //! - **One at a time, across agents** ([`race`], then [`lock_ref`]): push the start, read the
 //!   tracking branch again, and the earliest open start goes on; the others log a `superseded`
@@ -60,7 +60,7 @@ pub mod lock_ref;
 /// A passed full gate younger than this leaves `main` alone, however far it moved.
 pub const MIN_AGE: i64 = 3600;
 /// A passed full gate older than this is due again, whether or not `main` moved: the drift
-/// interval ([`Hooks::full_gate_drift_secs`]'s default, cmaughan/swarm-core#15).
+/// interval ([`Hooks::full_gate_drift_secs`]'s default, mornycorp/swarm-core#15).
 pub const DRIFT: i64 = 24 * 3600;
 /// A full gate's start with no stop this old was abandoned: anyone may take over.
 pub const STALE: i64 = 3 * 3600;
@@ -146,7 +146,7 @@ fn is_commit(s: &str) -> bool {
 
 /// The full gates in the tracking files (instance, `work.jsonl` text): every `sub.start` named
 /// `gate` whose note says `kind=full` and `commit=<sha>`, with the stop of its `sub` that follows
-/// it in its instance's file. And every landed full gate (cmaughan/swarm-core#15): a
+/// it in its instance's file. And every landed full gate (mornycorp/swarm-core#15): a
 /// `sub.stop` with no such start whose note says `rc=0`, `kind=full` and `main=<sha>`, as
 /// `land` closes a `--full` gate that left `main` at the tree it tested ([`landed`]): a pass of
 /// that commit.
@@ -188,7 +188,7 @@ fn landed_commit(note: &str, rc: Option<i32>) -> Option<&str> {
 }
 
 /// What `land` adds to the stop note of a `--full` gate whose merges left `main` at `main`, a
-/// commit of exactly the tree the gate tested (cmaughan/swarm-core#15): `main=<sha>`. The
+/// commit of exactly the tree the gate tested (mornycorp/swarm-core#15): `main=<sha>`. The
 /// stop then reads `rc=0; kind=full; main=<sha>; merged …`, and [`parse_gates`] counts it as a
 /// passed full gate of `main`. A key of its own, not `commit=`: to the tracking format's readers
 /// a gate whose notes name a `commit` is the periodic one, which merges nothing.
@@ -237,7 +237,7 @@ fn failure_at<'a>(gates: &'a [FullGate], commit: &str, now: i64) -> Option<(&'a 
     })
 }
 
-/// What makes a full gate due whatever `main` did (cmaughan/swarm-core#15): a pass older
+/// What makes a full gate due whatever `main` did (mornycorp/swarm-core#15): a pass older
 /// than `every` seconds (the drift interval, [`Hooks::full_gate_drift_secs`]), or inputs the
 /// gate reads that changed since the last pass, and why (`changed`: a driver, a reference build,
 /// pinned tools; [`Hooks::full_gate_inputs_changed`], or `{prefix}_FULLGATE_DRIFT=<why>`).
@@ -1224,7 +1224,7 @@ mod tests {
         assert!(r.contains("drift: due again 24.0 h after a pass") && r.contains("due: no"), "{r}");
     }
 
-    /// cmaughan/swarm-core#3: a full gate stopped part way (`gate --stop` before its `.rc`,
+    /// mornycorp/swarm-core#3: a full gate stopped part way (`gate --stop` before its `.rc`,
     /// as a coordinator stopped `gate-full-da0d2db` at 2,035 of 2,082 tests) never counts
     /// as passed, and `main` stays due.
     #[test]

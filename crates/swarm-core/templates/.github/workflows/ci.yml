@@ -27,9 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Swarm Core is a private git dependency: fetch it with a read-only token (a fine-grained
-      # token with Contents: read on cmaughan/swarm-core, stored as the SWARM_CORE_TOKEN secret).
+      # token with Contents: read on mornycorp/swarm-core, stored as the SWARM_CORE_TOKEN secret).
       - name: Swarm Core's token
-        run: git config --global url."https://x-access-token:${{ secrets.SWARM_CORE_TOKEN }}@github.com/cmaughan/swarm-core".insteadOf "https://github.com/cmaughan/swarm-core"
+        run: git config --global url."https://x-access-token:${{ secrets.SWARM_CORE_TOKEN }}@github.com/mornycorp/swarm-core".insteadOf "https://github.com/mornycorp/swarm-core"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

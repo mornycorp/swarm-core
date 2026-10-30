@@ -19,7 +19,7 @@ Once per machine, before an agent starts there:
    <!-- and whatever the product needs: targets, SDKs, a GPU driver -->
 2. **GitHub:** `gh auth login --hostname {{github.host}}`, then `gh auth setup-git`, so git and
    cargo (`.cargo/config.toml` sets `net.git-fetch-with-cli`) fetch with gh's token. The account
-   must read this repository and [swarm-core](https://github.com/cmaughan/swarm-core), a private
+   must read this repository and [swarm-core](https://github.com/mornycorp/swarm-core), a private
    git dependency. Set `GH_REPO={{github.repo}}`, or always pass `--repo {{github.repo}}` to gh.
 3. **The clone:** `gh repo clone {{github.repo}}`, and `git fetch origin tracking` so the
    timeline is there to read.
@@ -73,7 +73,7 @@ step 4), after folding the batch into `docs/gaps.md`:
   a ready PR, and on `main`. A new run of a ref cancels the one still going.
 - **Fetching Swarm Core:** it is a private repository, so the job points its URL at a read-only
   token before cargo runs: a fine-grained token with **Contents: read** on
-  `cmaughan/swarm-core`, stored as this repository's `SWARM_CORE_TOKEN` secret (its owner makes
+  `mornycorp/swarm-core`, stored as this repository's `SWARM_CORE_TOKEN` secret (its owner makes
   it, once).
 - **Branch protection on `main`:** no required status checks, since the coordinator's local gate
   is the check before a merge, and `land` cancels a PR's runs when it lands it (a required check

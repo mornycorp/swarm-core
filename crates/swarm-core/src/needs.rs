@@ -4,7 +4,7 @@
 //! #267 is needed. `Depends on` and `Blocked by` read the same.
 //!
 //! - **Another project's issue** is a need when the line names it in full,
-//!   `owner/repo#n` (`cmaughan/swarm-core#4`): a consumer's change that waits on
+//!   `owner/repo#n` (`mornycorp/swarm-core#4`): a consumer's change that waits on
 //!   Swarm Core says so. A short name (`ns#381`) is ambiguous and not a need.
 //!   The repository's own name (`example/app-swarm#300` in its own issue) is its own issue.
 //!
@@ -322,8 +322,8 @@ mod tests {
         let mut want = set(&[9]);
         want.insert(other("example/gpu-swarm", 5));
         assert_eq!(parse("Needs gs#381, example/gpu-swarm#5, !7, a#8, #0 and #9"), want, "short names and #0 are not needs");
-        assert_eq!(parse("**Needs:** cmaughan/swarm-core#4 and #300"), BTreeSet::from([other("cmaughan/swarm-core", 4), Ref::here(300)]));
-        assert_eq!(parse("Needs (cmaughan/swarm-core#4)"), BTreeSet::from([other("cmaughan/swarm-core", 4)]));
+        assert_eq!(parse("**Needs:** mornycorp/swarm-core#4 and #300"), BTreeSet::from([other("mornycorp/swarm-core", 4), Ref::here(300)]));
+        assert_eq!(parse("Needs (mornycorp/swarm-core#4)"), BTreeSet::from([other("mornycorp/swarm-core", 4)]));
         for bad in ["Needs /x#4", "Needs x/#4", "Needs a//b#4", "Needs a/../b#4", "Needs .a/b#4", "Needs é/b#4", "Needs &#4", "Needs a/b/c#4"] {
             assert!(parse(bad).is_empty(), "{bad}: {:?}", parse(bad));
         }
@@ -376,17 +376,17 @@ mod tests {
     #[test]
     fn another_projects_need_resolves_against_that_project() {
         for p in BOTH {
-            let claimed = [issue(300, "open", "Needs cmaughan/swarm-core#3 and #299.")];
+            let claimed = [issue(300, "open", "Needs mornycorp/swarm-core#3 and #299.")];
             let w = wanted(&p, &claimed);
-            let f = Some("cmaughan/swarm-core");
+            let f = Some("mornycorp/swarm-core");
             assert_eq!(projects(&w), BTreeSet::from([None, f.map(str::to_owned)]));
             assert_eq!(iids_of(&w, f), [3]);
             assert_eq!(iids_of(&w, None), [299]);
             let mrs = [Pr { number: 4, head_ref: "3-phase2".into(), ..Default::default() }];
             let r = resolve(f, &w, &[issue(3, "open", ""), issue(299, "open", "")], &mrs);
-            let at = other("cmaughan/swarm-core", 3);
+            let at = other("mornycorp/swarm-core", 3);
             assert_eq!(r.keys().collect::<Vec<_>>(), [&at], "only that project's need, and #299 isn't Swarm Core's");
-            assert_eq!(r[&at].status(), "cmaughan/swarm-core#3 open (needed by #300), PR cmaughan/swarm-core#4 · issue 3");
+            assert_eq!(r[&at].status(), "mornycorp/swarm-core#3 open (needed by #300), PR mornycorp/swarm-core#4 · issue 3");
             assert_eq!(Need::from_json(&r[&at].to_json()).as_ref(), Some(&r[&at]));
         }
     }
@@ -414,14 +414,14 @@ mod tests {
     #[test]
     fn fetch_asks_each_project_it_names_and_survives_one_that_fails() {
         let p = APP_SWARM;
-        let w = wanted(&p, &[issue(300, "open", "Needs cmaughan/swarm-core#3, cmaughan/gone#1 and #299.")]);
+        let w = wanted(&p, &[issue(300, "open", "Needs mornycorp/swarm-core#3, cmaughan/gone#1 and #299.")]);
         let fake = Fake { asked: std::cell::RefCell::new(Vec::new()) };
         let open_here = [Pr { number: 325, head_ref: "299-phase1".into(), state: "open".into(), ..Default::default() }];
         let got = fetch(&p, &w, &open_here, &fake);
         let keys: Vec<String> = got.keys().map(Ref::label).collect();
-        assert_eq!(keys, ["#299", "cmaughan/swarm-core#3"], "the repository that failed is left out");
+        assert_eq!(keys, ["#299", "mornycorp/swarm-core#3"], "the repository that failed is left out");
         assert_eq!(got[&Ref::here(299)].mr, Some(325), "this repository's pull requests come from the caller");
-        assert_eq!(got[&other("cmaughan/swarm-core", 3)].mr, Some(4), "another's from its own list");
+        assert_eq!(got[&other("mornycorp/swarm-core", 3)].mr, Some(4), "another's from its own list");
         assert!(!fake.asked.borrow().iter().any(|a| a.starts_with("prs example/app-swarm")), "{:?}", fake.asked.borrow());
     }
 
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_need_that_closes_or_is_taken_is_news() {
-        let f = |iid| other("cmaughan/swarm-core", iid);
+        let f = |iid| other("mornycorp/swarm-core", iid);
         let before = BTreeMap::from([
             (Ref::here(1), need(Ref::here(1), "open", &[9], None)),
             (Ref::here(2), need(Ref::here(2), "open", &[9], None)),
@@ -452,7 +452,7 @@ mod tests {
             [
                 "#1 closed (needed by #9): start what waited on it · issue 1",
                 "#2 (needed by #9) taken: PR #7 · issue 2",
-                "cmaughan/swarm-core#1 (needed by #9) taken: PR cmaughan/swarm-core#2 · issue 1"
+                "mornycorp/swarm-core#1 (needed by #9) taken: PR mornycorp/swarm-core#2 · issue 1"
             ],
             "no news: unchanged, or first seen"
         );

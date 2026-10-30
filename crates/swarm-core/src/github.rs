@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn repositories_and_path_segments_are_checked() {
-        assert_eq!(check_repo("cmaughan/swarm-core"), Ok("cmaughan/swarm-core"));
+        assert_eq!(check_repo("mornycorp/swarm-core"), Ok("mornycorp/swarm-core"));
         for bad in ["", "a", "a/b/c", "../x", "a/..", "a/b?x=1", "-a/b", "a/b c", "a//b"] {
             assert!(check_repo(bad).is_err(), "{bad}");
         }
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     #[ignore = "needs gh, signed in, and the network"]
     fn live_reads_parse() {
-        let repo: &'static str = std::env::var("SWARM_CORE_LIVE_REPO").map_or("cmaughan/swarm-core", |r| Box::leak(r.into_boxed_str()));
+        let repo: &'static str = std::env::var("SWARM_CORE_LIVE_REPO").map_or("mornycorp/swarm-core", |r| Box::leak(r.into_boxed_str()));
         let p = Project { github: crate::project::GitHub { host: "github.com", repo }, ..APP_SWARM };
         let open = open_prs(&p, None).unwrap();
         assert!(open.iter().all(|pr| pr["state"] == "open" && pr["number"].is_u64()), "{open:?}");

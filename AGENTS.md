@@ -17,7 +17,7 @@ what it serves and how a consumer wires it in; the swarm protocol
   and GraphQL answers into one shape for a PR and one for an issue; the commands' decisions are
   pure functions over those shapes, tested without a network. A change to `github.rs` also runs
   its live read test against GitHub: `cargo test -p swarm-core --lib -- --ignored live`.
-- **Iterating from a consumer:** put a `[patch."https://github.com/cmaughan/swarm-core.git"]`
+- **Iterating from a consumer:** put a `[patch."https://github.com/mornycorp/swarm-core.git"]`
   table pointing at your checkout in your *user-level* cargo config, never in a repo. The
   consumers' `cargo xtask layers` refuses a committed one.
 - **Assets are templates for every consumer.** A file under `crates/swarm-core/assets/` lands in

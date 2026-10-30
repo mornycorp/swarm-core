@@ -20,7 +20,7 @@ use std::path::Path;
 use crate::{Hooks, Project};
 
 /// Swarm Core's repository, as a consumer's workspace manifest names it.
-pub const URL: &str = "https://github.com/cmaughan/swarm-core.git";
+pub const URL: &str = "https://github.com/mornycorp/swarm-core.git";
 /// Its package name.
 pub const PACKAGE: &str = "swarm-core";
 
@@ -214,7 +214,7 @@ fn patches(text: &str) -> bool {
 mod tests {
     use super::*;
 
-    const PIN: &str = "swarm-core = { git = \"https://github.com/cmaughan/swarm-core.git\", rev = \"a28c7554ddbfc7826a2c2db42628c2ac7133ead6\" }\n";
+    const PIN: &str = "swarm-core = { git = \"https://github.com/mornycorp/swarm-core.git\", rev = \"a28c7554ddbfc7826a2c2db42628c2ac7133ead6\" }\n";
 
     fn manifest(pin: &str) -> String {
         format!("[workspace.dependencies]\n# The swarm tooling\n{pin}serde = \"1\"\n")

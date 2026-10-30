@@ -17,7 +17,7 @@ that instruction is the invocation.
 
 ## Where they come from
 
-**A pinned copy.** Both skills live in [swarm-core](https://github.com/cmaughan/swarm-core)
+**A pinned copy.** Both skills live in [swarm-core](https://github.com/mornycorp/swarm-core)
 (`crates/swarm-core/assets/.claude/skills/`), and `cargo xtask swarm-core sync-assets` writes them
 here from Swarm Core's pinned revision. The gate's `sync-assets --check`
 fails when a file here differs from it: change a skill in Swarm Core, then bump. Each repo may

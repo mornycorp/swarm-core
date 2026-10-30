@@ -16,7 +16,7 @@
 //!   any other step that fails, leaves no pass. `land` accepts the pass like any other and notes
 //!   the evidence on each PR ([`super::evidence`]). The periodic full gate reruns its failed tests
 //!   the same way before it files a `main-red` issue ([`crate::fullgate`]), and so does a worker's
-//!   `ready` before it gives up (cmaughan/swarm-core#14, [`crate::ready::own_gate`]).
+//!   `ready` before it gives up (mornycorp/swarm-core#14, [`crate::ready::own_gate`]).
 
 use super::{Cause, Kind, ci_summary, classify, field, rc_kind, rc_line, tokens};
 use crate::stack::short;
@@ -102,7 +102,7 @@ impl Rerun {
 
     /// [`Self::ci_args`] over `scope` instead of its kind's, with the doctests when `doctests`:
     /// `ready`'s rerun keeps its `--changed --base <base>`, whose test step runs the affected
-    /// packages' doctests after nextest (cmaughan/swarm-core#14).
+    /// packages' doctests after nextest (mornycorp/swarm-core#14).
     pub fn ci_args_in(&self, scope: &[String], doctests: bool) -> Vec<String> {
         let mut a = scope.to_vec();
         for t in &self.tests {

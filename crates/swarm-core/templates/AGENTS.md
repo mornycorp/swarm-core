@@ -4,7 +4,7 @@
 # AGENTS.md: guide for AI agents and contributors
 
 {{product}} is <!-- one paragraph: what it is, its language and stack, who it is for -->.
-It is built by a swarm of agents on [swarm-core](https://github.com/cmaughan/swarm-core)'s
+It is built by a swarm of agents on [swarm-core](https://github.com/mornycorp/swarm-core)'s
 protocol and commands. Read this file first, then [docs/swarm-protocol.md](docs/swarm-protocol.md)
 (the protocol every swarm shares) and [docs/swarm.md](docs/swarm.md) (this repo's part of it).
 

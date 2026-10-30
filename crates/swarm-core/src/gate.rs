@@ -37,7 +37,7 @@
 //! - **A pass** leaves the sub-agent open, so the merges it allows are logged with `--sub <sub>`;
 //!   `gate --stop <sub> --note "<text>"` closes it (`rc=0; kind=<kind>; <text>`, from its `.rc`) and
 //!   drops the lock ([`close`]). A gate stopped part way has no `.rc`, and its stop no `rc=`: it
-//!   never passed (cmaughan/swarm-core#3).
+//!   never passed (mornycorp/swarm-core#3).
 //! - **The periodic full gate's runs** ([`full_attempt`]) are this gate's too, kind full, in the
 //!   full gate's checkout.
 //!
@@ -283,7 +283,7 @@ pub fn failure_note(rc: i32, cause: Cause, kind: Kind) -> String {
 /// A closed gate's `sub.stop` note (`gate --stop`, `land`): the exit code, cause and kind its
 /// `<sub>.rc` line records, then the text (`rc=0; kind=<kind>; <text>` for a pass). A gate with no
 /// `.rc` never finished (stopped part way): its note has no `rc=`, which reads as abandoned, never
-/// as passed (cmaughan/swarm-core#3). A text that gives its own `rc=` is kept as it is.
+/// as passed (mornycorp/swarm-core#3). A text that gives its own `rc=` is kept as it is.
 pub fn stop_note(note: &str, rc_line: Option<&str>) -> String {
     let note = note.trim();
     if note.starts_with("rc=") {
@@ -1064,7 +1064,7 @@ mod tests {
         assert_eq!(stop_note(" ", Some(&rc_line(0, 1, None, "kind=docs", &head))), "rc=0; kind=docs");
         let failed = rc_line(101, 30, Some(Cause::Test), "kind=full", &head);
         assert_eq!(stop_note("stopped", Some(&failed)), "rc=101; cause=test; kind=full; stopped", "a failure's rc, not 0");
-        // cmaughan/swarm-core#3: a gate stopped part way, before its `.rc`, never passed.
+        // mornycorp/swarm-core#3: a gate stopped part way, before its `.rc`, never passed.
         assert_eq!(stop_note("stopped: the owner paused test runs", None), "stopped: the owner paused test runs");
         assert_eq!(stop_note(" ", None), "stopped before its result");
         assert_eq!(stop_note("stopped", Some("garbage")), "stopped", "a .rc with no rc is none");

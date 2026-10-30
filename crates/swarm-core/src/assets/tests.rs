@@ -129,7 +129,7 @@ fn both_consumers_render_every_asset() {
     assert!(mr.contains("passes locally (fmt,") && mr.contains("`cargo run -p swarm-ui-egui --example snapshot`"), "{mr}");
     let protocol = render(&GPU_SWARM, &Gpu, asset("docs/swarm-protocol.md")).unwrap();
     assert!(protocol.contains("gh pr create --repo example/gpu-swarm --draft") && protocol.contains("https://github.example.com/example/gpu-swarm/issues"));
-    // The project's own settings, each consumer's value (cmaughan/swarm-core#5).
+    // The project's own settings, each consumer's value (mornycorp/swarm-core#5).
     assert!(
         protocol.contains("`gpu-stack.json`") && protocol.contains("3 hours, the project's `Limits::gate_lock_max_age_secs`"),
         "the second project's settings"

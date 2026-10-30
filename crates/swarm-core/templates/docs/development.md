@@ -64,7 +64,7 @@ To try a Swarm Core change before it merges, patch it in your **user-level**
 `~/.cargo/config.toml`, never in the repo:
 
 ```toml
-[patch."https://github.com/cmaughan/swarm-core.git"]
+[patch."https://github.com/mornycorp/swarm-core.git"]
 swarm-core = { path = "<your swarm-core checkout>/crates/swarm-core" }
 ```
 

@@ -8,12 +8,12 @@
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
 runs it, on the commands
-[swarm-core](https://github.com/cmaughan/swarm-core) serves behind each
+[swarm-core](https://github.com/mornycorp/swarm-core) serves behind each
 repo's `cargo xtask`. This repo's own parts (what each machine needs, its capabilities, its gate's
 kinds, what its CI runs) are in [swarm.md](swarm.md), and the rules every agent follows in
 [`AGENTS.md`](../AGENTS.md).
 
-Issue numbers name their project: `sc#n` is cmaughan/swarm-core's issue n. This repo's own issues are
+Issue numbers name their project: `sc#n` is mornycorp/swarm-core's issue n. This repo's own issues are
 [{{github.repo}}](https://{{github.host}}/{{github.repo}}/issues).
 
 ## Roles
@@ -284,7 +284,7 @@ the event and sends it with the next.
 - **`--note "<one line>"`** on any event: why you're blocked or stalled, what you hand off.
 
 Both swarms write **version 3** of the tracking format (`session.start`'s `format`;
-[the tracking format › Versions](https://github.com/cmaughan/swarm-core/blob/main/docs/tracking-format.md#versions),
+[the tracking format › Versions](https://github.com/mornycorp/swarm-core/blob/main/docs/tracking-format.md#versions),
 swarm-core's). A change to the format, or to `cargo xtask event`, is done only when that
 section's rule holds.
 
@@ -341,7 +341,7 @@ happens:
   gets a PR, often another agent's; `--once` lists the ones still open and their PRs. Two more
   calls a poll, the claimed issues and the needed ones. `claim` notes the open needs of the issue
   it claims. Whoever files dependent issues writes their `Needs` lines in that form. A need in
-  another project is named in full, `group/repo#n` (`cmaughan/swarm-core#4`): a change
+  another project is named in full, `group/repo#n` (`mornycorp/swarm-core#4`): a change
   here that waits on a Swarm Core PR says so, and `prwatch` and `claim` read that project's issue
   and PRs (two more calls a poll for each such project). A short name (`ns#381` from another project) is no need.
 - A Claude Code worker runs it under Monitor (each line wakes it); others as a background
@@ -674,7 +674,7 @@ On each finished pull request:
      another model) before, and `--sub gate-<n>` on any issue event the helper causes
      (`merge --issue <n> --mr <m> --sub gate-<n>`, `sendback --issue <n> --mr <m> --sub gate-<n>`).
      `cargo xtask gate` logs its own `sub.start` and, on a failure, its `sub.stop` with the
-     convention in [tracking-format.md › Gates](https://github.com/cmaughan/swarm-core/blob/main/docs/tracking-format.md#gates): the capacity it started
+     convention in [tracking-format.md › Gates](https://github.com/mornycorp/swarm-core/blob/main/docs/tracking-format.md#gates): the capacity it started
      with, then `rc=<n>; cause=<cause>` (`memory`, `link`, `toolchain`, `git-temp` and a
      project's `gpu`: transient, a rerun may pass; a project's `python`: the machine's setup;
      `test`, `build`, `other`). A failed gate keeps the lock, as the coordinator
@@ -973,7 +973,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
     cause and the failing tests, and where the log is. The gater claims it and works on it
     instead of its task. An open `main-red` issue stops a second agent filing a duplicate.
 - **The notes** are a convention within tracking format v3, no version bump
-  ([tracking-format.md › Gates](https://github.com/cmaughan/swarm-core/blob/main/docs/tracking-format.md#gates)): a full gate is a helper sub-agent
+  ([tracking-format.md › Gates](https://github.com/mornycorp/swarm-core/blob/main/docs/tracking-format.md#gates)): a full gate is a helper sub-agent
   named `gate`, `sub` `gate-full-<short commit>` (numbered when the same agent gates the same
   commit again):
   - `sub.start --name gate --note "full gate of main; capacity=<n> free=<GB>; kind=full;

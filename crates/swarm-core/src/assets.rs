@@ -126,7 +126,7 @@ pub fn manifest() -> String {
     let mut s = String::from(
         "# Pinned assets\n\n\
          Written by `cargo xtask swarm-core sync-assets`: the files below are pinned copies from\n\
-         [swarm-core](https://github.com/cmaughan/swarm-core) \
+         [swarm-core](https://github.com/mornycorp/swarm-core) \
          (`crates/swarm-core/assets/`), at the revision `Cargo.lock` pins. Don't edit them here: change\n\
          them in Swarm Core, then `cargo xtask swarm-core bump` and `sync-assets`. The gate's\n\
          `sync-assets --check` fails on a copy that differs.\n\n",

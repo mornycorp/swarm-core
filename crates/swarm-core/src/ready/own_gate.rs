@@ -3,7 +3,7 @@
 //! `sub.stop` with `rc=0` or `rc=1`), apart from the coordinator's `gate-*` gates. Its output goes
 //! to the terminal as it prints and to `<target>/gate-logs/ready-<head>.log`, with its `.rc` record
 //! and nextest's junit file (`.junit.xml`) beside it, as `gate` keeps them
-//! (cmaughan/swarm-core#14).
+//! (mornycorp/swarm-core#14).
 //!
 //! **A test that failed under load** (#14): `ready` reruns it once, as `gate --rerun-failed` does,
 //! rather than leaving the worker to run all of `ready` again (on 2026-10-29 one PR ran it five

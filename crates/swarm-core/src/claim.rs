@@ -29,7 +29,7 @@
 //!   main-red` event and a comment. `--no-fullgate` skips it: the coordinator's claims while it
 //!   merges.
 //! - **What it needs**: an issue whose description names others on a
-//!   `Needs` line ([`crate::needs`]), this project's or another's (`cmaughan/swarm-core#4`),
+//!   `Needs` line ([`crate::needs`]), this project's or another's (`mornycorp/swarm-core#4`),
 //!   gets a note listing those still open, and their PRs. It is a note, not
 //!   a refusal: a worker can build what doesn't wait on them, and `prwatch` says when they land.
 //! - **The guard:** `--check` reads the issue from the current branch's name and warns when
