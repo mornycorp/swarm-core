@@ -123,8 +123,8 @@ one the consumer doesn't have yet, with the same placeholders and `{{today}}`, a
 overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swarm.md)).
 
 **The skills are pinned copies, not a Claude Code plugin**. A copy in the
-checkout needs no install on any machine, keeps the skills' names (`refactoring`, as each AGENTS.md
-§5 calls it), serves Codex as well as Claude Code (`agents/openai.yaml`), keeps the path
+checkout needs no install on any machine, keeps the skills' names (`refactoring`, as an agent asked to
+refactor calls it), serves Codex as well as Claude Code (`agents/openai.yaml`), keeps the path
 `cargo xtask health` runs the analyzer from, and moves with the commit that pins it, as the rest
 of Swarm Core does. A plugin would be installed per machine from a marketplace, update outside
 the repos' history, rename the skills under its namespace, and serve Claude Code alone. A
