@@ -63,12 +63,29 @@ fn crate_roots_carry_the_lint_headers() {
     let good = format!("//! x\n#![forbid(unsafe_code)]\n{DENY_LINE}\n{LIMITS_LINE}\n{LIMITS_TEST_LINE}\n");
     std::fs::write(dir.join("src/lib.rs"), &good).unwrap();
     let m = Member { name: "x".into(), dir: dir.clone(), deps: Vec::new() };
-    assert!(headers(&m, true).is_empty(), "{:?}", headers(&m, true));
+    assert!(headers(&m, Safety::Forbidden).is_empty(), "{:?}", headers(&m, Safety::Forbidden));
     std::fs::write(dir.join("src/lib.rs"), "//! x\n").unwrap();
     std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-    let problems = headers(&m, true);
+    let problems = headers(&m, Safety::Forbidden);
     assert_eq!(problems.len(), 5, "{problems:?}");
     assert!(problems.iter().any(|p| p.contains("forbid(unsafe_code)")) && problems.iter().any(|p| p.contains("[lints] workspace = true")));
+}
+
+#[test]
+fn a_root_allowed_unsafe_carries_its_own_lines_in_place_of_forbid() {
+    let dir = swarm_core_testkit::temp_dir("layers-unsafe");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"gpu\"\n\n[lints]\nworkspace = true\n").unwrap();
+    let base = format!("//! gpu\n{DENY_LINE}\n{LIMITS_LINE}\n{LIMITS_TEST_LINE}\n");
+    std::fs::write(dir.join("src/lib.rs"), &base).unwrap();
+    let m = Member { name: "gpu".into(), dir: dir.clone(), deps: Vec::new() };
+    let problems = headers(&m, Safety::Allowed);
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems.iter().all(|p| p.contains("allowed `unsafe`")), "{problems:?}");
+    std::fs::write(dir.join("src/lib.rs"), format!("{base}{}\n{}\n", UNSAFE_LINES[0], UNSAFE_LINES[1])).unwrap();
+    assert!(headers(&m, Safety::Allowed).is_empty(), "{:?}", headers(&m, Safety::Allowed));
+    assert_eq!(headers(&m, Safety::Forbidden).len(), 1, "a package not allowed still forbids");
+    assert!(headers(&m, Safety::Exempt).is_empty());
 }
 
 #[test]

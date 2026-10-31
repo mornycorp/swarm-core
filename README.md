@@ -86,6 +86,11 @@ have defaults:
 - `asset_vars`: the consumer's values for the assets' placeholders (`product`, `cli`, …).
 - `layers`: the consumer's crates and their layers, its UI crates, and where command replies are
   read, for `cargo xtask layers` (`layers::Table`); none, and `layers` checks nothing.
+- `unsafe_crates`: the library packages allowed `unsafe` (a GPU or OS binding), each with why;
+  `layers` holds their roots to `#![deny(unsafe_op_in_unsafe_fn)]` and
+  `#![warn(clippy::undocumented_unsafe_blocks)]` instead of `#![forbid(unsafe_code)]`. None by
+  default. Such a consumer's workspace sets `unsafe_code = "deny"`, not `"forbid"`, since a
+  crate can't lift a `forbid`; every other library root still forbids it.
 
 **`ci --changed`'s plan** (`changed`): the consumer's `ci` runs the steps; Swarm Core says for
 which packages. The changed files map to packages or classes (docs, tooling, data read from

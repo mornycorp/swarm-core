@@ -9,7 +9,8 @@
 //! - **Dev-only crates** (a testkit) are only ever dev-dependencies.
 //! - **Lint headers.** Every manifest has `[lints] workspace = true`; every crate root denies the
 //!   panicking lints and switches the code-health limits on (off for its tests); every library
-//!   root forbids `unsafe`.
+//!   root forbids `unsafe`, but a package the project allows it ([`crate::Hooks::unsafe_crates`]),
+//!   whose root instead denies `unsafe_op_in_unsafe_fn` and warns on undocumented `unsafe` blocks.
 //! - **Code-health exemptions** are an item's `#[expect(clippy::…, reason = "…")]`, never an
 //!   `allow` or crate-wide; their count is printed, a ratchet that should only go down.
 //! - **Typed contracts.** In [`Table::reply_readers`] (the code that consumes command replies: the
@@ -38,6 +39,17 @@ pub struct Entry {
     /// One line: what it holds.
     pub summary: &'static str,
 }
+
+/// A library package allowed `unsafe` ([`crate::Hooks::unsafe_crates`]), and why.
+#[derive(Debug, Clone, Copy)]
+pub struct Unsafe {
+    pub package: &'static str,
+    /// One line: what it binds that can't be written without `unsafe`.
+    pub reason: &'static str,
+}
+
+/// What a root allowed `unsafe` carries in place of `#![forbid(unsafe_code)]`.
+pub const UNSAFE_LINES: [&str; 2] = ["#![deny(unsafe_op_in_unsafe_fn)]", "#![warn(clippy::undocumented_unsafe_blocks)]"];
 
 /// A file allowed some untyped reply reads, and why: a ratchet, lowered as they are converted.
 #[derive(Debug, Clone, Copy)]
@@ -99,7 +111,7 @@ pub fn run(hooks: &dyn crate::Hooks, root: &Path, args: &[&str]) -> Result<(), S
     cmd.current_dir(root).args(["metadata", "--no-deps", "--format-version", "1"]);
     let text = crate::process::output(cmd, None, METADATA_DEADLINE, "cargo metadata")?;
     let meta: Value = serde_json::from_str(&text).map_err(|e| format!("cargo metadata: {e}"))?;
-    let mut problems = check(&table, &meta, root);
+    let mut problems = check_unsafe(&table, hooks.unsafe_crates(), &meta, root);
     problems.extend(raw_nuls(root));
     problems.extend(crate_map_problem(&table, root, write)?);
     if problems.is_empty() {
@@ -133,14 +145,30 @@ fn members(meta: &Value) -> Vec<Member> {
 
 /// Everything `layers` checks but raw NULs and the crate map, for `meta` (`cargo metadata`).
 pub fn check(table: &Table, meta: &Value, root: &Path) -> Vec<String> {
+    check_unsafe(table, &[], meta, root)
+}
+
+/// [`check`], with the library packages allowed `unsafe`.
+pub fn check_unsafe(table: &Table, allowed: &[Unsafe], meta: &Value, root: &Path) -> Vec<String> {
     let members = members(meta);
     let mut problems = registration(table, &members);
+    for a in allowed {
+        if !members.iter().any(|m| m.name == a.package) {
+            problems.push(format!("unsafe_crates lists {}, which is not a workspace member", a.package));
+        }
+        println!("layers: {} may use `unsafe`: {}", a.package, a.reason);
+    }
     let mut exemptions = BTreeMap::new();
     let mut reads = Vec::new();
     for m in &members {
         let Some(me) = entry(table, &m.name) else { continue };
         problems.extend(dependencies(table, me, m));
-        problems.extend(headers(m, me.layer.is_some()));
+        let safety = match me.layer {
+            None => Safety::Exempt,
+            Some(_) if allowed.iter().any(|a| a.package == m.name) => Safety::Allowed,
+            Some(_) => Safety::Forbidden,
+        };
+        problems.extend(headers(m, safety));
         for file in rust_files(&m.dir.join("src")) {
             let text = std::fs::read_to_string(&file).unwrap_or_default();
             let shown = file.strip_prefix(root).unwrap_or(&file).display().to_string().replace('\\', "/");
@@ -205,9 +233,20 @@ fn dependencies(table: &Table, me: &Entry, m: &Member) -> Vec<String> {
     problems
 }
 
-/// `m`'s manifest and crate roots carry the lint headers (`layered`: a library in a layer, which
-/// forbids `unsafe` in its root).
-fn headers(m: &Member, layered: bool) -> Vec<String> {
+/// What a package's library root says of `unsafe`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Safety {
+    /// An app or tool: nothing checked.
+    Exempt,
+    /// A library in a layer: `#![forbid(unsafe_code)]`.
+    Forbidden,
+    /// A library the project allows `unsafe`: [`UNSAFE_LINES`].
+    Allowed,
+}
+
+/// `m`'s manifest and crate roots carry the lint headers, and its library root what `safety` says
+/// of `unsafe`.
+fn headers(m: &Member, safety: Safety) -> Vec<String> {
     let mut problems = Vec::new();
     let toml = std::fs::read_to_string(m.dir.join("Cargo.toml")).unwrap_or_default().replace("\r\n", "\n");
     if !toml.contains("[lints]\nworkspace = true") {
@@ -220,8 +259,19 @@ fn headers(m: &Member, layered: bool) -> Vec<String> {
                 problems.push(format!("{}/{root_file}: the crate root must carry `{line}`", m.name));
             }
         }
-        if layered && root_file == "src/lib.rs" && !text.contains("#![forbid(unsafe_code)]") {
-            problems.push(format!("{}/{root_file}: a library root must carry `#![forbid(unsafe_code)]`", m.name));
+        if root_file != "src/lib.rs" {
+            continue;
+        }
+        match safety {
+            Safety::Forbidden if !text.contains("#![forbid(unsafe_code)]") => {
+                problems.push(format!("{}/{root_file}: a library root must carry `#![forbid(unsafe_code)]`", m.name));
+            }
+            Safety::Allowed => {
+                for line in UNSAFE_LINES.iter().filter(|l| !text.lines().any(|t| t.trim() == **l)) {
+                    problems.push(format!("{}/{root_file}: a library root allowed `unsafe` must carry `{line}`", m.name));
+                }
+            }
+            _ => {}
         }
     }
     problems
