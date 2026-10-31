@@ -107,7 +107,7 @@ a consumer, and are built into the crate (`assets::ASSETS`):
 - `docs/swarm-protocol.md` (the roles, the claim, tracking, the gates, the coordinator's loop, the
   periodic full gate), `docs/lessons.md`, `docs/progress-docs.md`;
 - `.github/` (the issue and PR templates), `scripts/hooks/pre-push`, `scripts/github-labels.sh`;
-- `.claude/skills/` (`refactoring`, `complexity-analyzer`).
+- `.claude/skills/` (`complexity-analyzer`; the `refactoring` skill was dropped on 2026-10-31).
 
 `cargo xtask swarm-core sync-assets` writes them into the consumer from its pinned revision, with
 `{{name}}` placeholders filled in from its `Project` and `Hooks::asset_vars`, and lists them in
@@ -123,8 +123,7 @@ one the consumer doesn't have yet, with the same placeholders and `{{today}}`, a
 overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swarm.md)).
 
 **The skills are pinned copies, not a Claude Code plugin**. A copy in the
-checkout needs no install on any machine, keeps the skills' names (`refactoring`, as an agent asked to
-refactor calls it), serves Codex as well as Claude Code (`agents/openai.yaml`), keeps the path
+checkout needs no install on any machine, keeps the skills' names, serves Codex as well as Claude Code (`agents/openai.yaml`), keeps the path
 `cargo xtask health` runs the analyzer from, and moves with the commit that pins it, as the rest
 of Swarm Core does. A plugin would be installed per machine from a marketplace, update outside
 the repos' history, rename the skills under its namespace, and serve Claude Code alone. A

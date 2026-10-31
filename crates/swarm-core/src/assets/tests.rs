@@ -70,9 +70,9 @@ fn every_file_under_assets_is_shipped() {
     for want in ["docs/swarm-protocol.md", "docs/lessons.md", "docs/progress-docs.md", ".github/pull_request_template.md", "scripts/hooks/pre-push"] {
         assert!(listed.contains(&want), "{want}");
     }
-    assert!(listed.iter().any(|p| p.starts_with(".claude/skills/refactoring/")) && listed.iter().any(|p| p.starts_with(".claude/skills/complexity-analyzer/")));
-    // A repo's own file beside the skills is never shipped (a project's score targets).
-    assert!(!listed.contains(&".claude/skills/refactoring/references/project-targets.md"));
+    assert!(listed.iter().any(|p| p.starts_with(".claude/skills/complexity-analyzer/")));
+    // The refactoring skill is no longer shipped (owner, 2026-10-31).
+    assert!(!listed.iter().any(|p| p.starts_with(".claude/skills/refactoring/")));
 }
 
 /// No asset or template holds a control character but a newline (a tab only in a `.tsv`, a carriage
@@ -199,10 +199,10 @@ fn sync_writes_what_check_accepts_and_an_edit_fails_the_check() {
     check(&APP_SWARM, &App, &root).unwrap();
     // An edit, and a deletion, fail it, naming each.
     std::fs::write(&doc, "edited here\n").unwrap();
-    std::fs::remove_file(root.join(".claude/skills/refactoring/SKILL.md")).unwrap();
+    std::fs::remove_file(root.join(".claude/skills/complexity-analyzer/SKILL.md")).unwrap();
     let err = check(&APP_SWARM, &App, &root).unwrap_err();
     assert!(err.starts_with("2 pinned asset(s) differ"), "{err}");
-    assert_eq!(differences(&APP_SWARM, &App, &root).unwrap(), [".claude/skills/refactoring/SKILL.md: missing", "docs/lessons.md: differs"]);
+    assert_eq!(differences(&APP_SWARM, &App, &root).unwrap(), [".claude/skills/complexity-analyzer/SKILL.md: missing", "docs/lessons.md: differs"]);
     // Another project's copy isn't this one's.
     assert!(!differences(&GPU_SWARM, &Gpu, &root).unwrap().is_empty());
     sync(&APP_SWARM, &App, &root).unwrap();
