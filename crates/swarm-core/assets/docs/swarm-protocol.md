@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-31 · **Change:** minor (claims on one branch: the first holds it; ready refuses another's) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-31 · **Change:** minor (no refactoring pass at the end of a worker's task) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -78,9 +78,7 @@ through tail or head, so you see its lines as it prints them.
 When it prints `fullgate: <sub> won the race for <commit>`, tell the owner at once: "My turn for
 the periodic full gate of main (`<commit>`): the whole `ci`, about <n> min." When it ends, tell
 them "Full gate done: passed." or "Full gate done: failed (`<cause>`), filed `main-red` #<n>;
-working on that instead." Do the work with tests. Before finishing, make one
-refactoring pass with the refactoring skill, as AGENTS.md §5 says (Apply mode, only the functions
-your diff changed, at most three refactorings, no score targets; record it in Progress). Your
+working on that instead." Do the work with tests. Your
 gate is `cargo xtask ci --changed` (it becomes the full `cargo xtask ci` when its plan says the
 change reaches everything). Before each run that builds, run `cargo xtask capacity`: when it
 suggests 0 more builds, iterate with `cargo test -p <crate>` or wait a few minutes and check
@@ -471,8 +469,7 @@ worktree of its own, where that speeds it up on its machine (owner, 2026-10-18).
 On each finished pull request:
 
 1. **Check it:** the worker's local `cargo xtask ci --changed` passed; the PR closes the right issue; its
-   **Progress** section is filled in, its **Refactoring** line included (send it back if not:
-   AGENTS.md §5) and it leaves the progress summaries alone; nothing outside its scope changed; UI changes have a snapshot.
+   **Progress** section is filled in and it leaves the progress summaries alone; nothing outside its scope changed; UI changes have a snapshot.
 2. **Stack it** onto `main`: `cargo xtask stack <pr>…`, in the coordinator's worktree,
    for the batch's ready PRs in merge order. Each PR becomes `s-<pr>`, its source branch rebased
    onto `origin/main` or onto the PR below it (only its own commits, when it was stacked on that
@@ -1024,6 +1021,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | No refactoring pass at the end of a worker's task, and no **Refactoring** line for the coordinator to check (owner, 2026-10-31); the `refactoring` skill is dropped too, `complexity-analyzer` kept |
 | 2026-10-31 | minor | Claims on one branch: a PR there is yours only when no other claim names it; the first standing claim comment holds the issue; `ready` refuses another agent's (mornycorp/swarm-core#7) |
 | 2026-10-31 | minor | The architecture review's checklist: spec requirements with no work under a gap marked done (lessons.md §6) |
 | 2026-10-30 | minor | The architecture review's checklist: a front end building logic the core owns (lessons.md §5) |

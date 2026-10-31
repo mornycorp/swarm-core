@@ -1,7 +1,7 @@
 //! The files both swarms keep the same (phase 4): the swarm protocol,
 //! the lessons and the progress-docs standard (`docs/`), the GitHub templates (`.github/`), the
-//! pre-push hook and the label script (`scripts/`), and the `refactoring` and
-//! `complexity-analyzer` skills (`.claude/skills/`). They live here, in `crates/swarm-core/assets/`
+//! pre-push hook and the label script (`scripts/`), and the `complexity-analyzer` skill
+//! (`.claude/skills/`). They live here, in `crates/swarm-core/assets/`
 //! at the path each takes in a consumer, built into the crate ([`ASSETS`]), so a consumer's copy
 //! is the one its pinned revision ships.
 //!

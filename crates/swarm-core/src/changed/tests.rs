@@ -122,7 +122,7 @@ fn files_map_to_the_deepest_package_or_a_class() {
     assert_eq!((c("docs/gaps.md"), c("scorecard/ui.toml"), c(".github/workflows/ci.yml")), (xtask.clone(), xtask.clone(), xtask));
     assert_eq!(c(".github/pull_request_template.md"), FileClass::NoBuild);
     assert_eq!(c("scripts/github-labels.sh"), FileClass::NoBuild);
-    assert_eq!(c(".claude/skills/refactoring/SKILL.md"), FileClass::NoBuild);
+    assert_eq!(c(".claude/skills/complexity-analyzer/SKILL.md"), FileClass::NoBuild);
     assert_eq!(c("assets/fonts/CascadiaMono-Regular.ttf"), FileClass::Data(vec![Reader { package: "swarm-ui-egui".into(), embeds: true }]));
     assert_eq!(c("xtask/src/main.rs"), pkg("xtask"));
     assert_eq!(c(SWARM_CORE_PIN), pkg(SWARM_CORE));

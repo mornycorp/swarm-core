@@ -76,11 +76,6 @@ set `{{env}}_AGENT`.
 
 ## 5. Before you finish a task
 
-**First, one refactoring pass** with the `refactoring` skill (`.claude/skills/refactoring`):
-Apply mode, only the functions your branch's diff changed, at most three refactorings, each
-verified with the tests before the next. Record them in the PR's Progress section
-(**Refactoring:** their names, or "none").
-
 ```sh
 cargo fmt --all
 cargo test -p <the crates you touched>
