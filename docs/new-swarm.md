@@ -154,8 +154,9 @@ Add `target/`, `log/` and `.claude/worktrees/` to `.gitignore`.
 ## 7. CI
 
 `cargo xtask swarm-core init` writes `.github/workflows/ci.yml`, which runs the repo's own
-`cargo xtask ci` on ready PRs and on `main`: no run on draft PRs or on `tracking`, a run when a
-PR is marked ready, and a new run of a ref cancels the one still going. Swarm Core is a private
+`cargo xtask ci` once a day on `main` (owner, 2026-10-31), and by hand (`gh workflow run ci`):
+never on pushes or PRs, since local gates decide merges, and a red daily run is `main` red.
+Swarm Core is a private
 repository, so the job points its URL at a read-only token before cargo runs:
 
 ```sh
@@ -165,8 +166,10 @@ git config --global url."https://x-access-token:${SWARM_CORE_TOKEN}@github.com/m
 With `net.git-fetch-with-cli`, cargo's fetch goes through that rewrite. **The token** is a
 fine-grained personal access token whose resource owner is `mornycorp`, with **Contents: read**
 on `mornycorp/swarm-core` only (the organization may have to approve it), stored as the repo's
-`SWARM_CORE_TOKEN` Actions secret (Settings › Secrets and variables › Actions), or once as an
-organization secret for every swarm in `mornycorp`. Until it is there, every run fails to fetch Swarm Core.
+`SWARM_CORE_TOKEN` Actions secret: `mornycorp` keeps it once, as an organization secret visible
+to its private repositories (`gh secret set SWARM_CORE_TOKEN --org mornycorp --visibility
+private`), so a new swarm needs nothing more. A repository secret of the same name overrides it.
+Until it is there, every run fails to fetch Swarm Core.
 
 ## 8. Each machine, then the first agents
 
