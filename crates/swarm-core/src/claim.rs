@@ -193,6 +193,57 @@ pub fn latest_claim(notes: &[Value]) -> Option<ClaimNote> {
         .max_by(|a, b| a.at.cmp(&b.at))
 }
 
+/// Every claim comment among an issue's comments, oldest first.
+pub fn all_claims(notes: &[Value]) -> Vec<ClaimNote> {
+    let mut claims: Vec<ClaimNote> = notes
+        .iter()
+        .filter_map(|n| {
+            let (name, mr) = parse_claim_note(n.get("body")?.as_str()?)?;
+            Some(ClaimNote { name, mr, at: n.get("created_at").and_then(Value::as_str).unwrap_or_default().to_owned() })
+        })
+        .collect();
+    // ISO 8601 times in one zone sort as text.
+    claims.sort_by(|a, b| a.at.cmp(&b.at));
+    claims
+}
+
+/// The agent a release comment (`released: <name>, <why>`, [`release_comment`]) names.
+pub fn parse_release_note(body: &str) -> Option<String> {
+    let rest = body.trim().strip_prefix("released:")?;
+    let name = rest.split(|c: char| c.is_whitespace() || c == ',').find(|w| !w.is_empty())?;
+    Some(name.to_owned())
+}
+
+/// The claim comments still standing at `now`: made within [`LIVE_SECS`], and not followed by its
+/// agent's release comment, nor by a `release` or `stop` of the issue in its agent's tracking.
+/// Oldest first: the first is the claim that holds the issue when claims raced (mornycorp/swarm-core#7).
+pub fn active_claims(notes: &[Value], tracked: &[Tracked], issue: u64, now: i64) -> Vec<ClaimNote> {
+    let releases: Vec<(String, String)> = notes
+        .iter()
+        .filter_map(|n| Some((parse_release_note(n.get("body")?.as_str()?)?, n.get("created_at").and_then(Value::as_str).unwrap_or_default().to_owned())))
+        .collect();
+    all_claims(notes)
+        .into_iter()
+        .filter(|c| parse_time(&c.at).is_some_and(|at| now.saturating_sub(at) <= LIVE_SECS))
+        .filter(|c| !releases.iter().any(|(name, at)| name == &c.name && at > &c.at))
+        .filter(|c| !released_since(tracked, issue, c))
+        .collect()
+}
+
+/// Whether claim `c`'s agent logged its own `release` or `stop` of `issue` after the comment.
+fn released_since(tracked: &[Tracked], issue: u64, c: &ClaimNote) -> bool {
+    let at = parse_time(&c.at).unwrap_or(i64::MAX);
+    tracked.iter().any(|e| {
+        e.issue == Some(issue) && e.name.as_deref() == Some(c.name.as_str()) && e.t >= at && (e.event == "release" || e.event == "stop") && e.of.is_none()
+    })
+}
+
+/// The claim that came first, when it isn't `me`'s: the race `me` lost. `active` is
+/// [`active_claims`]' answer, mine among it.
+pub fn first_claim<'a>(active: &'a [ClaimNote], me: &str) -> Option<&'a ClaimNote> {
+    active.first().filter(|c| c.name != me)
+}
+
 /// The newest comment among an issue's comments that isn't a claim, as its first line (at most
 /// 200 characters): what a hold says about itself.
 pub fn latest_remark(notes: &[Value]) -> Option<String> {
@@ -270,6 +321,9 @@ pub struct LiveClaim {
     pub name: Option<String>,
     pub event: String,
     pub t: i64,
+    /// When its hold began: its newest `claim` event at or before the hold (a later `work` doesn't
+    /// move it). Of two live claims on one PR, the earlier holds it.
+    pub claimed_at: i64,
     /// The PR its claim named.
     pub mr: Option<u64>,
 }
@@ -300,7 +354,8 @@ pub fn live_claims(events: &[Tracked], issue: u64, now: i64) -> Vec<LiveClaim> {
             continue;
         }
         let mr = own.iter().take(last_hold + 1).rev().find_map(|e| e.mr);
-        live.push(LiveClaim { instance: inst.to_owned(), name: hold.name.clone(), event: hold.event.clone(), t: hold.t, mr });
+        let claimed_at = own.iter().take(last_hold + 1).rev().find(|e| e.event == "claim").map_or(hold.t, |e| e.t);
+        live.push(LiveClaim { instance: inst.to_owned(), name: hold.name.clone(), event: hold.event.clone(), t: hold.t, claimed_at, mr });
     }
     live
 }
@@ -325,6 +380,8 @@ pub struct Facts {
     pub labels: Vec<String>,
     pub mrs: Vec<Pr>,
     pub claim_note: Option<ClaimNote>,
+    /// Every claim comment still standing ([`active_claims`]), oldest first.
+    pub claims: Vec<ClaimNote>,
     pub tracked: Vec<Tracked>,
     /// The newest comment that isn't a claim: why an issue is held, when it is.
     pub remark: Option<String>,
@@ -341,11 +398,21 @@ pub enum Holder {
     Tracking(LiveClaim),
 }
 
-/// The open PRs of `facts` for `issue` that are mine: from my branch, or named by my own claim
-/// (in the tracking branch).
+/// The open PRs of `facts` for `issue` that are mine: named by my own claim (in the tracking
+/// branch, or my claim comment), or from my branch when no one else's claim names it. Every agent
+/// derives the same branch name for an issue, so the branch alone doesn't make a PR mine: that
+/// let a second claim adopt the first's PR (mornycorp/swarm-core#7).
 pub fn my_mrs(issue: u64, facts: &Facts, me: &Me, now: i64) -> BTreeSet<u64> {
-    let mut mine: BTreeSet<u64> = facts.mrs.iter().filter(|m| me.branch.as_deref() == Some(m.head_ref.as_str())).map(|m| m.number).collect();
-    mine.extend(live_claims(&facts.tracked, issue, now).into_iter().filter(|c| me.is(&c.instance, c.name.as_deref())).filter_map(|c| c.mr));
+    let live = live_claims(&facts.tracked, issue, now);
+    let theirs: BTreeSet<u64> = live
+        .iter()
+        .filter(|c| !me.is(&c.instance, c.name.as_deref()))
+        .filter_map(|c| c.mr)
+        .chain(facts.claims.iter().filter(|n| me.name.as_deref() != Some(n.name.as_str())).filter_map(|n| n.mr))
+        .collect();
+    let mut mine: BTreeSet<u64> =
+        facts.mrs.iter().filter(|m| me.branch.as_deref() == Some(m.head_ref.as_str()) && !theirs.contains(&m.number)).map(|m| m.number).collect();
+    mine.extend(live.into_iter().filter(|c| me.is(&c.instance, c.name.as_deref())).filter_map(|c| c.mr));
     if let Some(note) = &facts.claim_note
         && me.name.as_deref() == Some(note.name.as_str())
     {
@@ -373,12 +440,49 @@ pub fn holders(project: &Project, issue: u64, facts: &Facts, me: &Me, now: i64, 
             out.push(Holder::Pr(m.clone()));
         }
     }
-    for c in live_claims(&facts.tracked, issue, now) {
-        if !me.is(&c.instance, c.name.as_deref()) && !c.mr.is_some_and(|m| mine.contains(&m)) {
+    let live = live_claims(&facts.tracked, issue, now);
+    // My hold's start; another live claim on a PR we share holds it when it began first.
+    let my_start = live.iter().filter(|c| me.is(&c.instance, c.name.as_deref())).map(|c| (c.claimed_at, c.instance.clone())).min();
+    for c in live {
+        if me.is(&c.instance, c.name.as_deref()) {
+            continue;
+        }
+        let shared = c.mr.is_some_and(|m| mine.contains(&m));
+        let first = my_start.as_ref().is_none_or(|(t, inst)| (c.claimed_at, c.instance.as_str()) < (*t, inst.as_str()));
+        if !shared || first {
             out.push(Holder::Tracking(c));
         }
     }
     out
+}
+
+/// Who, other than `me`, holds `issue` so that `me` mustn't push its branch: another agent's live
+/// claim that began first ([`holders`]' tracking holders), or another agent's claim comment that
+/// stands before mine ([`first_claim`]). A label or another PR alone doesn't stop a push: they
+/// can be stale, or a sibling's. Each a line ([`describe`]).
+pub fn push_holders(project: &Project, issue: u64, facts: &Facts, me: &Me, now: i64) -> Vec<String> {
+    let mut out: Vec<String> = holders(project, issue, facts, me, now, false)
+        .into_iter()
+        .filter(|h| matches!(h, Holder::Tracking(_)))
+        .map(|h| describe(project.labels.in_progress, &h, now))
+        .collect();
+    if let Some(name) = me.name.as_deref()
+        && let Some(first) = first_claim(&facts.claims, name)
+        && facts.claims.iter().any(|c| c.name == name)
+    {
+        out.push(format!("{} claimed it first ({}), by its comment on the issue", first.name, first.at));
+    }
+    out
+}
+
+/// [`push_holders`] for the issue of `branch` (`<n>-<slug>`), read now; `agent` is the instance
+/// pushing. Empty for a branch that names no issue.
+pub fn held_against(project: &Project, root: &Path, branch: &str, agent: &str) -> Result<Vec<String>, String> {
+    let Some(issue) = issue_of_branch(branch) else { return Ok(Vec::new()) };
+    let (facts, _, _) = facts(project, root, issue)?;
+    let name = name_of(&facts.tracked, agent);
+    let me = Me { instance: Some(agent.to_owned()), name, branch: Some(branch.to_owned()) };
+    Ok(push_holders(project, issue, &facts, &me, now()))
 }
 
 /// One line saying who holds the issue, and where; `label` is the claim label.
@@ -546,7 +650,8 @@ fn facts(project: &Project, root: &Path, issue: u64) -> Result<(Facts, String, S
     let notes = github::comments(project, issue)?;
     let tracked = parse_tracking(&tracking_files(project, root)?);
     let mrs = prs_for(project, issue)?;
-    let facts = Facts { labels, mrs, claim_note: latest_claim(&notes), tracked, remark: latest_remark(&notes), description: text("body") };
+    let claims = active_claims(&notes, &tracked, issue, now());
+    let facts = Facts { labels, mrs, claim_note: latest_claim(&notes), claims, tracked, remark: latest_remark(&notes), description: text("body") };
     Ok((facts, text("title"), text("state")))
 }
 
@@ -957,8 +1062,59 @@ impl Claiming<'_> {
     }
 
     /// The race: another agent's PR for the issue opened before mine wins (AGENTS.md §4 step 3).
-    /// When mine lost, it is closed, the release is logged, and the claim fails.
+    /// When mine lost, it is closed, the release is logged, and the claim fails. Then
+    /// [`Claiming::comment_race`].
     fn race(&self) -> Result<(), String> {
+        self.pr_race()?;
+        self.comment_race()
+    }
+
+    /// Two claims that made one PR (the same branch name: the second adopted the first's) race by
+    /// their claim comments, which GitHub orders: the first standing one holds the issue. Each
+    /// claim looks after posting its own, so whichever comes second sees the first and releases
+    /// (mornycorp/swarm-core#7). `--force`, a takeover, skips it.
+    fn comment_race(&self) -> Result<(), String> {
+        let (project, issue) = (self.ctx.project, self.issue);
+        if self.o.force {
+            return Ok(());
+        }
+        let read = github::comments(project, issue).and_then(|notes| Ok((notes, parse_tracking(&tracking_files(project, self.root)?))));
+        let (notes, tracked) = match read {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("warning: claim: couldn't check the claim comments for a race ({e}); `cargo xtask claim --check` does it later");
+                return Ok(());
+            }
+        };
+        let active = active_claims(&notes, &tracked, issue, now());
+        let Some(first) = first_claim(&active, &self.name) else { return Ok(()) };
+        Err(self.lose_to(first))
+    }
+
+    /// Release a claim that lost to `first`'s earlier one: its own PR closed (not one it shares
+    /// with `first`), the label left to `first`, the release logged and commented.
+    fn lose_to(&self, first: &ClaimNote) -> String {
+        let (project, issue) = (self.ctx.project, self.issue);
+        let why = format!("lost the claim race to {} (claimed first, {})", first.name, first.at);
+        let shared = self.mr.as_ref().is_some_and(|m| first.mr == Some(m.number));
+        if let Some(m) = self.mr.as_ref().filter(|_| !shared)
+            && let Err(e) = close_pr(project, m.number)
+        {
+            eprintln!("warning: claim: closing #{}: {e}", m.number);
+        }
+        let issue_s = issue.to_string();
+        if let Err(e) = event::run(project, self.root, &["release", "--agent", &self.agent, "--issue", &issue_s, "--reason", "duplicate", "--note", &why]) {
+            eprintln!("warning: claim: logging the release: {e}");
+        }
+        if let Err(e) = post_note(project, issue, &release_comment(&self.name, &why)) {
+            eprintln!("warning: claim: the release comment: {e}");
+        }
+        let kept = if shared { format!(" (its PR #{} and branch are {}'s: leave them)", self.mr_iid().unwrap_or_default(), first.name) } else { String::new() };
+        format!("claim: {why}; released #{issue}{kept}; pick another issue")
+    }
+
+    /// An older open PR for the issue than mine won the race: mine is closed and released.
+    fn pr_race(&self) -> Result<(), String> {
         let Some(mine) = &self.mr else { return Ok(()) };
         let project = self.ctx.project;
         let others: Vec<Pr> = match prs_for(project, self.issue) {
@@ -1237,6 +1393,7 @@ mod tests {
             labels: vec![LABEL.into(), "area::replay".into()],
             mrs: vec![mr(246, "253-d3d12-replay-foundations", "R10a: D3D12 replay foundations (#253)", "Closes #253")],
             claim_note: Some(ClaimNote { name: "claude-mac".into(), mr: Some(246), at: "2026-10-18T06:50:02Z".into() }),
+            claims: vec![],
             tracked: parse_tracking(&r10a_tracking()),
             remark: None,
             description: String::new(),
@@ -1753,5 +1910,128 @@ mod tests {
         let comment = release_comment("ivy", &why);
         assert!(comment.starts_with("released: ivy, the full gate"), "{comment}");
         assert_eq!(parse_claim_note(&comment), None, "a release is no claim");
+    }
+
+    // ---- mornycorp/swarm-core#7: claims that raced onto one branch and PR. ----
+
+    /// An agent's tracking file: its session, then `(event, mr, time)` on `issue`.
+    fn agent(instance: &str, name: &str, issue: u64, events: &[(&str, Option<u64>, &str)]) -> (String, String) {
+        let mut lines = vec![format!(r#"{{"event":"session.start","name":"{name}","role":"worker","t":"2026-10-31T10:00:00Z"}}"#)];
+        for (event, mr, at) in events {
+            let mr = mr.map(|m| format!(r#","mr":{m}"#)).unwrap_or_default();
+            lines.push(format!(r#"{{"event":"{event}","issue":{issue}{mr},"t":"{at}"}}"#));
+        }
+        (instance.to_owned(), lines.join("\n"))
+    }
+
+    fn note(body: &str, at: &str) -> Value {
+        json!({ "body": body, "created_at": at })
+    }
+
+    fn me(instance: &str, name: &str, branch: &str) -> Me {
+        Me { instance: Some(instance.into()), name: Some(name.into()), branch: Some(branch.into()) }
+    }
+
+    /// mc-engine#18: cedar claimed (PR #38, branch `18-env`); birch claimed 90 s later, derived
+    /// the same branch, and adopted cedar's PR as its own.
+    #[test]
+    fn a_later_claim_doesn_t_adopt_another_agent_s_pr_from_the_same_branch() {
+        let notes = [note("claimed: cedar, PR #38", "2026-10-31T12:25:50Z")];
+        let tracked =
+            parse_tracking(&[agent("mac-cedar", "cedar", 18, &[("claim", Some(38), "2026-10-31T12:25:49Z"), ("work", None, "2026-10-31T12:25:50Z")])]);
+        let now = t("2026-10-31T12:27:20Z");
+        let facts = Facts {
+            labels: vec![LABEL.into()],
+            mrs: vec![mr(38, "18-env", "Environment (#18)", "Closes #18")],
+            claim_note: latest_claim(&notes),
+            claims: active_claims(&notes, &tracked, 18, now),
+            tracked,
+            ..Facts::default()
+        };
+        let birch = me("mac-birch", "birch", "18-env");
+        assert!(my_mrs(18, &facts, &birch, now).is_empty(), "the branch's PR is cedar's: its claim names it");
+        let held = holders(&P, 18, &facts, &birch, now, true);
+        assert_eq!(held.len(), 3, "the label, the PR and cedar's claim: {held:?}");
+        // cedar, resuming, is held by nobody.
+        assert!(holders(&P, 18, &facts, &me("mac-cedar", "cedar", "18-env"), now, true).is_empty());
+    }
+
+    /// mc-engine#61: three claims 2 s apart, each on PR #62 before the others' events landed.
+    fn three_way() -> (Facts, i64) {
+        let notes = [
+            note("claimed: cedar, PR #62", "2026-10-31T12:57:47Z"),
+            note("claimed: alder, PR #62", "2026-10-31T12:57:49Z"),
+            note("claimed: birch, PR #62", "2026-10-31T12:57:51Z"),
+        ];
+        let tracked = parse_tracking(&[
+            agent("mac-cedar", "cedar", 61, &[("claim", Some(62), "2026-10-31T12:57:48Z"), ("work", None, "2026-10-31T13:10:00Z")]),
+            agent("mac-alder", "alder", 61, &[("claim", Some(62), "2026-10-31T12:57:50Z"), ("work", None, "2026-10-31T12:57:51Z")]),
+            agent("mac-birch", "birch", 61, &[("claim", Some(62), "2026-10-31T12:57:52Z")]),
+        ]);
+        let now = t("2026-10-31T13:15:00Z");
+        let facts = Facts {
+            labels: vec![LABEL.into()],
+            mrs: vec![mr(62, "61-claim-race", "Claim race (#61)", "Closes #61")],
+            claim_note: latest_claim(&notes),
+            claims: active_claims(&notes, &tracked, 61, now),
+            tracked,
+            ..Facts::default()
+        };
+        (facts, now)
+    }
+
+    #[test]
+    fn of_claims_on_one_pr_the_first_holds_it_whatever_work_came_after() {
+        let (facts, now) = three_way();
+        let cedar = me("mac-cedar", "cedar", "61-claim-race");
+        assert!(holders(&P, 61, &facts, &cedar, now, false).is_empty(), "cedar's later `work` doesn't make it later");
+        assert!(push_holders(&P, 61, &facts, &cedar, now).is_empty());
+        for (instance, name) in [("mac-alder", "alder"), ("mac-birch", "birch")] {
+            let later = me(instance, name, "61-claim-race");
+            let held = holders(&P, 61, &facts, &later, now, false);
+            assert!(held.iter().any(|h| matches!(h, Holder::Tracking(c) if c.name.as_deref() == Some("cedar"))), "{name}: {held:?}");
+            let refused = push_holders(&P, 61, &facts, &later, now);
+            assert!(refused.iter().any(|r| r.contains("cedar")), "{name}'s ready is refused: {refused:?}");
+        }
+        let live = live_claims(&facts.tracked, 61, now);
+        let cedar_claim = live.iter().find(|c| c.instance == "mac-cedar").unwrap();
+        assert_eq!((cedar_claim.claimed_at, cedar_claim.t), (t("2026-10-31T12:57:48Z"), t("2026-10-31T13:10:00Z")));
+    }
+
+    #[test]
+    fn the_first_standing_claim_comment_wins_the_race() {
+        let (facts, _) = three_way();
+        assert_eq!(first_claim(&facts.claims, "cedar"), None);
+        assert_eq!(first_claim(&facts.claims, "alder").map(|c| c.name.as_str()), Some("cedar"));
+        assert_eq!(first_claim(&facts.claims, "birch").map(|c| c.name.as_str()), Some("cedar"));
+
+        // cedar released (a comment), then alder's claim is the first standing one.
+        let notes = [
+            note("claimed: cedar, PR #62", "2026-10-31T12:57:47Z"),
+            note("claimed: alder, PR #62", "2026-10-31T12:57:49Z"),
+            note("released: cedar, lost the claim race", "2026-10-31T12:58:30Z"),
+        ];
+        let now = t("2026-10-31T13:00:00Z");
+        let active = active_claims(&notes, &[], 61, now);
+        assert_eq!(first_claim(&active, "alder"), None);
+        // A release logged only on the tracking branch counts too.
+        let tracked =
+            parse_tracking(&[agent("mac-alder", "alder", 61, &[("claim", Some(62), "2026-10-31T12:57:50Z"), ("release", None, "2026-10-31T12:59:00Z")])]);
+        let active = active_claims(&notes, &tracked, 61, now);
+        assert!(active.is_empty(), "{active:?}");
+        // A claim comment older than a live claim's life no longer stands.
+        let stale = [note("claimed: cedar, PR #62", "2026-10-29T12:00:00Z"), note("claimed: alder, PR #62", "2026-10-31T12:57:49Z")];
+        assert_eq!(first_claim(&active_claims(&stale, &[], 61, now), "alder"), None);
+    }
+
+    #[test]
+    fn release_comments_name_their_agent() {
+        assert_eq!(parse_release_note(&release_comment("cedar", "lost the claim race to alder")), Some("cedar".into()));
+        assert_eq!(parse_release_note("released: alder — cedar claimed #5 first"), Some("alder".into()));
+        assert_eq!(parse_release_note("claimed: alder, PR #26"), None);
+        assert_eq!(parse_release_note("released:"), None);
+        let claims =
+            all_claims(&[note("claimed: b, PR #2", "2026-10-31T12:00:02Z"), note("hello", "2026-10-31T12:00:00Z"), note("claimed: a", "2026-10-31T12:00:01Z")]);
+        assert_eq!(claims.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
     }
 }

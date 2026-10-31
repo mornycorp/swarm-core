@@ -104,6 +104,25 @@ fn checked(pr: &Value, branch: &str) -> Result<String, String> {
     Ok(head.to_owned())
 }
 
+/// Refuse to push `branch` when another agent holds its issue: a second claim on one branch once
+/// force-pushed its work over the first's (mornycorp/swarm-core#7). GitHub or the tracking branch
+/// unreadable: a warning, and the push goes ahead.
+fn not_held(project: &Project, root: &Path, branch: &str, agent: &str) -> Result<(), String> {
+    match crate::claim::held_against(project, root, branch, agent) {
+        Ok(held) if held.is_empty() => Ok(()),
+        Ok(held) => {
+            let list: String = held.iter().map(|h| format!("\n  - {h}")).collect();
+            Err(format!(
+                "ready: another agent holds the issue of `{branch}`:{list}\nThe earlier claim keeps it (AGENTS.md §4): release yours (`cargo xtask event release --issue <n> --reason duplicate`), or agree a takeover on the issue."
+            ))
+        }
+        Err(e) => {
+            eprintln!("warning: ready: couldn't check who holds the issue of `{branch}` ({e}); going ahead");
+            Ok(())
+        }
+    }
+}
+
 /// Refuse PR `mr` when the branch checked out in `dir` holds no work against `base`.
 fn has_work(dir: &Path, base: &str, mr: u64) -> Result<(), String> {
     match crate::empty::why(dir, base, "HEAD")? {
@@ -150,6 +169,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     let mr = github::pr(project, o.mr)?;
     checked(&mr, &branch)?;
     clean(root)?;
+    not_held(project, root, &branch, &o.agent)?;
     let base = o.onto.clone().unwrap_or_else(|| format!("origin/{}", project.branches.main));
     has_work(root, &base, o.mr)?;
     if o.dry_run {
