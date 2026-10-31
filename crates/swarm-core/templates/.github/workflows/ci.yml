@@ -1,16 +1,15 @@
 # A starting point from swarm-core's templates (`cargo xtask swarm-core init`): this repo's own
 # now. docs/swarm.md › What CI runs says what it keeps to.
 #
-# The gate's steps are the repo's own `cargo xtask ci`. Draft PRs get no run (workers gate
-# locally); marking one ready (`cargo xtask ready`) starts it. A new run of a ref cancels the
-# one still going, so a docs-only merge ([skip ci]) doesn't restart the wait for the code before it.
+# The gate's steps are the repo's own `cargo xtask ci`. It runs once a day on `main` (owner,
+# 2026-10-31), and by hand (`gh workflow run ci`); never on pushes or PRs: workers gate locally
+# and the coordinator merges on its local gate. A new run of a ref cancels the one still going.
 name: ci
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    # 03:17 UTC daily, off the hour (GitHub delays runs at :00).
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +18,6 @@ concurrency:
 
 jobs:
   ci:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -27,7 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Swarm Core is a private git dependency: fetch it with a read-only token (a fine-grained
-      # token with Contents: read on mornycorp/swarm-core, stored as the SWARM_CORE_TOKEN secret).
+      # token with Contents: read on mornycorp/swarm-core: the organization's SWARM_CORE_TOKEN
+      # secret, visible to its private repositories).
       - name: Swarm Core's token
         run: git config --global url."https://x-access-token:${{ secrets.SWARM_CORE_TOKEN }}@github.com/mornycorp/swarm-core".insteadOf "https://github.com/mornycorp/swarm-core"
       - uses: dtolnay/rust-toolchain@stable
