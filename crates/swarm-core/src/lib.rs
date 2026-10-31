@@ -158,6 +158,14 @@ pub trait Hooks {
     fn layers(&self) -> Option<layers::Table> {
         None
     }
+
+    /// The library packages allowed `unsafe`, each with why (a GPU or OS binding that can't be
+    /// written without it): `cargo xtask layers` holds their roots to `#![deny(unsafe_op_in_unsafe_fn)]`
+    /// and `#![warn(clippy::undocumented_unsafe_blocks)]` in place of `#![forbid(unsafe_code)]`
+    /// ([`layers::Unsafe`]). The default: none, so every library root forbids `unsafe`.
+    fn unsafe_crates(&self) -> &'static [layers::Unsafe] {
+        &[]
+    }
 }
 
 /// Every default of [`Hooks`], for the tests.
