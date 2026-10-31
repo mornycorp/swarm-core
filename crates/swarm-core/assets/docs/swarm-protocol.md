@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-31 · **Change:** minor (the review's checklist: spec requirements with no work under a gap marked done) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-31 · **Change:** minor (claims on one branch: the first holds it; ready refuses another's) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -193,6 +193,16 @@ request. Always pass `--repo {{github.repo}}` to gh.
        hold every line back until the claim ends.
    - Never claim from a listing you made earlier: four claims raced on 2026-10-18. If two still race, the earlier PR keeps it: the command checks again once its
      PR exists, and closes its own if it lost.
+   - **Two claims on one branch** (every agent derives the same `<n>-<slug>`): a PR from that
+     branch is yours only when no other agent's live claim or standing claim comment names it,
+     so a later claim is refused rather than adopting the first's PR. When two claims land
+     seconds apart, both on one PR, the first standing `claimed:` comment (GitHub orders them)
+     holds the issue. The later claim releases once its own comment is posted: it logs
+     `release --reason duplicate` and comments `released: <name>, …`. It leaves the shared PR,
+     branch and label to the first, and doesn't switch its worktree. `ready` refuses to push a
+     branch whose issue another agent holds by an earlier live claim or claim comment
+     (mornycorp/swarm-core#7: three times in one swarm a second claim adopted the first's PR,
+     and once its `ready` force-pushed over it).
    - By hand only when the command can't run (no gh): check the label and the open PRs for the
      issue (`gh pr list --repo {{github.repo}} --search "<n> in:title,body"`), push a first commit
      on the branch, `gh pr create --repo {{github.repo}} --draft --title "<summary> (#<n>)"
@@ -1014,6 +1024,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Claims on one branch: a PR there is yours only when no other claim names it; the first standing claim comment holds the issue; `ready` refuses another agent's (mornycorp/swarm-core#7) |
 | 2026-10-31 | minor | The architecture review's checklist: spec requirements with no work under a gap marked done (lessons.md §6) |
 | 2026-10-30 | minor | The architecture review's checklist: a front end building logic the core owns (lessons.md §5) |
 | 2026-10-30 | minor | `capacity`: no build runs while no `rustc` or `cargo-nextest` does; `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` set a machine's own costs; macOS free memory counts purgeable pages |
