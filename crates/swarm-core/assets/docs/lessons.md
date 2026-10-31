@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # Lessons for a new swarm
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (a front end building the core's logic) · **Target:** M1
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (requirements in a spec's tables that never became work) · **Target:** M1
 
 The early design mistakes the first two swarms made: how each was found, what it cost, and the
 guardrail now in place (a rule, a check, or an item on the architecture review's checklist). It
@@ -111,6 +111,27 @@ known traps: a trap a review finds that isn't listed here is added, with the iss
   - **Rule:** a front end that needs an answer the engine doesn't give asks for the command
     (an issue, or the algorithm in the core first), rather than computing it.
 
+## 6. Requirements in a spec's tables that never became work
+
+- **The mistake:** a swarm built its gap list from the spec's sections, one gap a section, and
+  marked each done when the issues filed under it merged. The issues were written from the
+  section's headline features, so requirements stated only as a row of a table or a bullet in
+  another section (what the host supplies, an optional rendering rule, a flag on a data type, a
+  side effect of a mouse action) never got an issue. Their gaps read "done" while about ten such
+  requirements had no code: a host hook with its trait already in the core but never wired, a
+  track kind that drew nothing, a scale's flag computed but never drawn, a click that didn't
+  select first.
+- **How it was found:** the architecture review at a stage gate (2026-10-31), reading the spec
+  section by section, line by line, against the code, rather than against the gap list.
+- **What it cost:** found before the release candidate: about 20 agent-hours of small features,
+  filed as one issue each; later, each would have surfaced as a host's bug report against a
+  feature the progress docs called done.
+- **The guardrail:**
+  - **Review:** a new item on the architecture review's checklist: a requirement in the spec
+    (any table row or bullet) with no code and no open issue, under a gap marked done.
+  - **Rule:** a gap is marked done only when each requirement line of its spec sections cites
+    the issue or the code that meets it, or an owner's decision to drop it.
+
 ## Adding a lesson
 
 A lesson is an early design or process mistake that cost a swarm real time, with its guardrail in
@@ -126,6 +147,7 @@ there, then bump.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Lesson 6: requirements in a spec's tables that never became work, and its checklist item |
 | 2026-10-30 | minor | Lesson 5: a front end building the core's logic (layout, hit-testing, interaction state), and its checklist item |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): pull requests, `gh`, PRs as `#n` |
