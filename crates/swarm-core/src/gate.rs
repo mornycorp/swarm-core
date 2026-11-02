@@ -336,6 +336,19 @@ pub fn ci_summary(log: &str) -> Option<&str> {
     log.rfind("CI summary").and_then(|at| log.get(at..))
 }
 
+/// The longest step name [`failed_step`] reads.
+const MAX_STEP: usize = 32;
+
+/// The `ci` step a log failed at: its last `CI summary`'s first `FAIL  <step>: …` (the `ci`
+/// contract), a name of letters, digits, `-`, `_` and `.`, at most 32 long, so it fits a note's
+/// `step=<step>`. None for a log with no summary or no failed step, or a name that isn't one.
+pub fn failed_step(log: &str) -> Option<&str> {
+    let failed = ci_summary(log)?.lines().find_map(|l| l.trim_start().strip_prefix("FAIL "))?;
+    let step = failed.split(':').next()?.trim();
+    let name = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    (!step.is_empty() && step.len() <= MAX_STEP && step.chars().all(name)).then_some(step)
+}
+
 /// A rerun's evidence from its `.rc` line: the gate it verified, the tests that failed there and
 /// passed alone, and that gate's summary (`original`, its log); `None` for a gate that isn't a
 /// rerun.
@@ -1256,6 +1269,20 @@ mod tests {
         let log = "Compiling a\nerror[E0308]: mismatched\nmore\n        FAIL [   1.0s] (1/2) a::b c\nCI summary:\n  ok    fmt\n  FAIL  test: x\n  skip  layers";
         assert_eq!(summary(log), "  error[E0308]: mismatched\n  failed test: a::b c\n  CI summary:\n    ok    fmt\n    FAIL  test: x\n    skip  layers\n");
         assert_eq!(summary("a\nb\nc\nd"), "  b\n  c\n  d\n", "no CI summary: the tail");
+    }
+
+    /// The step a log failed at is its last `CI summary`'s first failed one, a name fit for a
+    /// note's `step=`; none without a summary, a failure, or a name that is one.
+    #[test]
+    fn the_failed_step_is_read_from_the_last_ci_summary() {
+        let summary = "CI summary:\n  ok    fmt\n  FAIL  clippy: cargo clippy failed\n  skip  test\n";
+        assert_eq!(failed_step(summary), Some("clippy"));
+        assert_eq!(failed_step(&format!("{summary}\nCI summary:\n  ok    fmt\n  FAIL  golden-1.x: cargo test\n")), Some("golden-1.x"), "the last summary's");
+        assert_eq!(failed_step("CI summary: all 3 steps passed (fmt, clippy, test) in 2 min\n"), None);
+        assert_eq!(failed_step("  FAIL  test: no summary before it\n"), None);
+        for odd in ["two words", "semi;colon", "cause=test", "", &"x".repeat(33)] {
+            assert_eq!(failed_step(&format!("CI summary:\n  FAIL  {odd}: x\n")), None, "{odd:?}");
+        }
     }
 
     /// The full gate reads a run from its records: a pass; tests that failed under load, named,

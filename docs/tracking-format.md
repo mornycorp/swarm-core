@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (names no consumer; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-02 · **Change:** minor (a failed `ready`'s cause and step; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -151,8 +151,11 @@ gate analytics can read them:
   steps they skipped) is a gate of its own, `<sub>-rerun`, its start note `rerun of <sub>: …`.
 - **A worker's own gate before it submits** is not one of these: `cargo xtask ready` runs it
   inside a sub named `ready` (`sub.start --sub ready-<short head> --name ready --note "ci
-  --changed before submitting"`, its `sub.stop` `rc=0` or `rc=1`), so a reader's gate counts
-  keep to the coordinator's gates.
+  --changed before submitting"`), so a reader's gate counts keep to the coordinator's gates. Its
+  `sub.stop` is `rc=0`, or a failure's `rc=<n>; cause=<cause>; step=<step>`: the exit code, the
+  cause as above and the `ci` step it failed at (the `CI summary`'s first `FAIL`), each left out
+  when unknown (`rc=1` alone when `ci` couldn't run). An older writer's failure is `rc=1` alone:
+  its cause unknown.
 
 ```json
 {"event":"sub.start","name":"gate","note":"local gate: #154 (#141); capacity=1 free=9.8","sub":"gate-mr154","t":"2026-10-20T10:44:29Z"}
@@ -215,6 +218,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | A failed `ready` check's `sub.stop` adds `cause=` and `step=` (the failing `ci` step), as a gate's adds its cause; no format change |
 | 2026-10-30 | minor | Names no consumer: the reader's own details (its commands, panes and measurements) and its issue numbers dropped, the contract kept; no format change |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): an event's `mr` holds the PR's number; no format change |
 | 2026-10-30 | minor | swarm-foundation renamed swarm-core (its crate, command and issues); no format change |
