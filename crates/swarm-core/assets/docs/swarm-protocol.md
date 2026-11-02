@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-31 · **Change:** minor (GitHub CI once a day on `main`) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-02 · **Change:** minor (a failed `ready` check says why) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -223,8 +223,10 @@ request. Always pass `--repo {{github.repo}}` to gh.
    push on a conflict), pushes, marks the PR ready for review (which starts its checks:
    the workflows run on `ready_for_review`) and logs `submit`. Its gate:
    - **Its own sub-agent**: it logs each gate it runs as `ready-<the head's short
-     sha>` (`sub.start --name ready`, then `sub.stop` with `rc=0` or `rc=1`), apart from the
-     coordinator's `gate-*` gates. Its output goes to the terminal and, with its `.rc` record and
+     sha>` (`sub.start --name ready`, then `sub.stop` with `rc=0`, or a failure's
+     `rc=<n>; cause=<cause>; step=<step>`: the exit code, the cause read from the log as the gate
+     reads its own, and the `ci` step it failed at, each left out when unknown, such as
+     `rc=101; cause=build; step=clippy`), apart from the coordinator's `gate-*` gates. Its output goes to the terminal and, with its `.rc` record and
      nextest's junit file, to `<target>/gate-logs/ready-<sha>.log`, `.rc` and `.junit.xml`, as
      the coordinator's gate keeps them (sc#14).
    - **A test that failed under load** (sc#14): when the only failure is the test step's and it
@@ -1023,6 +1025,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | A failed `ready` check's `sub.stop` says why, as the gate's does: `rc=<n>; cause=<cause>; step=<the failing ci step>` (was `rc=1`) |
 | 2026-10-31 | minor | GitHub CI runs once a day on `main`, not on pushes or PRs (owner, 2026-10-31): the coordinator checks the latest daily run each batch, and a red one is `main` red |
 | 2026-10-31 | minor | No refactoring pass at the end of a worker's task, and no **Refactoring** line for the coordinator to check (owner, 2026-10-31); the `refactoring` skill is dropped too, `complexity-analyzer` kept |
 | 2026-10-31 | minor | Claims on one branch: a PR there is yours only when no other claim names it; the first standing claim comment holds the issue; `ready` refuses another agent's (mornycorp/swarm-core#7) |

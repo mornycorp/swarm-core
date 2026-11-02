@@ -1,6 +1,7 @@
 //! `ready`'s own gate: the consumer's `ci --changed --base <base>` on the
 //! rebased tree, logged as the worker's sub-agent `ready-<head>` (`sub.start --name ready`, then
-//! `sub.stop` with `rc=0` or `rc=1`), apart from the coordinator's `gate-*` gates. Its output goes
+//! `sub.stop`: `rc=0`, or a failure's `rc=<n>; cause=<cause>; step=<step>`, `stop_note`), apart
+//! from the coordinator's `gate-*` gates. Its output goes
 //! to the terminal as it prints and to `<target>/gate-logs/ready-<head>.log`, with its `.rc` record
 //! and nextest's junit file (`.junit.xml`) beside it, as `gate` keeps them
 //! (mornycorp/swarm-core#14).
@@ -23,7 +24,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::gate::rerun::{self, Rerun};
-use crate::gate::{self, Kind};
+use crate::gate::{self, Cause, Kind};
 use crate::{Hooks, Project};
 
 /// The sub `ready`'s gate is logged as: `ready-<the gated commit, short>`.
@@ -73,11 +74,14 @@ impl Reran {
     }
 }
 
-/// One run of `ci`: its exit code (the rerun's, from its record), its `.rc` line and its log.
+/// One run of `ci`: its exit code (the rerun's, from its record), its `.rc` line and its log, and
+/// a failure's cause ([`gate::classify`]) and the `ci` step it failed at ([`gate::failed_step`]).
 struct Ran {
     rc: i32,
     line: String,
     log: String,
+    cause: Option<Cause>,
+    step: Option<String>,
 }
 
 impl OwnGate<'_> {
@@ -130,11 +134,12 @@ impl OwnGate<'_> {
             eprintln!("warning: ready: the test times: {e}");
         }
         let text = std::fs::read_to_string(&log).unwrap_or_default();
-        let (rc, _, line) = gate::run_outcome(self.hooks, rerun, rc, &text, started.elapsed().as_secs(), (&kind_field(), head));
+        let (rc, cause, line) = gate::run_outcome(self.hooks, rerun, rc, &text, started.elapsed().as_secs(), (&kind_field(), head));
         if let Err(e) = std::fs::write(&record, &line) {
             eprintln!("warning: ready: {}: {e}", record.display());
         }
-        Ok(Ran { rc, line, log: text })
+        let step = if rc == 0 { None } else { gate::failed_step(&text).map(str::to_owned) };
+        Ok(Ran { rc, line, log: text, cause, step })
     }
 }
 
@@ -151,14 +156,31 @@ fn rerun_plan(enabled: bool, golden: &str, sub: &str, first: &Ran, head: &str, p
 /// Run `gate` as the worker's own sub-agent `sub`: `sub.start --name ready`
 /// with `note` before it and `sub.stop` with its exit after, in `agent`'s file, so the Merge Train
 /// sees the ticket's own gate (stage 4). Named apart from `gate`, which the Gates tab counts as the
-/// coordinator's and whose failures naming a PR are send-backs. Its result is the gate's: logging
-/// never fails it.
+/// coordinator's and whose failures naming a PR are send-backs. Its stop says why it failed
+/// ([`stop_note`]). Its result is the gate's: logging never fails it.
 fn as_sub(agent: &str, sub: &str, note: &str, log: &mut dyn FnMut(&[&str]), gate: &mut dyn FnMut() -> Result<Ran, String>) -> Result<Ran, String> {
     log(&["sub.start", "--agent", agent, "--sub", sub, "--name", "ready", "--note", note]);
     let ran = gate();
-    let passed = matches!(&ran, Ok(r) if r.rc == 0);
-    log(&["sub.stop", "--agent", agent, "--sub", sub, "--note", if passed { "rc=0" } else { "rc=1" }]);
+    log(&["sub.stop", "--agent", agent, "--sub", sub, "--note", &stop_note(&ran)]);
     ran
+}
+
+/// `ready`'s `sub.stop` note, in the gate's note grammar (`key=value` fields split at `;`): `rc=0`
+/// for a pass; a failure's exit code, then its cause and the `ci` step it failed at, each when
+/// known: `rc=<n>; cause=<cause>; step=<step>` (`rc=100; cause=test; step=test`,
+/// `rc=101; cause=build; step=clippy`). One whose `ci` couldn't run at all is `rc=1`, as before.
+fn stop_note(ran: &Result<Ran, String>) -> String {
+    let Ok(ran) = ran else { return "rc=1".to_owned() };
+    let mut note = format!("rc={}", ran.rc);
+    if ran.rc != 0 {
+        if let Some(cause) = ran.cause {
+            note.push_str(&format!("; cause={}", cause.name()));
+        }
+        if let Some(step) = &ran.step {
+            note.push_str(&format!("; step={step}"));
+        }
+    }
+    note
 }
 
 /// How often [`run_logged`] copies the log to the terminal.
@@ -213,7 +235,8 @@ mod tests {
     /// The first gate's run as [`OwnGate::attempt`] records it.
     fn ran(rc: i32, log: &str) -> Ran {
         let cause = (rc != 0).then(|| gate::classify(log, None));
-        Ran { rc, line: gate::rc_line(rc, 900, cause, &kind_field(), HEAD), log: log.to_owned() }
+        let step = gate::failed_step(log).map(str::to_owned);
+        Ran { rc, line: gate::rc_line(rc, 900, cause, &kind_field(), HEAD), log: log.to_owned(), cause, step }
     }
 
     /// #14: a test-only failure is rerun with `ready`'s own scope: each failed test alone, the
@@ -279,16 +302,36 @@ mod tests {
     fn the_gate_is_logged_as_the_workers_own() {
         assert_eq!(sub_of("0c4dba23e5b8b70b"), "ready-0c4dba2");
         assert_eq!(sub_of("abc"), "ready-abc", "a short or odd head is kept whole");
-        for (rc, stop) in [(Ok(0), "rc=0"), (Ok(100), "rc=1"), (Err("ci: not found".to_owned()), "rc=1")] {
+        for (rc, stop) in [(Ok(0), "rc=0"), (Ok(100), "rc=100; cause=test; step=test"), (Err("ci: not found".to_owned()), "rc=1")] {
             let mut logged: Vec<Vec<String>> = Vec::new();
             let got = as_sub("a-1", "ready-0c4dba2", "why", &mut |args| logged.push(args.iter().map(|a| (*a).to_owned()).collect()), &mut || {
-                rc.clone().map(|rc| Ran { rc, line: String::new(), log: String::new() })
+                rc.clone().map(|rc| if rc == 0 { ran(0, "CI summary: all 1 steps passed (test) in 1 min\n") } else { ran(rc, &failed_log(&["p t"])) })
             });
             assert_eq!(got.map(|r| r.rc), rc);
             let start = ["sub.start", "--agent", "a-1", "--sub", "ready-0c4dba2", "--name", "ready", "--note", "why"];
             let stop = ["sub.stop", "--agent", "a-1", "--sub", "ready-0c4dba2", "--note", stop];
             assert_eq!(logged, [start.map(str::to_owned).to_vec(), stop.map(str::to_owned).to_vec()]);
         }
+    }
+
+    /// #77 (swarmception): a failed `ready` says why, as a failed gate does: its exit code, the
+    /// cause read from its log and the `ci` step it failed at; what it can't tell is left out.
+    #[test]
+    fn a_failure_s_stop_names_its_cause_and_step() {
+        let clippy = "=== ci: clippy ===\nerror: could not compile `xtask` due to 1 previous error\n\nCI summary:\n  ok    fmt\n  FAIL  clippy: cargo clippy failed\n  skip  test\n";
+        let fmt = "=== ci: fmt ===\nDiff in xtask/src/main.rs at line 3:\n\nCI summary:\n  FAIL  fmt: cargo fmt --check failed\n  skip  clippy\n";
+        for (ran, note) in [
+            (ran(100, &failed_log(&["p t"])), "rc=100; cause=test; step=test"),
+            (ran(101, clippy), "rc=101; cause=build; step=clippy"),
+            (ran(1, fmt), "rc=1; cause=other; step=fmt"),
+            (ran(-1, "killed before its summary"), "rc=-1; cause=other"),
+            (ran(0, "CI summary: all 3 steps passed (fmt, clippy, test) in 2 min\n"), "rc=0"),
+        ] {
+            assert_eq!(stop_note(&Ok(ran)), note);
+        }
+        assert_eq!(stop_note(&Err("ready: ci: not found".to_owned())), "rc=1", "ci never ran: no cause to name");
+        let unknown = Ran { rc: 3, line: String::new(), log: String::new(), cause: None, step: None };
+        assert_eq!(stop_note(&Ok(unknown)), "rc=3");
     }
 
     /// The child's whole output is in the log, stdout and stderr, and its exit code is returned.

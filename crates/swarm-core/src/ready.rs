@@ -21,7 +21,7 @@
 //!    gate runs through the rebased tree's own xtask, built into a target dir of its own (the
 //!    running one can't be replaced on Windows); otherwise through this one. The same choice is made again for
 //!    second gate (step 4). Each gate runs inside `sub.start --sub ready-<head> --name ready` and
-//!    its `sub.stop` (`rc=0` or `rc=1`), the worker's own gate the Merge Train reads as stage 4; named apart from `gate`, the coordinator's gates, which the Gates tab counts.
+//!    its `sub.stop` (`rc=0`, or a failure's `rc=<n>; cause=<cause>; step=<step>`), the worker's own gate the Merge Train reads as stage 4; named apart from `gate`, the coordinator's gates, which the Gates tab counts.
 //!    Its log, `.rc` record and junit file are kept as `<target>/gate-logs/ready-<head>.*`. A
 //!    failure that is only failed tests is rerun once, each test alone, then the doctests and the
 //!    steps it skipped, as `ready-<head>-rerun`; a pass goes on to step 4
