@@ -608,7 +608,13 @@ pub fn tracking_files(project: &Project, root: &Path) -> Result<Vec<(String, Str
     let Some(tip) = event::fetch_tip(root, project.branches.remote, &format!("refs/heads/{}", project.branches.tracking))? else {
         return Ok(Vec::new());
     };
-    let listing = git(root, &["ls-tree", "-r", &tip, "--", "tracking"], None, &[])?;
+    tracking_files_at(root, &tip)
+}
+
+/// The tracking branch's files at the commit `tip`, which the clone has: (instance, `work.jsonl`
+/// text).
+pub fn tracking_files_at(root: &Path, tip: &str) -> Result<Vec<(String, String)>, String> {
+    let listing = git(root, &["ls-tree", "-r", tip, "--", "tracking"], None, &[])?;
     let entries = parse_ls_tree(&listing);
     let ids: String = entries.iter().map(|(_, id)| format!("{id}\n")).collect();
     let batch = git(root, &["cat-file", "--batch"], Some(ids.as_bytes()), &[])?;

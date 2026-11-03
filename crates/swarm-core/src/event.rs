@@ -99,7 +99,9 @@ its work on issues with `cargo xtask event` (AGENTS.md › Tracking). This branc
 - `session.pause`, `session.resume`, `session.stop` (`reason`?, `of`?): the instance pauses,
   resumes, ends; `reason` `duplicate`: because another agent has its issue. `of`: the dead
   instance whose session this stop ends (the coordinator closing a dead agent's session).
-- `claim` (`issue`, `mr`): it takes an issue. `work` (`issue`): it starts or resumes work on it.
+- `claim` (`issue`, `mr`): it takes an issue. `work` (`issue`, `mr`?): it starts or resumes work
+  on it; with `mr`, it picks up that PR sent back (`sendback`, or a failed gate naming it): its
+  rework starts here, and the time since the send-back was waiting.
 - `submit` (`issue`, `mr`): it marks the PR ready for merge.
 - `stop` (`issue`, `reason`: handoff, blocked, paused or done): it stops working on the issue.
 - `release` (`issue`, `reason`?, `of`?): it gives up the issue (lost a claim race, gave up), or the
@@ -730,6 +732,7 @@ const EXAMPLE_SCRIPT: &[(&str, usize, &[&str])] = &[
     ("2026-10-17T10:21:00Z", 0, &["merge", "--issue", "28", "--mr", "29", "--sub", "gate-1"]),
     ("2026-10-17T10:22:00Z", 1, &["submit", "--issue", "7", "--mr", "9"]),
     ("2026-10-17T10:23:00Z", 0, &["sendback", "--issue", "7", "--mr", "9", "--note", "cause=conflict"]),
+    ("2026-10-17T10:23:30Z", 1, &["work", "--issue", "7", "--mr", "9", "--note", "rework: #9 sent back 2026-10-17T10:23:00Z: cause=conflict"]),
     ("2026-10-17T10:24:00Z", 1, &["stop", "--issue", "7", "--reason", "blocked"]),
     ("2026-10-17T10:30:00Z", 0, &["release", "--issue", "7", "--of", "pc-a0b1c2", "--reason", "duplicate", "--note", "spruce has it"]),
     ("2026-10-17T10:31:00Z", 1, &["session.stop"]),

@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-02 · **Change:** minor (a failed `ready`'s cause and step; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-03 · **Change:** minor (a `work` with `mr` picks up a send-back; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -39,7 +39,7 @@ Every event has `t` (UTC, `YYYY-MM-DDTHH:MM:SSZ`, the agent's own clock) and `ev
 | `session.pause` / `session.resume` | | it waits (for the owner, say) and goes on |
 | `session.stop` | `reason`?, `of`? | it ends; `reason` `duplicate`: because another agent has its issue; `of`: the dead instance whose session the coordinator ends |
 | `claim` | `issue`, `mr` | it takes an issue |
-| `work` | `issue` | it starts or resumes work on an issue |
+| `work` | `issue`, `mr`? | it starts or resumes work on an issue; with `mr`, it picks up that PR sent back ([Send-backs](#send-backs)) |
 | `submit` | `issue`, `mr` | it marks the PR ready |
 | `stop` | `issue`, `reason` (`handoff`, `blocked`, `paused`, `done`) | it stops working on the issue |
 | `release` | `issue`, `reason`?, `of`? | it gives the issue up, or the coordinator freed a stale claim; `reason` `duplicate`: another agent has the issue, so the work so far is thrown away; `of`: the instance whose claim or work it ends, when not the logger's own |
@@ -180,6 +180,21 @@ instead of merging it in two ways, and a reader may count both as a **send-back*
   is the note's `cause=<cause>`, else the cause of the failed gate its `sub` names. A `sendback`
   after a gate's failure of the PR, before its next gate, is that same send-back.
 
+**The rework** (mornycorp/swarm-core#14): the worker logs `work --issue <n> --mr <m>` when it
+picks up a sent-back PR, once a send-back (`cargo xtask prwatch` logs it for the worker as it
+reads the send-back on the tracking branch, its note `rework: #<m> sent back <t>: <why>`; a
+worker not running it logs it itself). So a `work` naming the PR's issue after a send-back
+marks the start of the rework, and a reader may treat the time between the send-back and it as
+waiting (the PR sat with its worker untouched). A comment that only asks a question is no
+send-back and logs nothing. Older files have no such `work`: the rework's start there is the
+reader's guess. `mr` on `work` is optional, as on every issue event; the writer has always
+written it when given, so this adds no field and no version.
+
+```json
+{"event":"sendback","issue":7,"mr":9,"note":"cause=conflict: Cargo.toml","t":"2026-10-17T12:00:00Z"}
+{"event":"work","issue":7,"mr":9,"note":"rework: #9 sent back 2026-10-17T12:00:00Z: cause=conflict: Cargo.toml","t":"2026-10-17T12:20:00Z"}
+```
+
 A PR is **gated** when a gate names it (its notes, its merges) or a `sendback` sends it back;
 **merged** when a `merge` event names it or a gate that passed says `merged #<m>` (a docs gate
 logs no `merge`).
@@ -218,6 +233,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Send-backs: a `work --issue <n> --mr <m>` after a send-back marks the start of the rework (`prwatch` logs it once for the worker), and the time before it may read as waiting; no format change (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` adds `cause=` and `step=` (the failing `ci` step), as a gate's adds its cause; no format change |
 | 2026-10-30 | minor | Names no consumer: the reader's own details (its commands, panes and measurements) and its issue numbers dropped, the contract kept; no format change |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): an event's `mr` holds the PR's number; no format change |
