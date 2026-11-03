@@ -230,11 +230,19 @@ pub fn active_claims(notes: &[Value], tracked: &[Tracked], issue: u64, now: i64)
         .collect()
 }
 
-/// Whether claim `c`'s agent logged its own `release` or `stop` of `issue` after the comment.
+/// Whether claim `c`'s agent logged its own `release` or `stop` of `issue` after the comment, or
+/// another agent (the coordinator) logged `release --of` one of its instances
+/// (mornycorp/swarm-core#11).
 fn released_since(tracked: &[Tracked], issue: u64, c: &ClaimNote) -> bool {
     let at = parse_time(&c.at).unwrap_or(i64::MAX);
+    let is_claimant = |instance: &str| instance == c.name || tracked.iter().any(|o| o.instance == instance && o.name.as_deref() == Some(c.name.as_str()));
     tracked.iter().any(|e| {
-        e.issue == Some(issue) && e.name.as_deref() == Some(c.name.as_str()) && e.t >= at && (e.event == "release" || e.event == "stop") && e.of.is_none()
+        e.issue == Some(issue)
+            && e.t >= at
+            && match e.of.as_deref() {
+                None => e.name.as_deref() == Some(c.name.as_str()) && (e.event == "release" || e.event == "stop"),
+                Some(of) => e.event == "release" && is_claimant(of),
+            }
     })
 }
 
@@ -2019,6 +2027,25 @@ mod tests {
             parse_tracking(&[agent("mac-alder", "alder", 61, &[("claim", Some(62), "2026-10-31T12:57:50Z"), ("release", None, "2026-10-31T12:59:00Z")])]);
         let active = active_claims(&notes, &tracked, 61, now);
         assert!(active.is_empty(), "{active:?}");
+        // A coordinator's `release --of` an instance frees that instance's claim, and only its
+        // (mornycorp/swarm-core#11).
+        let notes = [note("claimed: cedar, PR #62", "2026-10-31T12:57:47Z")];
+        let freed = |of: &str| {
+            let mut tracked =
+                parse_tracking(&[agent("mac-cedar", "cedar", 61, &[("claim", Some(62), "2026-10-31T12:57:48Z")]), agent("mac-coord", "coordinator", 61, &[])]);
+            tracked.push(Tracked {
+                instance: "mac-coord".into(),
+                name: Some("coordinator".into()),
+                t: t("2026-10-31T12:59:00Z"),
+                event: "release".into(),
+                issue: Some(61),
+                mr: None,
+                of: Some(of.into()),
+            });
+            active_claims(&notes, &tracked, 61, now).is_empty()
+        };
+        assert!(freed("mac-cedar"));
+        assert!(!freed("mac-alder"));
         // A claim comment older than a live claim's life no longer stands.
         let stale = [note("claimed: cedar, PR #62", "2026-10-29T12:00:00Z"), note("claimed: alder, PR #62", "2026-10-31T12:57:49Z")];
         assert_eq!(first_claim(&active_claims(&stale, &[], 61, now), "alder"), None);
