@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-02 · **Change:** minor (a failed `ready` check says why) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-03 · **Change:** minor (`prwatch` logs the `work` on a send-back) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -278,7 +278,8 @@ the event and sends it with the next.
   runs on another model than yours) and `sub.stop --sub <id>`, and `--sub <id>` on an issue event
   it causes. The helper never runs `cargo xtask event` itself.
 - **On an issue:** `claim --issue <n> --mr <m>` when you claim it (`cargo xtask claim` logs it,
-  then `work`, for you); `work --issue <n>` when you start or resume work on it;
+  then `work`, for you); `work --issue <n>` when you start or resume work on it, and
+  `work --issue <n> --mr <m>` when you pick up a PR sent back (`prwatch` logs it for you, once);
   `submit --issue <n> --mr <m>` when you mark its PR ready; `stop --issue <n> --reason
   handoff|blocked|paused|done` when you stop working on it; `release --issue <n>` when you give it
   up, with `--reason duplicate --note "<who has it>"` when another agent has it (your work so far
@@ -340,7 +341,12 @@ happens:
 - It polls every 150 s (`--interval`) with one GitHub call (the open PRs, each with its merge
   state and its head's checks) and prints a line only when something changes: merge state
   (`dirty`: a conflict, `behind`, `clean`, `blocked`), checks that finished, new comments, a PR
-  that merged or closed. The first poll only records.
+  that merged or closed. The first poll only records (a send-back, below, it still logs).
+- **A send-back** (the coordinator's `sendback` of your PR, or its gate failing for the change's
+  cause, read from the tracking branch) is a line of its own, `#m sent back (<when>): <why>`, and
+  `prwatch` logs your `work --issue <n> --mr <m>` for it then, once, so the timeline shows where
+  your rework starts (and the time before it as waiting). A comment that only asks a question
+  logs nothing. Not running `prwatch`? Log that `work` yourself when you start on the sent-back PR.
 - `--once` polls once and lists each PR's status: run it on every wake, so nothing waits on the
   watcher being up. Its last poll is kept in the clone's git directory
   (`prwatch-<instance>.json`), shared by its worktrees.
@@ -366,7 +372,8 @@ What each line asks of you:
 | `merge state: … -> dirty` | a conflict: rebase onto `main`, resolve, gate, push |
 | `merge state: … -> behind` | nothing: the coordinator brings it up to `main` at merge |
 | `checks: failure` | read the failed job's log (`gh run view --log-failed`); fix it if it is yours, else say whose it is on the PR (and file it) |
-| `n new comments` | read them: a sendback or a question |
+| `#m sent back (<when>): <why>; logged \`work …\`` | the coordinator sent it back: rework it (the `work` is logged), gate, push, and `ready` again |
+| `n new comments` | read them: a question (answer it), or a send-back's reasons (`prwatch` says `sent back` itself and logs its `work`; if it didn't, log `work --issue <n> --mr <m>` as you start) |
 | `#n closed (needed by #m): start what waited on it` | rebase `#m`'s branch onto `main` and build what waited on `#n` |
 | `#n (needed by #m) taken: PR !k` | nothing yet; someone works on it. Don't claim it |
 | `no open PR or claim left: … cargo xtask finish …` | pick the next issue; or, if none is left, end your session with `finish` |
@@ -1025,6 +1032,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Watching your PRs and Tracking: `prwatch` says when your PR is sent back (a `sendback`, or a gate failing for the change's cause) and logs your `work --issue <n> --mr <m>` once, so the rework's start is on the timeline; log it yourself if no command did; a question logs nothing (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` says why, as the gate's does: `rc=<n>; cause=<cause>; step=<the failing ci step>` (was `rc=1`) |
 | 2026-10-31 | minor | GitHub CI runs once a day on `main`, not on pushes or PRs (owner, 2026-10-31): the coordinator checks the latest daily run each batch, and a red one is `main` red |
 | 2026-10-31 | minor | No refactoring pass at the end of a worker's task, and no **Refactoring** line for the coordinator to check (owner, 2026-10-31); the `refactoring` skill is dropped too, `complexity-analyzer` kept |
