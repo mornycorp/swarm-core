@@ -13,7 +13,8 @@
 //!   ([`Hooks::gate_kind`]), the **docs** gate, the **tooling** gate (both `ci --changed`) or the
 //!   **full** gate, which the coordinator turns into the **smoke** ([`coordinator_kind`]: `ci
 //!   --smoke`, no full test run; the periodic full gate of `main` runs the rest). `--full` forces
-//!   the full gate.
+//!   the full gate. A smoke of a stack holding a PR whose latest `submit` says `ready --no-ci`
+//!   skipped its author's run is the **changed** gate instead (`ci --changed`, [`untested`]).
 //! - **Takes the machine-wide gate lock** both swarms share ([`crate::machine_lock`]) when its kind
 //!   builds ([`Kind::takes_machine_lock`]: not a docs gate, whose notes say
 //!   `machineLock=skipped`), then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits
@@ -54,6 +55,7 @@ use crate::stack::{self, Stack, short};
 use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock};
 
 pub mod rerun;
+pub mod untested;
 
 /// Where a gate writes its log and records: `<target dir>/gate-logs/<sub>.log`, `.rc`.
 pub use crate::gate_times::LOG_DIR;
@@ -190,18 +192,23 @@ pub enum Kind {
     /// it is unsure: `ci --smoke`, the build, the lints and the golden tests, with no full test
     /// run. The periodic full gate of `main` ([`crate::fullgate`]) runs the rest.
     Smoke,
+    /// `ci --changed`, as the author's `ready` runs it: the smoke of a stack holding a PR readied
+    /// without that run (`ready --no-ci`, [`untested`]), so a test run stands behind its gate
+    /// (mornycorp/swarm-core#18). The gate's own: no planner returns it.
+    Changed,
     /// The whole `ci`: `--full`, and the periodic full gate of `main`.
     Full,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Docs, Kind::Tooling, Kind::Smoke, Kind::Full];
+    pub const ALL: [Kind; 5] = [Kind::Docs, Kind::Tooling, Kind::Smoke, Kind::Changed, Kind::Full];
 
     pub fn name(self) -> &'static str {
         match self {
             Kind::Docs => "docs",
             Kind::Tooling => "tooling",
             Kind::Smoke => "smoke",
+            Kind::Changed => "changed",
             Kind::Full => "full",
         }
     }
@@ -214,7 +221,7 @@ impl Kind {
     /// `ci`'s arguments for this gate (the `ci` contract).
     pub fn ci_args(self) -> &'static [&'static str] {
         match self {
-            Kind::Docs | Kind::Tooling => &["--changed", "--base", BASE],
+            Kind::Docs | Kind::Tooling | Kind::Changed => &["--changed", "--base", BASE],
             Kind::Smoke => &["--smoke"],
             Kind::Full => &[],
         }
@@ -825,8 +832,13 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     let target = capacity::our_target(root)?;
     lock::take(project, root, &agent)?;
     let head = tested_head(project, root, &o.merge, &sub)?;
-    // The kind before the machine: a docs gate doesn't take the machine lock.
-    let (kind, why) = if o.full { coordinator_kind((Kind::Full, String::new()), true) } else { coordinator_kind(hooks.gate_kind(root), false) };
+    // The kind before the machine: a docs gate doesn't take the machine lock. A smoke of a stack
+    // holding a PR readied without its `ci --changed` runs that instead ([`untested`]).
+    let (kind, why) = if o.full {
+        coordinator_kind((Kind::Full, String::new()), true)
+    } else {
+        untested::kind(project, root, &o.merge, coordinator_kind(hooks.gate_kind(root), false))
+    };
     println!("gate {sub}: the {} gate ({why})", kind.name());
     let field = kind_field(kind, &why);
     let program = this_xtask()?;
@@ -1042,7 +1054,8 @@ mod tests {
         assert_eq!(Kind::Tooling.ci_args(), ["--changed", "--base", "origin/main"]);
         assert_eq!(Kind::Smoke.ci_args(), ["--smoke"]);
         assert!(Kind::Full.ci_args().is_empty());
-        assert!(Kind::Docs < Kind::Tooling && Kind::Tooling < Kind::Smoke && Kind::Smoke < Kind::Full);
+        assert_eq!(Kind::Changed.ci_args(), ["--changed", "--base", "origin/main"]);
+        assert!(Kind::Docs < Kind::Tooling && Kind::Tooling < Kind::Smoke && Kind::Smoke < Kind::Changed && Kind::Changed < Kind::Full);
     }
 
     /// Only the gates that build take the machine gate lock and wait for build capacity; a docs
@@ -1050,9 +1063,9 @@ mod tests {
     #[test]
     fn only_the_gates_that_build_take_the_machine_lock_and_wait_for_capacity() {
         let taking: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.takes_machine_lock()).map(Kind::name).collect();
-        assert_eq!(taking, ["tooling", "smoke", "full"]);
+        assert_eq!(taking, ["tooling", "smoke", "changed", "full"]);
         let waiting: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.waits_for_capacity()).map(Kind::name).collect();
-        assert_eq!(waiting, ["tooling", "smoke", "full"]);
+        assert_eq!(waiting, ["tooling", "smoke", "changed", "full"]);
         assert!(Kind::ALL.into_iter().all(|k| k.takes_machine_lock() == k.builds() && k.waits_for_capacity() == k.builds()), "one rule decides both");
         assert_eq!((Kind::Docs.lock_note(), Kind::Full.lock_note()), ("; machineLock=skipped", ""));
     }
