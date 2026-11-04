@@ -142,7 +142,7 @@ fn test_step(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Docs => None,
         Kind::Smoke => Some("golden"),
-        Kind::Tooling | Kind::Full => Some("test"),
+        Kind::Tooling | Kind::Changed | Kind::Full => Some("test"),
     }
 }
 

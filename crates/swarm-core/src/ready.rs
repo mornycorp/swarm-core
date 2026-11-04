@@ -39,8 +39,11 @@
 //!    rerun passed alone. Whether it is draft is read again here, not taken from step 1: a gate
 //!    sends PRs back to draft while this one runs ([`mark_ready`]).
 //!
-//! `--no-ci` skips steps 3 and 4 (a docs-only PR whose gate just passed, say); `--no-rerun` stops
-//! at failed tests as at any failure; `--dry-run` checks and says what it would do.
+//! `--no-ci` skips steps 3 and 4 (a docs-only PR whose gate just passed, say), and its `submit`'s
+//! note says so ([`gate::untested::NO_CI`]): the coordinator's smoke runs no tests, trusting the
+//! author's run, so its gate runs `ci --changed` for a stack holding this PR instead
+//! (mornycorp/swarm-core#18). `--no-rerun` stops at failed tests as at any failure; `--dry-run`
+//! checks and says what it would do.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -174,7 +177,9 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     has_work(root, &base, o.mr)?;
     if o.dry_run {
         let gate = if o.no_ci { "" } else { ", cargo xtask ci --changed, check the base again" };
-        println!("ready --dry-run: #{} on `{branch}`: would rebase onto {base}{gate}, push, mark it ready for review", o.mr);
+        let note =
+            if o.no_ci { format!(" and log its submit `{}` (the coordinator's gate then runs ci --changed)", gate::untested::NO_CI) } else { String::new() };
+        println!("ready --dry-run: #{} on `{branch}`: would rebase onto {base}{gate}, push, mark it ready for review{note}", o.mr);
         return Ok(());
     }
     // What this xtask was built from: the branch as it was before the rebase.
@@ -193,6 +198,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     has_work(root, &base, o.mr)?;
     let mut reran = Vec::new();
     if o.no_ci {
+        println!("ready: --no-ci: no ci --changed here; the submit says so, and the coordinator's gate runs it for this PR instead of the smoke");
         push(root)?;
     } else {
         let logs = capacity::our_target(root)?.join(gate::LOG_DIR);
@@ -362,19 +368,32 @@ fn submit(project: &Project, root: &Path, o: &Opts, pr: &Value, reran: &[own_gat
     mark_ready(&mut || github::pr(project, o.mr), &mut || github::mark_ready(project, o.mr))?;
     println!("ready: #{} pushed and ready for review; GitHub Actions runs its checks", o.mr);
     let mut ev = vec!["submit".to_owned(), "--agent".to_owned(), o.agent.clone(), "--mr".to_owned(), o.mr.to_string()];
-    let branch = pr["head_ref"].as_str().unwrap_or_default();
-    if let Some(issue) = issue_of_branch(branch) {
+    if let Some(issue) = submitted_issue(pr) {
         ev.extend(["--issue".to_owned(), issue.to_string()]);
     }
-    if !reran.is_empty() {
-        let note = reran.iter().map(own_gate::Reran::note).collect::<Vec<_>>().join("; ");
-        ev.extend(["--note".to_owned(), gate::one_line(&note, event::MAX_NOTE)]);
+    if let Some(note) = submit_note(o.no_ci, reran) {
+        ev.extend(["--note".to_owned(), note]);
     }
     // Never fails the submit (AGENTS.md › Tracking): offline, the event queues.
     if let Err(e) = event::run(project, root, &ev.iter().map(String::as_str).collect::<Vec<_>>()) {
         eprintln!("warning: the submit event: {e}");
     }
     Ok(())
+}
+
+/// The issue a `submit` of `pr` names: its branch's (`<issue>-<slug>`), else the first its
+/// description closes (`Closes #n`). A submit names one, or it isn't logged, and the gate finds a
+/// `--merge` branch's submit by it.
+fn submitted_issue(pr: &Value) -> Option<u64> {
+    issue_of_branch(pr["head_ref"].as_str().unwrap_or_default())
+        .or_else(|| crate::stack::closed_issues(pr["body"].as_str().unwrap_or_default()).first().copied())
+}
+
+/// `submit`'s note: [`gate::untested::NO_CI`] first when `--no-ci` skipped the author's run, then
+/// the tests that passed only when rerun alone (`reran`); none when neither.
+fn submit_note(no_ci: bool, reran: &[own_gate::Reran]) -> Option<String> {
+    let parts: Vec<String> = no_ci.then(|| gate::untested::NO_CI.to_owned()).into_iter().chain(reran.iter().map(own_gate::Reran::note)).collect();
+    (!parts.is_empty()).then(|| gate::one_line(&parts.join("; "), event::MAX_NOTE))
 }
 
 /// Mark the PR ready for review (`ready`), reading it first (`read`): `run` read it before the
@@ -437,6 +456,30 @@ mod tests {
         assert_eq!(marked.get(), 1);
         // Ready already (marked by hand during the gate, say): nothing to do.
         mark_ready(&mut || Ok(json!({"number": 7, "draft": false})), &mut || panic!("not marked again")).unwrap();
+    }
+
+    /// #18: a `--no-ci` submit says so first, where the coordinator's gate reads it; a gated one
+    /// names its rerun tests, or has no note.
+    #[test]
+    fn a_no_ci_submit_says_so() {
+        let reran = [own_gate::Reran { of: "ready-abc".into(), tests: vec!["a::t".into()] }];
+        let no_ci = submit_note(true, &[]).unwrap();
+        assert_eq!(no_ci, "no-ci");
+        assert!(gate::untested::skipped_ci(&no_ci));
+        let both = submit_note(true, &reran).unwrap();
+        assert!(both.starts_with("no-ci; ready-abc failed only at its test step") && gate::untested::skipped_ci(&both), "{both}");
+        let gated = submit_note(false, &reran).unwrap();
+        assert!(!gate::untested::skipped_ci(&gated), "{gated}");
+        assert_eq!(submit_note(false, &[]), None);
+    }
+
+    /// A submit names the branch's issue, else the first the description closes.
+    #[test]
+    fn a_submit_names_its_issue() {
+        assert_eq!(submitted_issue(&json!({"head_ref": "18-no-ci", "body": "Closes #7"})), Some(18));
+        assert_eq!(submitted_issue(&json!({"head_ref": "release-of-frees-claim", "body": "Closes #11\n\nCloses #12"})), Some(11));
+        assert_eq!(submitted_issue(&json!({"head_ref": "a-branch", "body": "no issue"})), None);
+        assert_eq!(submitted_issue(&json!({})), None);
     }
 
     #[test]

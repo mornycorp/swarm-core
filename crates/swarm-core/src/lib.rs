@@ -58,7 +58,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub trait Hooks {
     /// The gate a change at `root` needs against `origin/main`, and why:
     /// the project's planner decides docs, tooling or full (the coordinator turns full
-    /// into the smoke, [`gate::coordinator_kind`]). The default: full, unsure, so the smoke.
+    /// into the smoke, [`gate::coordinator_kind`], and a smoke of a PR readied with `--no-ci`
+    /// into `ci --changed`, [`gate::untested`]). The default: full, unsure, so the smoke.
     fn gate_kind(&self, root: &Path) -> (gate::Kind, String) {
         let _ = root;
         (gate::Kind::Full, "the project plans no gate kind: unsure".to_owned())

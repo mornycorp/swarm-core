@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-03 · **Change:** minor (a `work` with `mr` picks up a send-back; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-04 · **Change:** minor (a `submit` note `no-ci` and the gate kind `changed`; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -115,7 +115,7 @@ gate analytics can read them:
 
 - **`sub.start`** `note`: the coordinator's text naming what it gates (`local gate: #<m> (#<i>)`,
   `docs gate: #<m>`; a rerun's begins `rerun of <sub>:`), then `; kind=<kind>` (the gate that
-  ran: `docs`, `tooling`, `smoke` or `full`), then `; capacity=<n> free=<GB>`: the builds
+  ran: `docs`, `tooling`, `smoke`, `changed` or `full`), then `; capacity=<n> free=<GB>`: the builds
   `cargo xtask capacity` suggested at the start and the free memory in GB, one decimal (`?` when
   it couldn't be read), then, for a gate that ran without the machine gate lock (a `docs` gate),
   `; machineLock=skipped`. The coordinator's text is cut so the tail always fits.
@@ -156,6 +156,13 @@ gate analytics can read them:
   cause as above and the `ci` step it failed at (the `CI summary`'s first `FAIL`), each left out
   when unknown (`rc=1` alone when `ci` couldn't run). An older writer's failure is `rc=1` alone:
   its cause unknown.
+- **A submit without its run** (sc#18): `cargo xtask ready --no-ci` skips that gate, and its
+  `submit` note's first `;`-separated part is `no-ci` (the rest, if any, as for any submit). The
+  coordinator's `gate` reads the latest `submit` of each PR it gates: when it says `no-ci`, a
+  smoke becomes the `changed` kind (`ci --changed --base origin/main`), its why naming the PRs:
+  `kind=changed (ready --no-ci: #<m> …)`. A reader may count a PR whose latest submit says
+  `no-ci` as submitted untested. Older writers wrote no note there: their `--no-ci` submits
+  can't be told apart.
 
 ```json
 {"event":"sub.start","name":"gate","note":"local gate: #154 (#141); capacity=1 free=9.8","sub":"gate-mr154","t":"2026-10-20T10:44:29Z"}
@@ -233,6 +240,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Gates: a `submit` whose note begins `no-ci` was readied without its author's `ci --changed` (`ready --no-ci`), and the gate kind `changed` gates a stack holding one; no format change (mornycorp/swarm-core#18) |
 | 2026-11-03 | minor | Send-backs: a `work --issue <n> --mr <m>` after a send-back marks the start of the rework (`prwatch` logs it once for the worker), and the time before it may read as waiting; no format change (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` adds `cause=` and `step=` (the failing `ci` step), as a gate's adds its cause; no format change |
 | 2026-10-30 | minor | Names no consumer: the reader's own details (its commands, panes and measurements) and its issue numbers dropped, the contract kept; no format change |

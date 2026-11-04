@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-03 · **Change:** minor (`prwatch` logs the `work` on a send-back) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (a PR readied with `--no-ci` is gated with `ci --changed`) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -237,6 +237,11 @@ request. Always pass `--repo {{github.repo}}` to gh.
      stops `ready` as before: a build, clippy or fmt failure, a failure at another step, a test
      that fails again alone, and a HEAD whose rerun already ran (one a HEAD). `--no-rerun` stops
      at failed tests too.
+   - **`--no-ci`** skips the gate and the second look at `main` (a docs-only PR whose gate just
+     passed, say), and the `submit` event says so: its note begins `no-ci`. The coordinator's
+     smoke runs no tests, trusting your run, so a stack holding a PR whose latest `submit` says
+     `no-ci` is gated with `ci --changed` instead (the **changed** kind, [The coordinator's
+     loop](#the-coordinators-loop); sc#18). Readied again with its run, the smoke is enough.
    - **The rebased tree's own xtask**: when the commits since this xtask was built touch
      one of the project's `Project::xtask_rules` (xtask's sources, the workspace manifest, the
      lock file, `.cargo/`), it builds the rebased xtask into `<target>/ready-xtask` and gates
@@ -614,7 +619,8 @@ On each finished pull request:
      `.claude/worktrees/gate` inside it), never in the owner's checkout; after each merge the coordinator fast-forwards the
      owner's checkout when it is on `main` with no tracked changes ([Parallel
      agents](#parallel-agents)).
-   - **Four kinds of gate** (owner 2026-10-21; the smoke): `cargo xtask gate` picks one from
+   - **Four kinds of gate** (owner 2026-10-21; the smoke), and a fifth for a PR readied
+     without its run (changed): `cargo xtask gate` picks one from
      the stack's change against `origin/main` and `ci --changed`'s plan for it:
      The project's planner (`Hooks::gate_kind`; [swarm.md › The gate's kinds
      here](swarm.md#the-gates-kinds-here)) decides docs, tooling or full; the coordinator runs
@@ -646,6 +652,15 @@ On each finished pull request:
        more case, GPU tests run only on another GPU; a full gate still costs a whole `ci` (10 to
        15 minutes, longer with GPU tests) of the shared desktop for what the
        author's run already showed.
+
+     - **changed** (sc#18): the smoke of a stack holding a PR readied without its author's run
+       (`ready --no-ci`: the PR's latest `submit` event's note begins `no-ci`) runs `cargo xtask
+       ci --changed --base origin/main` instead, the run that `ready` skipped, so a test run
+       stands behind every merge. `gate` finds the PRs in the stack record (or the issues of the
+       branches `--merge` names) and reads their submits on the tracking branch; its note names
+       them (`kind=changed (ready --no-ci: #<m>)`). The docs, tooling and full gates run `ci
+       --changed` or more already, and stay. A tracking branch it can't read is a warning, and
+       the smoke stays.
 
      A stack mixing kinds runs the strongest one any of its PRs needs, since the change is the
      whole stack's (a tooling PR stacked with a product one gets the smoke, and its xtask tests
@@ -1032,6 +1047,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Picking work › Finish and The coordinator's loop: `ready --no-ci` notes `no-ci` on its `submit`, and the gate runs a stack holding such a PR as the **changed** kind (`ci --changed --base origin/main`) instead of the smoke, its note naming the PRs (sc#18) |
 | 2026-11-03 | minor | Watching your PRs and Tracking: `prwatch` says when your PR is sent back (a `sendback`, or a gate failing for the change's cause) and logs your `work --issue <n> --mr <m>` once, so the rework's start is on the timeline; log it yourself if no command did; a question logs nothing (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` says why, as the gate's does: `rc=<n>; cause=<cause>; step=<the failing ci step>` (was `rc=1`) |
 | 2026-10-31 | minor | GitHub CI runs once a day on `main`, not on pushes or PRs (owner, 2026-10-31): the coordinator checks the latest daily run each batch, and a red one is `main` red |
