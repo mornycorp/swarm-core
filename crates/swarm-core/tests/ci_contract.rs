@@ -136,6 +136,28 @@ fn a_failed_test_is_rerun_alone_through_the_contract() {
     assert!(gate::rerun_evidence(&logs, &rc).unwrap().contains("fake::flaky::under_load"), "{rc}");
 }
 
+/// mornycorp/swarm-core#20: a gate of the same tree straight after one failed is its rerun, read
+/// from the failed gate's own `.rc`, so its start note says so; after a pass, the next isn't.
+#[test]
+fn a_gate_of_the_same_tree_after_a_failure_is_its_rerun() {
+    let w = world("swarm-core-ci-contract-silent");
+    let logs = w.target.join(gate::LOG_DIR);
+    let field = gate::kind_field(Kind::Full, "--full");
+    let gated = gate::silent::gated(&FAKE, &w.root, &[], &w.head);
+    assert_eq!(gated, gate::silent::of_head(&w.head), "no stack record: the HEAD");
+    let failing = FakeCi { record: w.record.clone(), fail: Some("fake::flaky under_load"), seen: Default::default() };
+    gate::silent::record(&logs, "g-20", &gated);
+    assert_eq!(gate::attempt(&gate_of(&w, &failing, Kind::Full, &field, None), "g-20", Some("local gate: #20"), (1, None)), Ok((100, Some(gate::Cause::Test))));
+    let of = gate::silent::rerun_in(&logs, &gated, "g-20-2");
+    assert_eq!(of.as_deref(), Some("g-20"));
+    assert_eq!(gate::silent::note("local gate: #20", of.as_deref()), "rerun of g-20: local gate: #20");
+
+    let passing = FakeCi { record: w.record.clone(), fail: None, seen: Default::default() };
+    gate::silent::record(&logs, "g-20-2", &gated);
+    assert_eq!(gate::attempt(&gate_of(&w, &passing, Kind::Full, &field, None), "g-20-2", Some("rerun of g-20: local gate: #20"), (1, None)), Ok((0, None)));
+    assert_eq!(gate::silent::rerun_in(&logs, &gated, "g-20-3"), None, "the last gate passed");
+}
+
 /// mornycorp/swarm-core#14: `ready`'s gate keeps its log, `.rc` and junit file as
 /// `ready-<head>.*`, and a test that failed under load is rerun once, alone, then the doctests and
 /// the steps it skipped, with `ready`'s own scope, as `ready-<head>-rerun`. Once a HEAD; a test

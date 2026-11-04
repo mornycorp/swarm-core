@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (`claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (gating the same stack again after a failure is its rerun; `claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -632,6 +632,12 @@ On each finished pull request:
        again then. It costs the failed tests and the skipped steps, not a second gate: on
        2026-10-22 a PR's gate failed only a panic_hunt test, which passed alone.
      - **anything else** (`build`, `other`): send the PR back, or fix forward.
+     - **Gating the same stack again** (sc#20) is its rerun, flag or none: when the last gate in
+       this worktree failed and the next gates the same PRs at the same heads onto the same
+       `main` (restacked or not; or the same `--merge` branches at the same commits), `gate`
+       starts it as `rerun of gate-<n>: …` itself, so a flake it answers sends no PR back. A new
+       push, another PR, a moved `main` or a gate of another stack between makes it a gate of
+       its own; so does reusing gate-<n>'s own `--sub`.
    - **Stop on red**. While `main`'s CI is red, nothing merges and
      no work starts from `main`. GitHub CI runs once a day on `main`, not on pushes or PRs (owner,
      2026-10-31; [swarm.md › What CI runs](swarm.md#what-ci-runs)), so the coordinator checks the
@@ -1080,6 +1086,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | The coordinator's loop › A red gate: gating the same stack again (the same PRs at the same heads onto the same `main`) straight after a failure is its rerun, and `gate` notes it `rerun of <sub>:` itself, so a flake it answers sends nothing back (sc#20) |
 | 2026-11-04 | minor | Picking work › Taking over: a claim is stale on the coordinator's say-so (`release --of`, or a `released:` comment) or after 24 hours with no events, comments or commits; `claim <n> --take-over` adopts its PR and branch with their commits, logs `release --of` the old holder, comments the release and the claim, and takes `status::blocked` off when everything its hold waits on is closed; `--force` names `--take-over` for a branch with work on it; the coordinator's step 6 hands a stale claim over so (mornycorp/swarm-core#16) |
 | 2026-11-04 | minor | The land step: before a PR merges, `land` retargets onto `main` every open PR whose base is its branch, so GitHub deleting that branch closes none; a PR already closed that way gets its base branch pushed back, is reopened, retargeted and the branch deleted again, or `land` stops with the steps; `s-<pr>` stays until the PR lands (mornycorp/swarm-core#19) |
 | 2026-11-04 | minor | Picking work › Finish and The coordinator's loop: `ready --no-ci` notes `no-ci` on its `submit`, and the gate runs a stack holding such a PR as the **changed** kind (`ci --changed --base origin/main`) instead of the smoke, its note naming the PRs (sc#18) |
