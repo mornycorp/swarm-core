@@ -32,6 +32,10 @@
 //!   logged `sub.stop` with `rc=<n>; cause=<cause>; kind=<kind>`, and keeps the lock: the
 //!   coordinator still owns the worktree. `--retry-transient` reruns once, as `<sub>-rerun`, when
 //!   the cause is the machine's ([`Cause::transient`]). The failing tests are listed.
+//! - **The same stack again**: a gate of the same PRs at the same heads onto the same `main` (or
+//!   the same `--merge` branches, or the same HEAD) as the last gate here, which failed, is its
+//!   rerun: its start note says `rerun of <that sub>:` with no flag, so a reader doesn't send its
+//!   PRs back for a flake the rerun answers ([`silent`], mornycorp/swarm-core#20).
 //! - **A test that failed under load**: `gate --rerun-failed <sub>`
 //!   reruns only the failed tests, each alone, and the steps the failure skipped, on the same HEAD,
 //!   as `<sub>-rerun`, and records a verified pass `land` accepts ([`rerun`]).
@@ -55,6 +59,7 @@ use crate::stack::{self, Stack, short};
 use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock};
 
 pub mod rerun;
+pub mod silent;
 pub mod untested;
 
 /// Where a gate writes its log and records: `<target dir>/gate-logs/<sub>.log`, `.rc`.
@@ -841,6 +846,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     };
     println!("gate {sub}: the {} gate ({why})", kind.name());
     let field = kind_field(kind, &why);
+    let (logs, gated, start) = silent_start(project, root, &target, &o.merge, (&sub, &head, &note));
     let program = this_xtask()?;
     let g = Gate {
         project,
@@ -859,7 +865,8 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     // Held until the run ends: dropped on every way out, pass, failure or error.
     let (rc, cause) = {
         let (_machine, seen) = room_to_build(project, &agent, root, &target, o.wait, kind).map_err(lock_kept)?;
-        attempt(&g, &sub, Some(&note), seen)?
+        silent::record(&logs, &sub, &gated);
+        attempt(&g, &sub, Some(&start), seen)?
     };
     let (sub, rc) = match cause {
         Some(c) if o.retry && c.transient() => {
@@ -867,12 +874,27 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
             event::check_id(&rerun)?;
             println!("gate: rerunning once as {rerun} (cause {})", c.name());
             let (_machine, seen) = room_to_build(project, &agent, root, &target, true, kind).map_err(lock_kept)?;
+            silent::record(&logs, &rerun, &gated);
             let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), seen)?;
             (rerun, rc)
         }
         _ => (sub, rc),
     };
     finish(&sub, rc)
+}
+
+/// Where gate `sub` of `head` keeps its records (`target`'s [`LOG_DIR`]), what it gates
+/// ([`silent::gated`]) and its start note: the coordinator's `note`, as the rerun of the last gate
+/// there when that one failed on the same stack, unchanged (sc#20).
+fn silent_start(project: &Project, root: &Path, target: &Path, merge: &[String], (sub, head, note): (&str, &str, &str)) -> (PathBuf, String, String) {
+    let logs = target.join(LOG_DIR);
+    let gated = silent::gated(project, root, merge, head);
+    let of = silent::rerun_in(&logs, &gated, sub);
+    if let Some(of) = &of {
+        println!("gate {sub}: the same stack {of} failed on, unchanged: logged as its rerun (`rerun of {of}:`)");
+    }
+    let start = silent::note(note, of.as_deref());
+    (logs, gated, start)
 }
 
 /// The last word of a gate run as `sub`: a failure keeps the lock, a pass says how to land.
@@ -929,6 +951,7 @@ fn rerun_failed(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str, 
         program: &program,
     };
     let (_machine, seen) = room_to_build(project, agent, root, &target, o.wait, plan.kind).map_err(lock_kept)?;
+    silent::record(&target.join(LOG_DIR), &sub, &silent::gated(project, root, &[], &head));
     let (rc, _) = attempt(&g, &sub, Some(&note), seen)?;
     finish(&sub, rc)
 }

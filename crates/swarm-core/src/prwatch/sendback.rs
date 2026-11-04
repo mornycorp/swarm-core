@@ -6,7 +6,8 @@
 //!   docs/tracking-format.md › Send-backs defines it: a gate (a sub-agent `gate…`) whose notes
 //!   name the PR (`#<m>` before the note's first `;`) and whose `sub.stop` failed for the change's
 //!   cause (`rc≠0` and a cause that isn't transient), unless a later gate reruns it (`rerun of
-//!   <sub>:`, whose result counts instead); or a `sendback` event naming the PR. A `sendback`
+//!   <sub>:`, whose result counts instead; `gate` writes it for a gate of the same unchanged stack
+//!   too, mornycorp/swarm-core#20); or a `sendback` event naming the PR. A `sendback`
 //!   after a gate's failure of the PR, before its next gate, is that same send-back.
 //! - **Once:** a send-back is due only when the agent's own file holds no `claim`, `work` or
 //!   `submit` of the issue since it (the worker logged its own `work`, or already resubmitted),
@@ -335,6 +336,27 @@ mod tests {
         assert!(send_backs(&files(&[("pc-c", &rerun)]), &set(&[9])).is_empty());
         let failed_again = rerun.replace(r#""rc=0; merged #9","sub":"gate-mr9-rerun""#, r#""rc=101; cause=test","sub":"gate-mr9-rerun""#);
         assert_eq!(send_backs(&files(&[("pc-c", &failed_again)]), &set(&[9]))[&9].t, "2026-10-17T12:15:00Z", "the rerun gates the PRs of the gate it reruns");
+    }
+
+    /// mornycorp/swarm-core#20: a gate of the same stack straight after a failure, with no flag,
+    /// starts as its rerun (`gate::silent`): its pass answers the flake, and its failure is the
+    /// one send-back, at its own time.
+    #[test]
+    fn a_silent_rerun_the_gate_notes_itself_counts_as_a_rerun() {
+        let note = gate::silent::note("local gate: #9 (#7); capacity=1 free=9.8; kind=smoke", Some("gate-mr9"));
+        let lines = |rc: &str| {
+            [
+                r#"{"event":"sub.start","name":"gate","note":"local gate: #9 (#7); capacity=1 free=9.8; kind=smoke","sub":"gate-mr9","t":"2026-10-17T12:00:00Z"}"#.to_owned(),
+                r#"{"event":"sub.stop","note":"rc=101; cause=test; kind=smoke","sub":"gate-mr9","t":"2026-10-17T12:10:00Z"}"#.to_owned(),
+                format!(r#"{{"event":"sub.start","name":"gate","note":"{note}","sub":"gate-mr9-2","t":"2026-10-17T12:11:00Z"}}"#),
+                format!(r#"{{"event":"sub.stop","note":"{rc}","sub":"gate-mr9-2","t":"2026-10-17T12:20:00Z"}}"#),
+            ]
+            .join("\n")
+        };
+        assert!(send_backs(&files(&[("pc-c", &lines("rc=0; kind=smoke; merged #9"))]), &set(&[9])).is_empty(), "a pass: no send-back");
+        let failed = send_backs(&files(&[("pc-c", &lines("rc=101; cause=test; kind=smoke"))]), &set(&[9]));
+        assert_eq!((failed.len(), failed[&9].t.as_str()), (1, "2026-10-17T12:20:00Z"), "a failure again: one send-back, the rerun's");
+        assert!(failed[&9].why.contains("gate-mr9-2"), "{failed:?}");
     }
 
     #[test]

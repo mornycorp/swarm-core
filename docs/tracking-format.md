@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-04 · **Change:** minor (a `submit` note `no-ci` and the gate kind `changed`; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-04 · **Change:** minor (a gate of the same stack after a failure notes itself its rerun; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -149,6 +149,13 @@ gate analytics can read them:
   `sub.stop`.
 - **A rerun** (`--retry-transient`, or `--rerun-failed <sub>`: the failed tests alone and the
   steps they skipped) is a gate of its own, `<sub>-rerun`, its start note `rerun of <sub>: …`.
+  **A gate of the same stack straight after a failure** is one too, whatever its `sub`
+  (mornycorp/swarm-core#20): when the last gate in the coordinator's gate worktree failed (its
+  `rc` not 0) and this gate tests the same PRs, in the same order, at the same heads (no new push
+  between), onto the same `main` (or the same `--merge` branches at the same commits, or, with no
+  stack, the same HEAD), `gate` begins its start note `rerun of <that sub>: ` itself. A restack
+  of an unchanged stack is the same stack; a gate of another stack between the two, or a last
+  gate that passed or has no result, makes it a gate of its own.
 - **A worker's own gate before it submits** is not one of these: `cargo xtask ready` runs it
   inside a sub named `ready` (`sub.start --sub ready-<short head> --name ready --note "ci
   --changed before submitting"`), so a reader's gate counts keep to the coordinator's gates. Its
@@ -180,7 +187,9 @@ instead of merging it in two ways, and a reader may count both as a **send-back*
 - **A gate fails for the change's cause** (`rc≠0` and a cause that isn't transient). Each PR
   the gate gated is sent back once, unless its next gate is a rerun saying so (`rerun of <sub>`,
   whose result counts instead: a flake a rerun answers is no send-back). A rerun naming no PR
-  gates those of the gate it reruns.
+  gates those of the gate it reruns. A coordinator that just gates the same unchanged stack
+  again is rerunning it, and `gate` says so ([Gates](#gates), a rerun), so the rule stays the
+  reader's one: older files hold silent reruns with no note, which read as send-backs.
 - **A `sendback` event** (`sendback --issue <n> --mr <m> --note "<why>"`, [the swarm protocol ›
   The coordinator's loop](../crates/swarm-core/assets/docs/swarm-protocol.md#the-coordinators-loop)).
   A conflict at `stack`, before any gate ran, is one: its note starts `cause=conflict`. Its cause
@@ -240,6 +249,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Gates and Send-backs: a gate of the same PRs at the same heads onto the same `main` straight after the last gate failed begins its start note `rerun of <sub>:` itself, so a silent rerun of a flake is no send-back; no format change (mornycorp/swarm-core#20) |
 | 2026-11-04 | minor | Gates: a `submit` whose note begins `no-ci` was readied without its author's `ci --changed` (`ready --no-ci`), and the gate kind `changed` gates a stack holding one; no format change (mornycorp/swarm-core#18) |
 | 2026-11-03 | minor | Send-backs: a `work --issue <n> --mr <m>` after a send-back marks the start of the rework (`prwatch` logs it once for the worker), and the time before it may read as waiting; no format change (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` adds `cause=` and `step=` (the failing `ci` step), as a gate's adds its cause; no format change |
