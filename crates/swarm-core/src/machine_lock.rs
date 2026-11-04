@@ -115,7 +115,7 @@ pub fn take_at(file: &Path, swarm: &str, instance: &str, now: i64, worktree: &st
 /// Put the lock `text` at `file`, whole: written beside it, then hard-linked to its name, which
 /// fails (`AlreadyExists`) when the file is there. `replace` removes the file first (ours to
 /// renew, or left behind); another gate's that goes in meanwhile still wins.
-fn put(file: &Path, text: &str, replace: bool) -> std::io::Result<()> {
+pub(crate) fn put(file: &Path, text: &str, replace: bool) -> std::io::Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }

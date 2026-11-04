@@ -21,7 +21,9 @@
 //! The machine-wide gate lock both swarms share ([`crate::machine_lock`])
 //! is the gate's own: `show` names its holder on a second line, and `drop` drops this
 //! instance's (with `--force`, any instance's of this swarm; never the other swarm's), for a gate
-//! that was killed while it held it.
+//! that was killed while it held it. `show` names the machine's test-run slots' holders on a
+//! third ([`crate::test_runs`]); a killed run's slot needs no drop: its process is gone, so the
+//! next run takes it over.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -249,7 +251,7 @@ pub fn run(project: &Project, root: &Path, args: &[&str]) -> Result<(), String> 
             let me = agent(project, given, "lock drop")?;
             drop_holds(project, &file, machine_lock::path().as_deref(), &me, force, &mut |s| println!("{s}"))?;
         }
-        "show" => println!("{}\nmachine: {}", show_at(project, &file, now()), machine_lock::show()),
+        "show" => println!("{}\nmachine: {}\ntest runs: {}", show_at(project, &file, now()), machine_lock::show(), crate::test_runs::show()),
         other => return Err(format!("lock: unknown action `{other}`\nusage: {USAGE}")),
     }
     Ok(())
