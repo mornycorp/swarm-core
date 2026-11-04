@@ -16,11 +16,20 @@
 //!    ran, say) that, restacked onto what the gate's stack put it on, is the tree the gate tested;
 //!    the stacked commit is pushed over it ([`moved`]). A move onto a base the gate didn't test, or
 //!    to another tree, stops. And `s-<pr>` is still the rebased tip the gate tested
-//!    ([`tested_tip`]).
+//!    ([`tested_tip`]). And the PR isn't closed: one GitHub closed when its base branch went (the
+//!    head branch of the PR below it, merged and deleted, sc#19) gets that branch pushed back
+//!    from the stack's record, is reopened, retargeted onto `main`, and the branch deleted again
+//!    ([`closed`]); a step that fails, or a PR closed any other way, stops with the steps to do by
+//!    hand. Nothing is pushed to a closed PR's branch, and `s-<pr>` and the record stay until it
+//!    lands.
 //! 2. **Force-push the rebased branch, then check the remote is the local commit** (a push that
 //!    didn't land is never merged; one the server failed is tried again, [`PUSH_TRIES`]).
 //! 3. **Note the gate's summary** on the PR (the gate's log, [`gate_summary`]) and cancel the
-//!    workflow runs of its head still queued or running (the gate replaced them).
+//!    workflow runs of its head still queued or running (the gate replaced them). Then
+//!    **retarget onto `main` every open PR whose base is its source branch**, the stack's later
+//!    entries first ([`retarget_order`]): GitHub closes a PR whose base branch is deleted, and a
+//!    closed PR can be neither retargeted nor reopened while its base is gone (sc#19). A failure
+//!    stops before any merge.
 //! 4. **Wait until it is mergeable,** bringing it up to `main` when GitHub says it is `behind`: a
 //!    rebase on the server, or, for a branch the server can't rebase (merge commits) or one `stack`
 //!    merged its base into, `main` merged in here and pushed: semi-linear history needs `main`'s
@@ -81,8 +90,10 @@ fn usage(project: &Project) -> String {
   lands the next PRs of this worktree's stack (`cargo xtask stack`), in order, when its top is the
   HEAD the gate tested (<target>/gate-logs/<sub>.rc): checks each PR holds work and each remote
   branch is still its pre-rebase tip (or a worker's push since that, restacked onto the same base,
-  is the tree the gate tested), force-pushes the rebased branch and checks it landed, notes the
-  gate's summary and cancels its workflow runs, brings it up to main when it is behind (a server
+  is the tree the gate tested; a PR GitHub closed when the branch it was stacked on went is pushed
+  that branch back, reopened onto main and the branch deleted again), force-pushes the rebased
+  branch and checks it landed, notes the gate's summary and cancels its workflow runs, retargets
+  onto main every open PR stacked on its branch, brings it up to main when it is behind (a server
   rebase, or main merged in), merges (docs-only: [skip ci]), confirms the merge, logs `merge --sub <gate sub>` and tidies
   each issue its description closes, fast-forwards the owner's checkout (on main, no tracked
   changes), then deletes the source branch. Then `cargo xtask gate --stop <gate sub>`. Stops at
@@ -174,12 +185,14 @@ pub struct MrView {
     pub sha: String,
     /// Its GraphQL id, for the server's rebase.
     pub node_id: String,
+    /// Its base branch (`main`, or the head branch of the PR it is stacked on).
+    pub base: String,
 }
 
 /// A PR in [`github`]'s shape.
 pub fn parse_view(v: &Value) -> MrView {
     let text = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-    MrView { state: text("state"), merge_state: text("merge_state"), sha: text("head_sha"), node_id: text("node_id") }
+    MrView { state: text("state"), merge_state: text("merge_state"), sha: text("head_sha"), node_id: text("node_id"), base: text("base_ref") }
 }
 
 /// Where a PR stands while waiting to merge it.
@@ -210,6 +223,49 @@ pub fn wait_state(v: &MrView) -> Wait {
         ("open", _) => Wait::Again,
         (other, _) => Wait::Stuck(format!("it is {other}")),
     }
+}
+
+/// What `land` makes of a PR of the stack, asked before anything of it is pushed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Closed {
+    /// Open, or merged already: it lands as before.
+    No,
+    /// Closed by GitHub when its base branch `branch` (the head branch of the PR below it,
+    /// merged) was deleted (sc#19): `land` pushes it back, reopens the PR onto the stack's base,
+    /// and deletes it again. `back`: an earlier `land` pushed it back already, and stopped.
+    BaseDeleted { branch: String, back: bool },
+    /// Closed some other way (by hand, or its base branch is still there): never reopened here.
+    ByHand,
+}
+
+/// Where `v`, a PR of the stack, stands, `base` being the stack's base (`main`) and `at` what the
+/// stack's record put the PR on; `tip(branch)` is its base branch's commit on the remote (`None`:
+/// gone), asked only for a PR closed on another base. A base branch at `at` is one `land` pushed
+/// back.
+pub fn closed(v: &MrView, base: &str, at: &str, tip: impl FnOnce(&str) -> Result<Option<String>, String>) -> Result<Closed, String> {
+    if v.state != "closed" {
+        return Ok(Closed::No);
+    }
+    if v.base.is_empty() || v.base == base || !stack::valid_branch(&v.base) {
+        return Ok(Closed::ByHand);
+    }
+    let branch = v.base.clone();
+    Ok(match tip(&v.base)? {
+        None => Closed::BaseDeleted { branch, back: false },
+        Some(t) if t == at => Closed::BaseDeleted { branch, back: true },
+        Some(_) => Closed::ByHand,
+    })
+}
+
+/// The PRs to retarget onto the stack's base before a PR merges, `onto` being the open PRs whose
+/// base is its head branch: the stack's `later` entries first, in its order, then the rest.
+pub fn retarget_order(later: &[u64], onto: &[u64]) -> Vec<u64> {
+    let mut out: Vec<u64> = later.iter().copied().filter(|m| onto.contains(m)).collect();
+    let mut rest: Vec<u64> = onto.iter().copied().filter(|m| !later.contains(m)).collect();
+    rest.sort_unstable();
+    rest.dedup();
+    out.extend(rest);
+    out
 }
 
 /// The merge commit's body: a docs-only PR's says `[skip ci]`, so `main`'s workflows skip it;
@@ -310,6 +366,12 @@ pub trait Effects {
     /// Merge at `sha` (GitHub refuses if the branch moved), with `message` or GitHub's own.
     fn merge(&self, mr: u64, sha: &str, message: Option<&str>) -> Result<(), String>;
     fn delete_branch(&self, branch: &str) -> Result<(), String>;
+    /// The open PRs whose base is `branch` (stacked on it).
+    fn stacked_on(&self, branch: &str) -> Result<Vec<u64>, String>;
+    /// Change PR `mr`'s base branch to `base` (GitHub refuses it for a closed PR).
+    fn retarget(&self, mr: u64, base: &str) -> Result<(), String>;
+    /// Reopen closed PR `mr` (GitHub refuses it while its base branch is gone).
+    fn reopen(&self, mr: u64) -> Result<(), String>;
     /// `cargo xtask event merge --issue <issue> --mr <mr> --sub <sub> [--note <note>]`.
     fn log_merge(&self, issue: u64, mr: u64, sub: &str, note: Option<&str>) -> Result<(), String>;
     /// `cargo xtask tidy <issue>`.
@@ -343,8 +405,12 @@ pub fn land(plan: &Plan<'_>, stack: &mut Stack, mrs: &[u64], fx: &dyn Effects) -
     }
     let body = note_body(plan.project.gate_tag, plan.sub, plan.summary, mrs);
     let mut landed = Vec::new();
-    for e in &todo {
-        land_one(plan, &stack.remote, &stack.base, e, &body, fx).map_err(|why| {
+    for (i, e) in todo.iter().enumerate() {
+        let later: Vec<u64> = stack.entries.iter().skip_while(|x| x.mr != e.mr).skip(1).map(|x| x.mr).collect();
+        let rest: Vec<String> = todo.iter().skip(i).map(|x| x.mr.to_string()).collect();
+        let again = format!("cargo xtask land {} --sub {}", rest.join(" "), plan.sub);
+        let one = One { remote: &stack.remote, base: &stack.base, body: &body, later: &later, again: &again };
+        land_one(plan, &one, e, fx).map_err(|why| {
             let done = if landed.is_empty() { String::new() } else { format!(" (landed before it: {})", bangs(&landed)) };
             format!("land: #{} stopped: {why}{done}; the gate stays open and the lock held", e.mr)
         })?;
@@ -360,8 +426,21 @@ fn bangs(mrs: &[u64]) -> String {
     mrs.iter().map(|m| format!("#{m}")).collect::<Vec<_>>().join(" ")
 }
 
-fn land_one(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, body: &str, fx: &dyn Effects) -> Result<(), String> {
-    let root = plan.root;
+/// Where one PR of the stack lands.
+struct One<'a> {
+    remote: &'a str,
+    /// The stack's base branch (`main`).
+    base: &'a str,
+    /// The note it gets ([`note_body`]).
+    body: &'a str,
+    /// The stack's entries after it.
+    later: &'a [u64],
+    /// The command that lands it and the rest of this landing, for a stop's steps.
+    again: &'a str,
+}
+
+fn land_one(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Result<(), String> {
+    let (root, remote, base) = (plan.root, one.remote, one.base);
     let src = &e.source_branch;
     if !stack::valid_branch(src) {
         return Err(format!("source branch `{src}` is not one to push"));
@@ -369,18 +448,22 @@ fn land_one(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, body: &str, fx
     let local = stacked_tip(root, remote, e)?;
 
     // 1, 2: never over a worker's newer commits (unless restacked they are the gated tree); never
-    // merge a push that didn't land.
+    // merge a push that didn't land. A PR GitHub closed when the branch it was stacked on went is
+    // reopened first: nothing is pushed to a closed PR's branch.
     let over = push_over(root, remote, base, e, &local)?;
+    reopen_orphan(plan, one, e, fx)?;
     push_checked(plan.project, root, remote, src, &over, &local)?;
     // `stack`'s regenerated docs are a commit in that tip: pushed with the PR.
     let regen = if e.regenerated.is_empty() { String::new() } else { format!(", with regenerated {}", e.regenerated.join(", ")) };
     println!("land: #{} pushed {src} at {}{regen}", e.mr, short(&local));
 
     // 3.
-    fx.note(e.mr, body)?;
+    fx.note(e.mr, one.body)?;
     if let Err(err) = fx.cancel_runs(e.mr) {
         eprintln!("warning: land: #{}: cancelling its workflow runs: {err}", e.mr);
     }
+    // 3, before any merge: nothing stacked on its branch is closed when that branch goes (sc#19).
+    retarget_stacked(plan, one, e, fx)?;
 
     // 4, 5.
     merge_when_ready(plan, remote, base, e, fx)?;
@@ -417,6 +500,99 @@ fn stacked_tip(root: &Path, remote: &str, e: &Entry) -> Result<String, String> {
         return Ok(local);
     }
     Err(format!("{branch} is {}, not the {} the stack recorded and the gate tested: restack", short(&local), short(&e.new_tip)))
+}
+
+/// Before step 1's push: a PR GitHub closed when its base branch went (the head branch of the PR
+/// below it, merged and deleted: sc#19) is recovered ([`recover`]); one closed any other way stops.
+/// Either way the stack's record and `s-<pr>` stay, so a rerun goes on from it.
+fn reopen_orphan(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Result<(), String> {
+    let v = fx.mr(e.mr)?;
+    if v.state != "closed" {
+        return Ok(());
+    }
+    // What its base branch goes back at: what the record put the PR on (`main` in a record from
+    // before `onto`).
+    let at = if e.onto.is_empty() { stack::rev(plan.root, &format!("refs/remotes/{}/{}", one.remote, one.base))? } else { e.onto.clone() };
+    let tip = |b: &str| remote_tip(plan.root, one.remote, &format!("refs/heads/{b}"));
+    match closed(&v, one.base, &at, tip)? {
+        Closed::No => Ok(()),
+        Closed::ByHand => Err(format!(
+            "it is closed, and not by the deletion of the branch it was stacked on (its base is {}): reopen it, or restack without it; {} and the stack's record are kept",
+            if v.base.is_empty() { "unknown" } else { v.base.as_str() },
+            stack::local_branch(e.mr)
+        )),
+        Closed::BaseDeleted { branch, back } => recover(plan, one, e, &Orphan { gone: &branch, at: &at, back }, fx),
+    }
+}
+
+/// A PR's base branch that went ([`Closed::BaseDeleted`]).
+struct Orphan<'a> {
+    gone: &'a str,
+    /// The commit it goes back at.
+    at: &'a str,
+    /// It is back already.
+    back: bool,
+}
+
+/// [`Closed::BaseDeleted`]: push the branch `o.gone` back (at what the PR was stacked onto, from
+/// the stack's record), reopen the PR, retarget it onto the stack's base and delete the branch
+/// again. A step that fails stops the landing, with the exact steps left to do by hand.
+fn recover(plan: &Plan<'_>, one: &One<'_>, e: &Entry, o: &Orphan<'_>, fx: &dyn Effects) -> Result<(), String> {
+    let (root, remote, base, gone, at) = (plan.root, one.remote, one.base, o.gone, o.at);
+    println!("land: #{} was closed when its base branch {gone} was deleted: pushing {gone} back at {}, reopening it onto {base}", e.mr, short(at));
+    let steps = |from: usize, failed: String| {
+        let left: Vec<String> = recovery_steps(plan.project.github.repo, one, e.mr, gone, at).into_iter().skip(from).collect();
+        format!(
+            "GitHub closed it when the branch it was stacked on, {gone}, was deleted, and {failed}. Recover it by hand ({} and the stack's record are kept), then land again:\n{}",
+            stack::local_branch(e.mr),
+            left.join("\n")
+        )
+    };
+    let refname = format!("refs/heads/{gone}");
+    // The lease: only while the branch is still gone.
+    let lease = format!("--force-with-lease={refname}:");
+    let no_check = plan.project.env_name("CLAIM_CHECK");
+    if !o.back {
+        stack::git_slow(root, &["push", "--quiet", &lease, remote, &format!("{at}:{refname}")], &[(&no_check, "off")])
+            .map_err(|err| steps(0, format!("pushing it back failed ({err})")))?;
+    }
+    fx.reopen(e.mr).map_err(|err| steps(1, format!("reopening #{} failed ({err})", e.mr)))?;
+    fx.retarget(e.mr, base).map_err(|err| steps(2, format!("retargeting #{} onto {base} failed ({err})", e.mr)))?;
+    fx.delete_branch(gone).map_err(|err| steps(3, format!("deleting {gone} again failed ({err})")))?;
+    println!("land: #{} reopened onto {base}; {gone} deleted again", e.mr);
+    Ok(())
+}
+
+/// The steps that recover PR `mr` by hand, closed when `gone` was deleted: push `gone` back at
+/// `at`, reopen it, retarget it onto the stack's base, delete `gone` again, land again.
+fn recovery_steps(repo: &str, one: &One<'_>, mr: u64, gone: &str, at: &str) -> Vec<String> {
+    let (remote, base) = (one.remote, one.base);
+    vec![
+        format!("  1. git push {remote} {at}:refs/heads/{gone}"),
+        format!("  2. gh pr reopen {mr} --repo {repo}"),
+        format!("  3. gh pr edit {mr} --repo {repo} --base {base}"),
+        format!("  4. git push {remote} --delete {gone}"),
+        format!("  5. {}", one.again),
+    ]
+}
+
+/// Step 3's end, before any merge call: every open PR whose base is `e`'s source branch is
+/// retargeted onto the stack's base, the stack's later entries first ([`retarget_order`]), so
+/// GitHub, deleting that branch once it merged, closes none of them (sc#19). A failure stops the
+/// landing, nothing merged.
+fn retarget_stacked(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Result<(), String> {
+    let (src, base) = (&e.source_branch, one.base);
+    let onto = fx.stacked_on(src).map_err(|err| format!("listing the PRs stacked on {src}: {err}; nothing merged"))?;
+    for m in retarget_order(one.later, &onto) {
+        fx.retarget(m, base).map_err(|err| {
+            format!(
+                "retargeting #{m}, stacked on {src}, onto {base}: {err}; nothing merged (merging would close it): `gh pr edit {m} --repo {} --base {base}`, then `{}`",
+                plan.project.github.repo, one.again
+            )
+        })?;
+        println!("land: #{m} retargeted from {src} to {base}: deleting {src} once #{} merges leaves it open", e.mr);
+    }
+    Ok(())
 }
 
 /// Step 1: the tip the push goes over. The recorded pre-rebase tip; or, when a worker pushed since
@@ -778,6 +954,18 @@ impl Effects for Real<'_> {
         }
         github::delete_branch(self.project, branch)
     }
+    fn stacked_on(&self, branch: &str) -> Result<Vec<u64>, String> {
+        Ok(github::numbers(&github::open_prs_onto(self.project, branch)?))
+    }
+    fn retarget(&self, mr: u64, base: &str) -> Result<(), String> {
+        if !stack::valid_branch(base) {
+            return Err(format!("`{base}` is not a branch to retarget onto"));
+        }
+        github::retarget_pr(self.project, mr, base)
+    }
+    fn reopen(&self, mr: u64) -> Result<(), String> {
+        github::reopen_pr(self.project, mr)
+    }
     fn log_merge(&self, issue: u64, mr: u64, sub: &str, note: Option<&str>) -> Result<(), String> {
         let (issue, mr) = (issue.to_string(), mr.to_string());
         let mut args = vec!["merge", "--agent", &self.agent, "--issue", &issue, "--mr", &mr, "--sub", sub];
@@ -982,7 +1170,13 @@ mod tests {
 
     #[test]
     fn waiting_until_it_is_mergeable() {
-        let v = |state: &str, merge_state: &str| MrView { state: state.into(), merge_state: merge_state.into(), sha: "abc".into(), node_id: "PR_1".into() };
+        let v = |state: &str, merge_state: &str| MrView {
+            state: state.into(),
+            merge_state: merge_state.into(),
+            sha: "abc".into(),
+            node_id: "PR_1".into(),
+            base: "main".into(),
+        };
         assert_eq!(wait_state(&v("open", "clean")), Wait::Ready);
         assert_eq!(wait_state(&v("open", "unstable")), Wait::Ready, "a cancelled check that isn't required");
         assert_eq!(wait_state(&v("open", "unknown")), Wait::Again);
@@ -992,8 +1186,8 @@ mod tests {
         assert!(matches!(wait_state(&v("open", "dirty")), Wait::Stuck(w) if w.contains("conflicts")));
         assert!(matches!(wait_state(&v("open", "blocked")), Wait::Stuck(w) if w.contains("branch protection")));
         assert!(matches!(wait_state(&v("closed", "")), Wait::Stuck(w) if w.contains("closed")));
-        let parsed = parse_view(&json!({"number": 1, "state": "open", "merge_state": "clean", "head_sha": "f00", "node_id": "PR_9"}));
-        assert_eq!(parsed, MrView { state: "open".into(), merge_state: "clean".into(), sha: "f00".into(), node_id: "PR_9".into() });
+        let parsed = parse_view(&json!({"number": 1, "state": "open", "merge_state": "clean", "head_sha": "f00", "node_id": "PR_9", "base_ref": "128-x"}));
+        assert_eq!(parsed, MrView { state: "open".into(), merge_state: "clean".into(), sha: "f00".into(), node_id: "PR_9".into(), base: "128-x".into() });
     }
 
     #[test]
@@ -1201,6 +1395,14 @@ mod tests {
         refuse_rebase: std::collections::BTreeSet<u64>,
         /// Merges refused before one takes.
         refuse_merges: RefCell<u32>,
+        /// Each PR's base branch, as GitHub has it (`main` when not named).
+        bases: RefCell<std::collections::BTreeMap<u64, String>>,
+        /// PRs closed without merging: GitHub closes an open PR whose base branch is deleted.
+        closed: RefCell<std::collections::BTreeSet<u64>>,
+        /// A deleted branch goes from `origin` too (as GitHub's would).
+        deletes: bool,
+        /// GitHub refuses to reopen a PR.
+        refuse_reopen: bool,
     }
 
     impl Fake {
@@ -1214,7 +1416,17 @@ mod tests {
                 checking: RefCell::new(1),
                 refuse_rebase: std::collections::BTreeSet::new(),
                 refuse_merges: RefCell::new(0),
+                bases: RefCell::default(),
+                closed: RefCell::default(),
+                deletes: false,
+                refuse_reopen: false,
             }
+        }
+        fn base(&self, mr: u64) -> String {
+            self.bases.borrow().get(&mr).cloned().unwrap_or_else(|| "main".into())
+        }
+        fn on_origin(&self, branch: &str) -> bool {
+            crate::process::git(&self.origin, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], None, &[]).is_ok()
         }
         fn log(&self, s: String) {
             self.calls.borrow_mut().push(s);
@@ -1226,7 +1438,9 @@ mod tests {
 
     impl Effects for Fake {
         fn mr(&self, mr: u64) -> Result<MrView, String> {
-            if let Some(push) = self.during_wait.borrow_mut().take() {
+            // While `land` waits: once it noted the PR.
+            let noted = self.calls.borrow().iter().any(|c| c.starts_with("note"));
+            if let Some(push) = noted.then(|| self.during_wait.borrow_mut().take()).flatten() {
                 push();
             }
             let merged = self.merged.borrow().contains(&mr);
@@ -1242,7 +1456,14 @@ mod tests {
                 "clean"
             };
             self.log(format!("mr {mr}"));
-            Ok(MrView { state: if merged { "merged" } else { "open" }.into(), merge_state: merge_state.into(), sha: head, node_id: format!("PR_{mr}") })
+            let state = if merged {
+                "merged"
+            } else if self.closed.borrow().contains(&mr) {
+                "closed"
+            } else {
+                "open"
+            };
+            Ok(MrView { state: state.into(), merge_state: merge_state.into(), sha: head, node_id: format!("PR_{mr}"), base: self.base(mr) })
         }
         fn note(&self, mr: u64, body: &str) -> Result<(), String> {
             assert!(body.contains("CI summary"), "{body}");
@@ -1272,6 +1493,33 @@ mod tests {
         }
         fn delete_branch(&self, branch: &str) -> Result<(), String> {
             self.log(format!("delete {branch}"));
+            let merged = self.merged.borrow().clone();
+            let orphans: Vec<u64> = self.bases.borrow().iter().filter(|(m, b)| *b == branch && !merged.contains(m)).map(|(m, _)| *m).collect();
+            self.closed.borrow_mut().extend(orphans);
+            if self.deletes {
+                tgit(&self.origin, &["update-ref", "-d", &format!("refs/heads/{branch}")]);
+            }
+            Ok(())
+        }
+        fn stacked_on(&self, branch: &str) -> Result<Vec<u64>, String> {
+            self.log(format!("stacked on {branch}"));
+            let (merged, closed) = (self.merged.borrow(), self.closed.borrow());
+            Ok(self.bases.borrow().iter().filter(|(m, b)| *b == branch && !merged.contains(m) && !closed.contains(m)).map(|(m, _)| *m).collect())
+        }
+        fn retarget(&self, mr: u64, base: &str) -> Result<(), String> {
+            if self.closed.borrow().contains(&mr) {
+                return Err("gh api repos/o/r/pulls/2: Cannot change the base branch of a closed pull request. (HTTP 422)".into());
+            }
+            self.log(format!("retarget {mr} {base}"));
+            self.bases.borrow_mut().insert(mr, base.to_owned());
+            Ok(())
+        }
+        fn reopen(&self, mr: u64) -> Result<(), String> {
+            if self.refuse_reopen || !self.on_origin(&self.base(mr)) {
+                return Err("gh api repos/o/r/pulls/2: Validation Failed: state cannot be changed. (HTTP 422)".into());
+            }
+            self.log(format!("reopen {mr}"));
+            self.closed.borrow_mut().remove(&mr);
             Ok(())
         }
         fn log_merge(&self, issue: u64, mr: u64, sub: &str, note: Option<&str>) -> Result<(), String> {
@@ -1602,7 +1850,7 @@ mod tests {
         let e = land(&plan, &mut stack, &[1], &fake).unwrap_err();
         assert!(e.contains("the push didn't land") && e.contains("not merging"), "{e}");
         assert_eq!(origin_tip(&w, "1-one"), before);
-        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+        assert_eq!(fake.calls(), ["mr 1"], "only whether it is closed was asked");
     }
 
     /// A stack the gate didn't test, or a stacked branch moved since, never lands.
@@ -1624,6 +1872,137 @@ mod tests {
         assert_eq!((origin_tip(&w, "1-one"), origin_tip(&w, "2-two")), before, "nothing pushed");
         assert!(fake.calls().is_empty(), "{:?}", fake.calls());
         assert_eq!(stack::load(&P, &w.coord).unwrap().entries.len(), 2);
+    }
+
+    /// sc#19: which closed PR `land` reopens, and in what order it retargets.
+    #[test]
+    fn only_a_pr_closed_by_its_bases_deletion_is_reopened() {
+        let v = |state: &str, base: &str| MrView { state: state.into(), base: base.into(), ..MrView::default() };
+        let never = |_: &str| -> Result<Option<String>, String> { panic!("asked the remote for a PR that isn't closed on another base") };
+        assert_eq!(closed(&v("open", "128-x"), "main", "at", never), Ok(Closed::No));
+        assert_eq!(closed(&v("merged", "128-x"), "main", "at", never), Ok(Closed::No));
+        assert_eq!(closed(&v("closed", "main"), "main", "at", never), Ok(Closed::ByHand), "closed on main: by hand");
+        assert_eq!(closed(&v("closed", ""), "main", "at", never), Ok(Closed::ByHand));
+        assert_eq!(closed(&v("closed", "-x"), "main", "at", never), Ok(Closed::ByHand), "not a branch to push");
+        let tip = |t: Option<&'static str>| {
+            move |b: &str| {
+                assert_eq!(b, "128-x");
+                Ok(t.map(str::to_owned))
+            }
+        };
+        let deleted = |back| Ok(Closed::BaseDeleted { branch: "128-x".into(), back });
+        assert_eq!(closed(&v("closed", "128-x"), "main", "at", tip(None)), deleted(false));
+        assert_eq!(closed(&v("closed", "128-x"), "main", "at", tip(Some("at"))), deleted(true), "land pushed it back, then stopped");
+        assert_eq!(closed(&v("closed", "128-x"), "main", "at", tip(Some("other"))), Ok(Closed::ByHand), "its base is still there");
+        assert_eq!(closed(&v("closed", "128-x"), "main", "at", |_| Err("ls-remote".into())), Err("ls-remote".into()));
+        // The stack's later entries first, in its order; then the rest; a later entry on another base isn't.
+        assert_eq!(retarget_order(&[130, 131], &[140, 131, 130, 135]), [130, 131, 135, 140]);
+        assert_eq!(retarget_order(&[130, 131], &[131]), [131]);
+        assert!(retarget_order(&[130], &[]).is_empty());
+    }
+
+    /// The fake's world with #2's base branch #1's (as a PR stacked on another is opened), and
+    /// GitHub deleting a branch from `origin`; #7, outside the stack, on it too when `other`.
+    fn stacked_on_one(name: &str, other: bool) -> (World, Stack, Fake) {
+        let (w, stack) = world(name, false);
+        let mut fake = Fake::new(&w, true);
+        fake.deletes = true;
+        fake.bases.borrow_mut().insert(2, "1-one".into());
+        if other {
+            fake.bases.borrow_mut().insert(7, "1-one".into());
+        }
+        (w, stack, fake)
+    }
+
+    /// sc#19: #2's base is #1's branch. Before #1 merges, `land` retargets #2 (and any other PR
+    /// on that branch, after the stack's) onto `main`, so deleting #1's branch closes nothing.
+    #[test]
+    fn a_pr_stacked_on_another_is_retargeted_before_that_one_merges() {
+        let (w, mut stack, fake) = stacked_on_one("retarget", true);
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        assert_eq!(land(&plan, &mut stack, &[1, 2], &fake).unwrap(), vec![1, 2]);
+        let calls = fake.calls();
+        let at = |c: &str| calls.iter().position(|x| x == c).unwrap_or_else(|| panic!("no `{c}` in {calls:#?}"));
+        let merge1 = calls.iter().position(|c| c.starts_with("merge 1")).unwrap();
+        assert!(at("stacked on 1-one") < at("retarget 2 main") && at("retarget 2 main") < at("retarget 7 main"), "{calls:#?}");
+        assert!(at("retarget 7 main") < merge1 && merge1 < at("delete 1-one"), "{calls:#?}");
+        assert!(!calls.iter().any(|c| c.starts_with("reopen")), "{calls:#?}");
+        assert!(fake.closed.borrow().is_empty(), "nothing closed");
+        assert_eq!(fake.base(2), "main");
+        assert!(!fake.on_origin("1-one") && !fake.on_origin("2-two"));
+    }
+
+    /// The old way: #1 merged and its branch deleted before #2 was retargeted, so GitHub closed
+    /// #2 (sc#19). Simulates `land 1 2` stopping at #2, with the record holding #2 alone.
+    fn orphaned(name: &str) -> (World, Stack, Fake) {
+        let (w, mut stack, fake) = stacked_on_one(name, false);
+        fake.merged.borrow_mut().insert(1);
+        fake.delete_branch("1-one").unwrap();
+        fake.calls.borrow_mut().clear();
+        assert!(fake.closed.borrow().contains(&2) && !fake.on_origin("1-one"));
+        stack.entries.remove(0);
+        stack::save(&P, &w.coord, &stack).unwrap();
+        (w, stack, fake)
+    }
+
+    /// sc#19: a PR GitHub already closed that way is recovered before anything is pushed: its
+    /// base branch pushed back from the record, the PR reopened, retargeted onto `main`, the branch
+    /// deleted again; then it lands.
+    #[test]
+    fn a_pr_closed_when_its_base_went_is_reopened_and_lands() {
+        let (w, mut stack, fake) = orphaned("reopen");
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        assert_eq!(land(&plan, &mut stack, &[2], &fake).unwrap(), vec![2]);
+        let calls = fake.calls();
+        assert_eq!(calls[..5], ["mr 2", "reopen 2", "retarget 2 main", "delete 1-one", "note 2"], "{calls:#?}");
+        assert!(calls.iter().any(|c| c.starts_with("merge 2")) && calls.contains(&"delete 2-two".to_owned()), "{calls:#?}");
+        assert!(!fake.on_origin("1-one"), "deleted again");
+        assert_eq!(calls.last().unwrap(), "gate --stop gate-9 merged #2");
+    }
+
+    /// sc#19: when the recovery fails, `land` stops with the steps left, pushes nothing to the
+    /// PR's branch, and keeps `s-<pr>` and the record for the rerun. A PR closed by hand is never
+    /// reopened.
+    #[test]
+    fn a_closed_pr_that_cant_be_reopened_stops_with_the_steps_and_keeps_its_branch() {
+        let (w, mut stack, mut fake) = orphaned("unreopened");
+        fake.refuse_reopen = true;
+        let before = origin_tip(&w, "2-two");
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        let e = land(&plan, &mut stack, &[2], &fake).unwrap_err();
+        assert!(e.contains("#2 stopped") && e.contains("1-one, was deleted") && e.contains("reopening #2 failed"), "{e}");
+        assert!(e.contains("s-2 and the stack's record are kept"), "{e}");
+        for step in [
+            "  2. gh pr reopen 2 --repo example/app-swarm",
+            "  3. gh pr edit 2 --repo example/app-swarm --base main",
+            "  4. git push origin --delete 1-one",
+            "  5. cargo xtask land 2 --sub gate-9",
+        ] {
+            assert!(e.contains(step), "no `{step}` in {e}");
+        }
+        assert!(!e.contains("1. git push"), "its base is pushed back already: {e}");
+        assert_eq!(origin_tip(&w, "1-one"), stack.entries[0].onto, "pushed back at what #2 was stacked onto");
+        assert_eq!(origin_tip(&w, "2-two"), before, "nothing pushed to a closed PR's branch");
+        assert!(!fake.calls().iter().any(|c| c.starts_with("merge") || c.starts_with("delete")), "{:?}", fake.calls());
+        tgit(&w.coord, &["rev-parse", "--verify", "--quiet", "refs/heads/s-2"]);
+        assert_eq!(stack::load(&P, &w.coord).unwrap().entries.len(), 1);
+        // A rerun once it reopens goes on: the base is back, so no push again.
+        fake.refuse_reopen = false;
+        assert_eq!(land(&plan, &mut stack, &[2], &fake).unwrap(), vec![2]);
+
+        // Closed by hand, on main: stops, nothing pushed or reopened.
+        let (w, mut stack) = world("by-hand", false);
+        let fake = Fake::new(&w, true);
+        fake.closed.borrow_mut().insert(1);
+        let before = origin_tip(&w, "1-one");
+        let plan = Plan { root: &w.coord, tested: &top(&stack), ..plan };
+        let e = land(&plan, &mut stack, &[1, 2], &fake).unwrap_err();
+        assert!(e.contains("#1 stopped") && e.contains("not by the deletion") && e.contains("s-1 and the stack's record are kept"), "{e}");
+        assert_eq!(fake.calls(), ["mr 1"]);
+        assert_eq!(origin_tip(&w, "1-one"), before);
     }
 
     #[test]

@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (a PR readied with `--no-ci` is gated with `ci --changed`) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (`land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -551,13 +551,24 @@ On each finished pull request:
       (<how>): landing`, where `<how>` says whether it was restacked or the worker's own commit
       is that tree already, and the stacked commit is pushed over the worker's. A move onto a newer `main`, or
       to another tree (a new commit, a conflict), stops as before. An older record names
-      no base to restack onto, so a moved branch in it stops;
+      no base to restack onto, so a moved branch in it stops. And the PR must be open: GitHub
+      closes a PR whose base branch is deleted, so one stacked on the PR below it (its base that
+      PR's head branch) was closed when that one merged, before `land` retargeted (on 2026-11-03
+      a swarm's `land 129 130` merged #129, GitHub closed #130, and the way out was by hand).
+      Before pushing anything to it, `land` pushes that base branch back (at what the stack's
+      record put the PR on), reopens the PR, retargets it onto `main` and deletes the branch
+      again; when a step fails it stops with the exact steps left (`git push`, `gh pr reopen`,
+      `gh pr edit --base main`, `git push --delete`, then the `land` to run again). A PR closed
+      any other way stops. Either way `s-<pr>` and the record stay until the PR lands;
    2. it force-pushes `s-<pr>` and checks the remote branch is that commit (on
       2026-10-19 a PR merged without its fix, whose push hadn't landed); a push that didn't
       land is tried again, three times in all;
    3. it notes the gate's `CI summary` on the PR (from that log; `--summary` to pass one),
       and refuses a summary that isn't a pass; then it cancels the workflow runs of the PR's head
-      still queued or running, which the gate replaced;
+      still queued or running, which the gate replaced. Then it retargets onto `main` every open
+      PR whose base is this PR's source branch (`gh pr edit <n> --base main`), the stack's later
+      PRs first, so deleting that branch once it merged closes none of them; a retarget that fails
+      stops it before the merge;
    4. it waits until the PR is mergeable; one `behind` `main` is rebased on the server, and a
       branch the server can't rebase (merge commits), or one `stack` merged its base into, gets
       `main` merged in and pushed instead (semi-linear history needs `main`'s head);
@@ -1047,6 +1058,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | The land step: before a PR merges, `land` retargets onto `main` every open PR whose base is its branch, so GitHub deleting that branch closes none; a PR already closed that way gets its base branch pushed back, is reopened, retargeted and the branch deleted again, or `land` stops with the steps; `s-<pr>` stays until the PR lands (mornycorp/swarm-core#19) |
 | 2026-11-04 | minor | Picking work › Finish and The coordinator's loop: `ready --no-ci` notes `no-ci` on its `submit`, and the gate runs a stack holding such a PR as the **changed** kind (`ci --changed --base origin/main`) instead of the smoke, its note naming the PRs (sc#18) |
 | 2026-11-03 | minor | Watching your PRs and Tracking: `prwatch` says when your PR is sent back (a `sendback`, or a gate failing for the change's cause) and logs your `work --issue <n> --mr <m>` once, so the rework's start is on the timeline; log it yourself if no command did; a question logs nothing (mornycorp/swarm-core#14) |
 | 2026-11-02 | minor | A failed `ready` check's `sub.stop` says why, as the gate's does: `rc=<n>; cause=<cause>; step=<the failing ci step>` (was `rc=1`) |
