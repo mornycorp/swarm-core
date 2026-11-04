@@ -17,10 +17,12 @@
 //!   skipped its author's run is the **changed** gate instead (`ci --changed`, [`untested`]).
 //! - **Takes the machine-wide gate lock** both swarms share ([`crate::machine_lock`]) when its kind
 //!   builds ([`Kind::takes_machine_lock`]: not a docs gate, whose notes say
-//!   `machineLock=skipped`), then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits
-//!   for each, else it refuses (keeping the gate lock). It holds the machine lock until its `ci`
-//!   ends; its `ci` gets `CARGO_BUILD_JOBS` from the free memory it saw unless the environment
-//!   sets it.
+//!   `machineLock=skipped`), then a test-run slot ([`Kind::takes_test_slot`],
+//!   [`crate::test_runs`]: how many test runs go at once on the machine, `ready`'s among them),
+//!   then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits for each, else it refuses
+//!   (keeping the gate lock). That order, never another, so nothing deadlocks. It holds the machine
+//!   lock and the slot until its `ci` ends; its `ci` gets `CARGO_BUILD_JOBS` from the free memory
+//!   it saw unless the environment sets it.
 //! - **Logs `sub.start --name gate`** with the capacity it saw and its kind ([`kind_field`]), and
 //!   runs the consumer's `cargo xtask ci` (the `ci` contract, docs/ci-contract.md) with this
 //!   xtask's own exe, through [`Hooks::around_ci`] (a project's Python and its GPU lease, say). The
@@ -56,7 +58,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::stack::{self, Stack, short};
-use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock};
+use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock, test_runs};
 
 pub mod rerun;
 pub mod silent;
@@ -243,6 +245,12 @@ impl Kind {
     /// two gates' builds from filling memory together, so only the kinds that [build](Kind::builds)
     /// take it; a docs gate never waits behind the other swarm's full gate.
     pub fn takes_machine_lock(self) -> bool {
+        self.builds()
+    }
+
+    /// Does this gate hold one of the machine's test-run slots while its `ci` runs
+    /// ([`crate::test_runs`])? Only the kinds that [build](Kind::builds): a docs gate runs no tests.
+    pub fn takes_test_slot(self) -> bool {
         self.builds()
     }
 
@@ -560,24 +568,29 @@ fn capacity_for_gate(root: &Path, target: &Path, wait: bool) -> Result<Seen, Str
     }
 }
 
-/// The machine for one build of a `kind` gate: the machine-wide gate lock when the kind takes it
-/// ([`Kind::takes_machine_lock`]), then capacity when it waits for it
-/// ([`Kind::waits_for_capacity`]), each at once or, with `wait`, once it is free. The lock's guard
-/// (none for a docs gate) and the capacity seen (a docs gate's as it is now).
-pub fn room_to_build(
-    project: &Project,
-    agent: &str,
-    root: &Path,
-    target: &Path,
-    wait: bool,
-    kind: Kind,
-) -> Result<(Option<machine_lock::Guard>, Seen), String> {
+/// The machine for one run of a gate: the machine-wide gate lock and a test-run slot, held until
+/// it goes out of scope (none for a docs gate), and the capacity seen.
+#[derive(Debug)]
+pub struct Room {
+    pub machine: Option<machine_lock::Guard>,
+    pub slot: Option<test_runs::Guard>,
+    pub seen: Seen,
+}
+
+/// The machine for one build of a `kind` gate by `agent`, running `what` (its sub): the
+/// machine-wide gate lock when the kind takes it ([`Kind::takes_machine_lock`]), then a test-run
+/// slot ([`Kind::takes_test_slot`]), then capacity when it waits for it
+/// ([`Kind::waits_for_capacity`]; the gate's own slot isn't counted), each at once or, with
+/// `wait`, once it is free. Always in that order: nothing waits for the machine lock while it
+/// holds a slot, so a gate and a `ready` never wait for each other (docs/swarm-protocol.md).
+pub fn room_to_build(project: &Project, (agent, what): (&str, &str), root: &Path, target: &Path, wait: bool, kind: Kind) -> Result<Room, String> {
     let machine = if kind.takes_machine_lock() {
         Some(machine_lock::take(project, agent, root, wait)?)
     } else {
         println!("gate: the machine gate lock is skipped: a {} gate builds no product crate", kind.name());
         None
     };
+    let slot = if kind.takes_test_slot() { Some(test_runs::take(project, agent, root, what, wait, "gate")?) } else { None };
     let seen = if kind.waits_for_capacity() {
         capacity_for_gate(root, target, wait)?
     } else {
@@ -587,7 +600,7 @@ pub fn room_to_build(
         }
         (more, free)
     };
-    Ok((machine, seen))
+    Ok(Room { machine, slot, seen })
 }
 
 /// The `CARGO_BUILD_JOBS` gate `sub` sets from `free` memory ([`machine_lock::build_jobs`]), said
@@ -864,18 +877,18 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     };
     // Held until the run ends: dropped on every way out, pass, failure or error.
     let (rc, cause) = {
-        let (_machine, seen) = room_to_build(project, &agent, root, &target, o.wait, kind).map_err(lock_kept)?;
+        let room = room_to_build(project, (&agent, &sub), root, &target, o.wait, kind).map_err(lock_kept)?;
         silent::record(&logs, &sub, &gated);
-        attempt(&g, &sub, Some(&start), seen)?
+        attempt(&g, &sub, Some(&start), room.seen)?
     };
     let (sub, rc) = match cause {
         Some(c) if o.retry && c.transient() => {
             let rerun = format!("{sub}-rerun");
             event::check_id(&rerun)?;
             println!("gate: rerunning once as {rerun} (cause {})", c.name());
-            let (_machine, seen) = room_to_build(project, &agent, root, &target, true, kind).map_err(lock_kept)?;
+            let room = room_to_build(project, (&agent, &rerun), root, &target, true, kind).map_err(lock_kept)?;
             silent::record(&logs, &rerun, &gated);
-            let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), seen)?;
+            let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), room.seen)?;
             (rerun, rc)
         }
         _ => (sub, rc),
@@ -950,9 +963,9 @@ fn rerun_failed(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str, 
         rerun: Some(&plan),
         program: &program,
     };
-    let (_machine, seen) = room_to_build(project, agent, root, &target, o.wait, plan.kind).map_err(lock_kept)?;
+    let room = room_to_build(project, (agent, &sub), root, &target, o.wait, plan.kind).map_err(lock_kept)?;
     silent::record(&target.join(LOG_DIR), &sub, &silent::gated(project, root, &[], &head));
-    let (rc, _) = attempt(&g, &sub, Some(&note), seen)?;
+    let (rc, _) = attempt(&g, &sub, Some(&note), room.seen)?;
     finish(&sub, rc)
 }
 
@@ -986,12 +999,12 @@ pub fn full_attempt_with(project: &Project, hooks: &dyn Hooks, a: &fullgate::Att
         program,
     };
     let (rc, cause) = {
-        let (_machine, seen) = room_to_build(project, a.agent, a.checkout, a.target, true, Kind::Full)?;
+        let room = room_to_build(project, (a.agent, a.sub), a.checkout, a.target, true, Kind::Full)?;
         if let Some(what) = a.start {
-            let note = fullgate::start_note(what, seen.0, seen.1, a.commit, None);
+            let note = fullgate::start_note(what, room.seen.0, room.seen.1, a.commit, None);
             log_event(project, a.checkout, &["sub.start", "--agent", a.agent, "--sub", a.sub, "--name", "gate", "--note", &note]);
         }
-        attempt(&g, a.sub, None, seen)?
+        attempt(&g, a.sub, None, room.seen)?
     };
     Ok(ran_from_records(project, &logs, a.sub, a.commit, rc, cause))
 }
@@ -1089,7 +1102,12 @@ mod tests {
         assert_eq!(taking, ["tooling", "smoke", "changed", "full"]);
         let waiting: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.waits_for_capacity()).map(Kind::name).collect();
         assert_eq!(waiting, ["tooling", "smoke", "changed", "full"]);
-        assert!(Kind::ALL.into_iter().all(|k| k.takes_machine_lock() == k.builds() && k.waits_for_capacity() == k.builds()), "one rule decides both");
+        let slotted: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.takes_test_slot()).map(Kind::name).collect();
+        assert_eq!(slotted, ["tooling", "smoke", "changed", "full"], "the changed kind runs ci --changed's tests: it takes a test-run slot");
+        assert!(
+            Kind::ALL.into_iter().all(|k| k.takes_machine_lock() == k.builds() && k.takes_test_slot() == k.builds() && k.waits_for_capacity() == k.builds()),
+            "one rule decides the lock, the test-run slot and the capacity"
+        );
         assert_eq!((Kind::Docs.lock_note(), Kind::Full.lock_note()), ("; machineLock=skipped", ""));
     }
 

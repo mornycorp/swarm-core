@@ -42,6 +42,7 @@ pub mod ready;
 pub mod stack;
 pub mod takeover;
 pub mod templates;
+pub mod test_runs;
 pub mod tidy;
 pub mod time;
 

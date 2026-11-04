@@ -25,7 +25,11 @@
 //!    Its log, `.rc` record and junit file are kept as `<target>/gate-logs/ready-<head>.*`. A
 //!    failure that is only failed tests is rerun once, each test alone, then the doctests and the
 //!    steps it skipped, as `ready-<head>-rerun`; a pass goes on to step 4
-//!    (mornycorp/swarm-core#14, [`own_gate`]).
+//!    (mornycorp/swarm-core#14, [`own_gate`]). Each gate (its rerun with it) holds one of the
+//!    machine's test-run slots ([`crate::test_runs`]), waited for, whichever swarm holds them,
+//!    unless the project's planner ([`Hooks::gate_kind`]) says the change is docs: on 2026-11-03 a
+//!    `ready` and a periodic full gate tested at once and locked up a 24 GB Mac
+//!    (mornycorp/swarm-core#17).
 //! 4. **Check the base once more**: the gate takes minutes, and a PR merged
 //!    meanwhile makes the branch stale before it is pushed. So it fetches again; when the base
 //!    moved, it rebases once more. Clean, with the PR's own diff unchanged (`git patch-id` of
@@ -51,7 +55,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::claim::issue_of_branch;
-use crate::{Hooks, Project, capacity, event, gate, github};
+use crate::{Hooks, Project, capacity, event, gate, github, test_runs};
 
 pub mod own_gate;
 
@@ -207,11 +211,25 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         let mut log = |args: &[&str]| log_event(project, root, args);
         // Each gate is named for the HEAD it tests: a second one, after the base moved, is its own.
         gated_push(root, &base, &mut || {
+            let _slot = test_slot(project, hooks, root, &o.agent)?;
             reran.extend(g.run(&mut log)?);
             Ok(())
         })?;
     }
     submit(project, root, &o, &mr, &reran)
+}
+
+/// One of the machine's test-run slots for the gate of the tree at `root`, waited for
+/// ([`test_runs::take`]); none when the project's planner says the change is docs, which runs no
+/// tests. `ready` holds no other lock, so its wait never holds up a gate's.
+fn test_slot(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str) -> Result<Option<test_runs::Guard>, String> {
+    let (kind, why) = hooks.gate_kind(root);
+    if !kind.takes_test_slot() {
+        println!("ready: no test-run slot: a {} change ({why}) runs no tests", kind.name());
+        return Ok(None);
+    }
+    let what = own_gate::sub_of(&rev(root, "HEAD")?);
+    test_runs::take(project, agent, root, &what, true, "ready").map(Some)
 }
 
 /// Log an event (AGENTS.md › Tracking): never fails `ready`; offline, it queues.
