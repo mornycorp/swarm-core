@@ -57,9 +57,24 @@ impl Ref {
     }
 }
 
+/// The words that start a `Needs` line.
+const NEEDS_WORDS: &[&str] = &["needs", "depends on", "blocked by"];
+
+/// The words that start a line saying why an issue is on hold (`Blocked on owner/repo#194 (…).`):
+/// a `Needs` line's, and those a blocked comment uses.
+const HOLD_WORDS: &[&str] = &["needs", "depends on", "blocked by", "blocked on", "waits on", "waiting on", "waits for", "waiting for"];
+
 /// The issues `description` needs, as written: another project's with its path.
 pub fn parse(description: &str) -> BTreeSet<Ref> {
-    description.lines().filter_map(clause).flat_map(refs).take(MAX_NEEDS).collect()
+    description.lines().filter_map(|l| clause(l, NEEDS_WORDS)).flat_map(refs).take(MAX_NEEDS).collect()
+}
+
+/// The issues a comment putting an issue on hold names as the hold's cause, read by `project`
+/// (its own path is its own issue): each line's first clause after `Blocked on`, `Blocked by`,
+/// `Waiting for`, `Needs` or `Depends on`. `Blocked on mornycorp/swarm-timeline#194 (the fix is
+/// the widget's). Once #194 merges…` names only `mornycorp/swarm-timeline#194`.
+pub fn parse_hold_for(project: &Project, text: &str) -> BTreeSet<Ref> {
+    text.lines().filter_map(|l| clause(l, HOLD_WORDS)).flat_map(refs).take(MAX_NEEDS).map(|r| own(project, r)).collect()
 }
 
 /// The issues `description` needs, read by `project`: its own path is its own issue.
@@ -75,13 +90,13 @@ fn own(project: &Project, r: Ref) -> Ref {
     }
 }
 
-/// A `Needs` line's first clause, after the word: `None` for any other line.
-fn clause(line: &str) -> Option<&str> {
+/// A line's first clause after one of `words` (a `Needs` line's): `None` for any other line.
+fn clause<'a>(line: &'a str, words: &[&str]) -> Option<&'a str> {
     let cut = (0..=line.len().min(MAX_LINE)).rev().find(|&k| line.is_char_boundary(k)).unwrap_or(0);
     let line = line.get(..cut)?;
     let bare = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '>' | '_'));
     let lower = bare.to_ascii_lowercase();
-    let word = ["needs", "depends on", "blocked by"].into_iter().find(|w| lower.starts_with(w))?;
+    let word = words.iter().find(|w| lower.starts_with(**w))?;
     let rest = bare.get(word.len()..)?;
     let end = rest
         .char_indices()
@@ -297,6 +312,18 @@ mod tests {
 
     fn set(v: &[u64]) -> BTreeSet<Ref> {
         v.iter().copied().map(Ref::here).collect()
+    }
+
+    /// A hold's comment names its cause with words a `Needs` line doesn't use; a description's
+    /// needs read as they did.
+    #[test]
+    fn a_holds_cause_is_read_from_its_comment() {
+        for project in BOTH {
+            let own = format!("Blocked on {}#7 (the fix). Once #8 lands, go on.\nWaiting for #9; then #10.", project.github.repo);
+            assert_eq!(parse_hold_for(&project, &own), set(&[7, 9]), "{}", project.name);
+            assert!(parse(&own).is_empty(), "`Blocked on` and `Waiting for` aren't a Needs line");
+            assert_eq!(parse_hold_for(&project, "Needs #3."), set(&[3]));
+        }
     }
 
     fn by(v: &[u64]) -> BTreeSet<u64> {

@@ -40,6 +40,7 @@ pub mod project;
 pub mod prwatch;
 pub mod ready;
 pub mod stack;
+pub mod takeover;
 pub mod templates;
 pub mod tidy;
 pub mod time;

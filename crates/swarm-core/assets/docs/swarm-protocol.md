@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (`land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (`claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -205,8 +205,25 @@ request. Always pass `--repo {{github.repo}}` to gh.
      issue (`gh pr list --repo {{github.repo}} --search "<n> in:title,body"`), push a first commit
      on the branch, `gh pr create --repo {{github.repo}} --draft --title "<summary> (#<n>)"
      --body "Closes #<n>"`, label, comment, `cargo xtask event claim`.
-3. **Taking over.** `--force` claims an issue someone else holds. Use it only for a claim that
-   step 6's 24-hour rule makes stale, after a comment on the issue.
+3. **Taking over.** A claim is stale, and may be taken over, only when the coordinator says so
+   or it has been idle for 24 hours. The coordinator's say-so is
+   `cargo xtask event release --issue <n> --of <the holder's instance> --reason stale` (or a
+   `released: <name>, …` comment), with a comment naming who takes it over. Idle means no event of
+   its holder on the issue, no claim comment and no commit on its branch for 24 hours (step 6).
+   - `cargo xtask claim <n> --agent <your instance id> --take-over` takes it and keeps its work:
+     it adopts the issue's open PR and its branch, and checks out the branch's head in your
+     worktree with the commits kept. It logs `release --of <the old instance>` (unless that holder
+     is released already), comments `released: <old name>, taken over by …`, and makes the claim:
+     the label, `claimed: <your name>, PR #<m>`, `claim` and `work`. It runs no periodic full gate.
+   - A `status::blocked` label comes off when every issue its hold waits on is closed: those the
+     `Needs` line names, and the newest comment saying `Blocked on …` or `Waiting for …`.
+     Otherwise it stays, and the takeover says why. A held issue is idle by design: an idle
+     claim on one whose cause may remain is taken over only on the coordinator's say-so.
+   - It refuses a claim that isn't stale, naming its holder and when it was last active: ask the
+     coordinator, or wait.
+   - `--force` claims an issue someone else holds on a new branch and PR (a hold lifted by hand,
+     with no work to keep). It never adopts a branch with work on it, and says to use
+     `--take-over`.
 4. **Work in the open.** Push often. Blocked: label `status::blocked` and comment why (a
    `status::blocked` issue is one nobody takes: the claim command refuses it). Needs a
    person: `needs::human`. `cargo xtask ci --changed` warns when another agent holds your
@@ -263,7 +280,8 @@ request. Always pass `--repo {{github.repo}}` to gh.
    at once: a merged base means rebasing what is stacked on it
    ([Watching your PRs](#watching-your-mrs)).
 6. **Give up cleanly.** Comment what you learned, remove `status::in-progress`, close the draft
-   PR. A draft PR with no new commits for 24 hours may be taken over after a comment on the issue.
+   PR. A claim with no activity for 24 hours (no events on the issue, no claim comment, no new
+   commits) may be taken over (step 3).
 
 ## Tracking
 
@@ -704,7 +722,11 @@ On each finished pull request:
 5. **Restock, within capacity:** start a worker only while `cargo xtask capacity` shows room for
    another build, counting its own gate, and at most three per swarm on the owner's desktop. Then: split large issues into tasks one worker can finish in a session; open issues for
    newly unblocked work, with capability labels; update **Current focus**.
-6. **Release stale claims:** a draft PR with no new commits for 24 hours.
+6. **Release stale claims:** a draft PR with no new commits for 24 hours, or one you hand to
+   another worker sooner (its holder gone quiet, what it waited on landed):
+   `release --issue <n> --of <its instance> --reason stale` (step 8), and a comment naming who
+   takes it over. That worker's `cargo xtask claim <n> --take-over` keeps the PR and its branch
+   ([Picking work](#picking-work), step 3).
 7. **Claim its own work:** `cargo xtask claim <n> --agent <its instance> --no-pr` (the label, the
    comment `claimed: coordinator` and the claim event, refused when another agent holds it)
    before starting it, however small. **While it merges,** its claims add `--no-fullgate`.
@@ -1058,6 +1080,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Picking work › Taking over: a claim is stale on the coordinator's say-so (`release --of`, or a `released:` comment) or after 24 hours with no events, comments or commits; `claim <n> --take-over` adopts its PR and branch with their commits, logs `release --of` the old holder, comments the release and the claim, and takes `status::blocked` off when everything its hold waits on is closed; `--force` names `--take-over` for a branch with work on it; the coordinator's step 6 hands a stale claim over so (mornycorp/swarm-core#16) |
 | 2026-11-04 | minor | The land step: before a PR merges, `land` retargets onto `main` every open PR whose base is its branch, so GitHub deleting that branch closes none; a PR already closed that way gets its base branch pushed back, is reopened, retargeted and the branch deleted again, or `land` stops with the steps; `s-<pr>` stays until the PR lands (mornycorp/swarm-core#19) |
 | 2026-11-04 | minor | Picking work › Finish and The coordinator's loop: `ready --no-ci` notes `no-ci` on its `submit`, and the gate runs a stack holding such a PR as the **changed** kind (`ci --changed --base origin/main`) instead of the smoke, its note naming the PRs (sc#18) |
 | 2026-11-03 | minor | Watching your PRs and Tracking: `prwatch` says when your PR is sent back (a `sendback`, or a gate failing for the change's cause) and logs your `work --issue <n> --mr <m>` once, so the rework's start is on the timeline; log it yourself if no command did; a question logs nothing (mornycorp/swarm-core#14) |

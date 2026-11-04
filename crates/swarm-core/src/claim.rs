@@ -20,6 +20,9 @@
 //! - **A hold:** an issue labelled `status::blocked` is refused: a coordinator or the owner
 //!   holds work with that label and a comment saying why. `--force` takes it once the hold is
 //!   lifted by hand.
+//! - **A takeover:** `--take-over` adopts a stale claim's branch and PR, its commits kept
+//!   ([`crate::takeover`]): when the coordinator released the claim, or it has been idle for
+//!   [`LIVE_SECS`]. `--force` never adopts a branch with work on it, and says to use it.
 //! - **The periodic full gate**: on a machine that runs it
 //!   ([`crate::fullgate::capable`]) with room for a build, a claim runs the full gate of `main`
 //!   when it is due, **after** it holds the issue ([`plan`]: on 2026-10-22 an
@@ -57,12 +60,13 @@ use crate::{github, needs};
 pub const LIVE_SECS: i64 = 24 * 3600;
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
-pub const USAGE: &str = "cargo xtask claim <issue> --agent <instance> [--name <agent name>] [--slug <s>] [--no-pr] [--no-switch] [--no-fullgate] [--force] | --check [--strict] [--branch <b>]";
+pub const USAGE: &str = "cargo xtask claim <issue> --agent <instance> [--name <agent name>] [--slug <s>] [--no-pr] [--no-switch] [--no-fullgate] [--force] [--take-over] | --check [--strict] [--branch <b>]";
 
 /// The whole usage, for `project`.
 fn usage(project: &Project) -> String {
     format!(
         "usage: cargo xtask claim <issue> [--agent <instance>] [--name <agent name>] [--slug <slug>] [--no-pr] [--no-switch] [--no-fullgate] [--force]
+       cargo xtask claim <issue> --take-over [--agent <instance>] [--name <agent name>] [--no-switch]
        cargo xtask claim --check [--strict] [--branch <branch>] [--agent <instance>] [--name <agent name>]
   --agent    your instance id (`event session.start` prints it; else {})
   --name     your agent name for the claim comment (default: your session.start's name)
@@ -72,7 +76,9 @@ fn usage(project: &Project) -> String {
              primary checkout, switches to the claim's branch)
   --no-fullgate  skip the periodic full gate of main that a machine that can runs when it is
              due, once the issue is held (the coordinator's claims while it merges)
-  --force    claim even though someone holds it (a takeover after the 24-hour rule)
+  --force    claim even though someone holds it, on a new branch and PR (a hold lifted by hand)
+  --take-over  take over a stale claim and keep its branch and PR: when the coordinator released
+             it (`event release --of`), or it has had no activity for 24 hours
   --check    warn when another agent holds the current branch's issue (--strict: fail)",
         project.env_name("AGENT")
     )
@@ -377,7 +383,8 @@ pub struct Me {
 }
 
 impl Me {
-    fn is(&self, instance: &str, name: Option<&str>) -> bool {
+    /// Is the instance `instance` (agent `name`) me: my instance, or my agent name?
+    pub(crate) fn is(&self, instance: &str, name: Option<&str>) -> bool {
         self.instance.as_deref() == Some(instance) || (self.name.is_some() && self.name.as_deref() == name)
     }
 }
@@ -656,8 +663,22 @@ pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
+/// An issue as GitHub and the tracking branch say it is now.
+struct Read {
+    facts: Facts,
+    title: String,
+    state: String,
+    /// Its comments, in [`github`]'s shape.
+    notes: Vec<Value>,
+}
+
 /// Everything GitHub and the tracking branch say about `issue`, and its title and state.
 fn facts(project: &Project, root: &Path, issue: u64) -> Result<(Facts, String, String), String> {
+    read(project, root, issue).map(|r| (r.facts, r.title, r.state))
+}
+
+/// [`facts`], with the issue's comments.
+fn read(project: &Project, root: &Path, issue: u64) -> Result<Read, String> {
     let info = github::issue(project, None, issue)?;
     let text = |k: &str| info.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     let labels = info.get("labels").and_then(Value::as_array).map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_owned)).collect()).unwrap_or_default();
@@ -666,7 +687,7 @@ fn facts(project: &Project, root: &Path, issue: u64) -> Result<(Facts, String, S
     let mrs = prs_for(project, issue)?;
     let claims = active_claims(&notes, &tracked, issue, now());
     let facts = Facts { labels, mrs, claim_note: latest_claim(&notes), claims, tracked, remark: latest_remark(&notes), description: text("body") };
-    Ok((facts, text("title"), text("state")))
+    Ok(Read { facts, title: text("title"), state: text("state"), notes })
 }
 
 /// What `issue` (described by `description`, with its open PRs `open`) needs that is still open, a line each with its PR: none when it needs nothing; one call for this
@@ -745,6 +766,7 @@ struct Opts {
     slug: Option<String>,
     branch: Option<String>,
     force: bool,
+    take_over: bool,
     no_mr: bool,
     no_switch: bool,
     no_fullgate: bool,
@@ -763,6 +785,7 @@ fn parse_args(project: &Project, args: &[&str]) -> Result<Opts, String> {
             "--slug" => o.slug = Some(value(a)?),
             "--branch" => o.branch = Some(value(a)?),
             "--force" => o.force = true,
+            "--take-over" => o.take_over = true,
             "--no-pr" => o.no_mr = true,
             "--no-switch" => o.no_switch = true,
             "--no-fullgate" => o.no_fullgate = true,
@@ -789,13 +812,16 @@ fn parse_args(project: &Project, args: &[&str]) -> Result<Opts, String> {
 pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> Result<(), String> {
     let o = parse_args(project, args)?;
     if o.check {
-        if o.issue.is_some() || o.force || o.no_mr || o.no_switch || o.no_fullgate || o.slug.is_some() {
-            return Err(format!("claim --check takes no issue, --force, --no-pr, --no-switch, --no-fullgate or --slug\n\n{}", usage(project)));
+        if o.issue.is_some() || o.force || o.take_over || o.no_mr || o.no_switch || o.no_fullgate || o.slug.is_some() {
+            return Err(format!("claim --check takes no issue, --force, --take-over, --no-pr, --no-switch, --no-fullgate or --slug\n\n{}", usage(project)));
         }
         return check(project, root, &o);
     }
     if o.strict || o.branch.is_some() {
         return Err(format!("claim: --strict and --branch go with --check\n\n{}", usage(project)));
+    }
+    if o.take_over && (o.no_mr || o.slug.is_some()) {
+        return Err(format!("claim: --take-over keeps the claim's own branch and PR: it takes no --no-pr or --slug\n\n{}", usage(project)));
     }
     claim(&Ctx { project, hooks, root }, &o)
 }
@@ -866,13 +892,16 @@ fn check(project: &Project, root: &Path, o: &Opts) -> Result<(), String> {
 /// itself. Main's colour unknown (GitHub can't say): a warning, and the claim goes ahead.
 fn check_holds(project: &Project, issue: u64, facts: &Facts, o: &Opts) -> Result<(), String> {
     if let Some(why) = blocked_hold(project, issue, facts) {
-        if !o.force {
+        if o.take_over {
+            println!("claim: {why}; the takeover clears the hold once its cause is gone, else leaves it");
+        } else if !o.force {
             return Err(format!(
                 "claim: {why}
 Pick another issue. Only the one who held it lifts a hold: take the label off, or pass --force when they have said so."
             ));
+        } else {
+            println!("claim: taking #{issue} despite its hold (--force): {why}");
         }
-        println!("claim: taking #{issue} despite its hold (--force): {why}");
     }
     match main_red(project) {
         Ok(red) => {
@@ -968,6 +997,9 @@ pub fn release_comment(name: &str, why: &str) -> String {
 
 /// The atomic claim: its checks, then [`plan`]'s steps.
 fn claim(ctx: &Ctx<'_>, o: &Opts) -> Result<(), String> {
+    if o.take_over {
+        return crate::takeover::run(ctx, opened(ctx, o)?, o.no_switch);
+    }
     let mut c = checked(ctx, o)?;
     for step in plan(o.no_mr, o.no_fullgate) {
         c.take(step)?;
@@ -991,8 +1023,21 @@ struct Claiming<'a> {
     mr: Option<Pr>,
 }
 
-/// The claim's checks: the issue is open, not on hold, not held by a red `main` or another agent.
-fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
+/// What the checks every claim (a takeover's too) starts with found.
+pub(crate) struct Opened {
+    pub issue: u64,
+    pub agent: String,
+    pub name: String,
+    pub title: String,
+    pub facts: Facts,
+    /// The issue's comments, in [`github`]'s shape.
+    pub notes: Vec<Value>,
+}
+
+/// The checks every claim starts with: an issue and an agent named, the issue open, not on hold
+/// (a takeover looks at a hold later), `main` not red; its needs and the capabilities it wants
+/// noted.
+fn opened(ctx: &Ctx<'_>, o: &Opts) -> Result<Opened, String> {
     let (project, root) = (ctx.project, ctx.root);
     let issue = o.issue.ok_or_else(|| format!("claim: which issue?\n\n{}", usage(project)))?;
     let agent = o.agent.clone().ok_or_else(|| {
@@ -1000,7 +1045,7 @@ fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
     })?;
     let main = project.branches.main;
     event::fetch(root, "origin", &format!("refs/heads/{main}"), &format!("refs/remotes/origin/{main}"))?;
-    let (facts, title, state) = facts(project, root, issue)?;
+    let Read { facts, title, state, notes } = read(project, root, issue)?;
     if state != "open" {
         return Err(format!("claim: #{issue} is {state}, not open"));
     }
@@ -1015,6 +1060,13 @@ fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
         .or_else(|| name_of(&facts.tracked, &agent))
         .ok_or_else(|| format!("claim: no session.start for {agent} on the tracking branch; pass --name <your agent name>"))?;
     event::check_id(&name).map_err(|e| format!("--name: {e}"))?;
+    Ok(Opened { issue, agent, name, title, facts, notes })
+}
+
+/// The claim's checks: [`opened`]'s, and nobody else holds the issue.
+fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
+    let (project, root) = (ctx.project, ctx.root);
+    let Opened { issue, agent, name, title, facts, notes: _ } = opened(ctx, o)?;
     let now = now();
     // Resuming: my own open PR (from an earlier run) keeps its branch.
     let mut me = Me { instance: Some(agent.clone()), name: Some(name.clone()), branch: None };
@@ -1030,7 +1082,7 @@ fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
         let list: String = held.iter().map(|h| format!("\n  - {}", describe(project.labels.in_progress, h, now))).collect();
         if !o.force {
             return Err(format!(
-                "#{issue} is held by another agent:{list}\nPick another issue. To take over a claim older than 24 hours (AGENTS.md §4 step 6), comment on the issue and pass --force."
+                "#{issue} is held by another agent:{list}\nPick another issue. To take over a stale claim and keep its branch and PR (the coordinator released it, or it has been idle 24 hours), pass --take-over."
             ));
         }
         println!("claim: taking over #{issue} (--force):{list}");
@@ -1202,18 +1254,24 @@ fn print_claimed(c: &Claiming<'_>) {
     match &c.mr {
         Some(m) => {
             println!("claimed #{issue} as {name}: branch {branch}, draft PR #{} {}", m.number, m.html_url);
-            let hint = format!("`git switch {branch}` (or `git worktree add ../{}-{branch} {branch}`)", project.name);
-            match switch_to(project, root, branch, switch_for.is_none(), switch_for.unwrap_or_default()) {
-                Ok(Switch::Switched) => println!("switched this worktree to {branch}"),
-                Ok(Switch::Already) => println!("this worktree is on {branch}"),
-                Ok(Switch::Off) => println!("next: {hint}"),
-                Ok(Switch::Primary) => println!("next: {hint}; this is the primary checkout, which claim leaves where it is (AGENTS.md §6)"),
-                Ok(Switch::Dirty(files)) => println!("next: {hint}; this worktree has changes, so claim left it where it is:{files}"),
-                Ok(Switch::GateHeld(why)) => println!("next: {hint}; claim left this worktree where it is: {why}"),
-                Err(e) => println!("next: {hint} (claim couldn't switch: {e})"),
-            }
+            report_switch(project, root, branch, switch_for);
         }
         None => println!("claimed #{issue} as {name} (label, comment, event; no branch or PR)"),
+    }
+}
+
+/// Switch the worktree at `root` to `branch` for the agent `switch_for` (`None`: `--no-switch`),
+/// and say where it is ([`switch_to`]). Agents parse these lines: keep their wording.
+pub(crate) fn report_switch(project: &Project, root: &Path, branch: &str, switch_for: Option<&str>) {
+    let hint = format!("`git switch {branch}` (or `git worktree add ../{}-{branch} {branch}`)", project.name);
+    match switch_to(project, root, branch, switch_for.is_none(), switch_for.unwrap_or_default()) {
+        Ok(Switch::Switched) => println!("switched this worktree to {branch}"),
+        Ok(Switch::Already) => println!("this worktree is on {branch}"),
+        Ok(Switch::Off) => println!("next: {hint}"),
+        Ok(Switch::Primary) => println!("next: {hint}; this is the primary checkout, which claim leaves where it is (AGENTS.md §6)"),
+        Ok(Switch::Dirty(files)) => println!("next: {hint}; this worktree has changes, so claim left it where it is:{files}"),
+        Ok(Switch::GateHeld(why)) => println!("next: {hint}; claim left this worktree where it is: {why}"),
+        Err(e) => println!("next: {hint} (claim couldn't switch: {e})"),
     }
 }
 
@@ -1240,12 +1298,12 @@ pub fn claim_events(agent: &str, issue: u64, mr: Option<u64>) -> [Vec<String>; 2
 }
 
 /// Comment `body` on `issue`.
-fn post_note(project: &Project, issue: u64, body: &str) -> Result<(), String> {
+pub(crate) fn post_note(project: &Project, issue: u64, body: &str) -> Result<(), String> {
     github::comment(project, issue, body)
 }
 
 /// Put the claim label on `issue` (`add`) or take it off.
-fn edit_label(project: &Project, issue: u64, add: bool) -> Result<(), String> {
+pub(crate) fn edit_label(project: &Project, issue: u64, add: bool) -> Result<(), String> {
     let label = project.labels.in_progress;
     if add { github::add_label(project, None, issue, label) } else { github::remove_label(project, None, issue, label) }
 }
@@ -1308,6 +1366,14 @@ pub fn switch_to(project: &Project, root: &Path, branch: &str, no_switch: bool, 
     Ok(Switch::Switched)
 }
 
+/// The refusal of a claim whose `branch` is on origin with work on it (its tip's `subject`):
+/// `--force` never adopts another's work, `--take-over` does (mornycorp/swarm-core#16).
+pub fn adopt_instead(branch: &str, issue: u64, subject: &str) -> String {
+    format!(
+        "claim: branch {branch} is already on origin with work on it (`{subject}`): another agent's? Check #{issue}. To take over its stale claim and keep that work and its PR, pass --take-over instead of --force; or pass --slug for another name"
+    )
+}
+
 /// Whether a branch tip's commit `subject` is an earlier run's claim commit for `issue`
 /// (`Claim #<issue>: <title>`), so the branch can be resumed.
 pub fn is_claim_commit(subject: &str, issue: u64) -> bool {
@@ -1326,10 +1392,7 @@ fn ensure_branch(project: &Project, root: &Path, branch: &str, issue: u64, title
         let tip = event::fetch_tip(root, "origin", &format!("refs/heads/{branch}"))?.unwrap_or_default();
         let subject = git(root, &["log", "-1", "--format=%s", &tip], None, &[]).unwrap_or_default();
         if !is_claim_commit(subject.trim(), issue) {
-            return Err(format!(
-                "claim: branch {branch} is already on origin with work on it (`{}`): another agent's? Check #{issue}, or pass --slug for another name",
-                subject.trim()
-            ));
+            return Err(adopt_instead(branch, issue, subject.trim()));
         }
     } else {
         let base = format!("origin/{}", project.branches.main);
@@ -2055,6 +2118,50 @@ mod tests {
         // A claim comment older than a live claim's life no longer stands.
         let stale = [note("claimed: cedar, PR #62", "2026-10-29T12:00:00Z"), note("claimed: alder, PR #62", "2026-10-31T12:57:49Z")];
         assert_eq!(first_claim(&active_claims(&stale, &[], 61, now), "alder"), None);
+    }
+
+    /// `--take-over` is a claim's argument, never a check's, and keeps the claim's own branch.
+    #[test]
+    fn take_over_is_an_argument_of_a_claim_with_its_own_branch() {
+        use crate::project::fixtures::BOTH;
+        for project in BOTH {
+            assert!(parse_args(&project, &["92", "--take-over"]).is_ok_and(|o| o.take_over && !o.force), "{}", project.name);
+            let root = Path::new(".");
+            assert!(run(&project, &crate::Defaults, root, &["--check", "--take-over"]).unwrap_err().contains("--take-over"));
+            for extra in [["--slug", "x"].as_slice(), ["--no-pr"].as_slice()] {
+                let args: Vec<&str> = ["92", "--agent", "pc-1", "--take-over"].iter().chain(extra).copied().collect();
+                assert!(run(&project, &crate::Defaults, root, &args).unwrap_err().contains("keeps the claim's own branch and PR"), "{extra:?}");
+            }
+            assert!(usage(&project).contains("--take-over"));
+        }
+        assert!(USAGE.contains("[--take-over]"));
+    }
+
+    /// swarmception#92: a branch with work on it on origin is refused, as before, and the refusal
+    /// names `--take-over` as the way to keep that work (mornycorp/swarm-core#16). Its earlier
+    /// run's claim commit is still resumed.
+    #[test]
+    fn a_branch_with_work_on_it_is_refused_naming_the_takeover() {
+        use crate::project::fixtures::BOTH;
+        use swarm_core_testkit::git::git as tgit;
+        let dir = swarm_core_testkit::temp_dir("xtask-claim-work-on-branch");
+        let remote = swarm_core_testkit::git::remote(&dir);
+        tgit(&remote.work, &["switch", "--quiet", "-c", "92-a11y-test"]);
+        tgit(&remote.work, &["commit", "--quiet", "--allow-empty", "-m", "Claim #92: A11y test"]);
+        tgit(&remote.work, &["push", "--quiet", "origin", "92-a11y-test"]);
+        tgit(&remote.work, &["switch", "--quiet", "main"]);
+        for project in BOTH {
+            assert_eq!(ensure_branch(&project, &remote.work, "92-a11y-test", 92, "A11y test"), Ok(()), "{}: a claim commit resumes", project.name);
+        }
+        tgit(&remote.work, &["switch", "--quiet", "92-a11y-test"]);
+        tgit(&remote.work, &["commit", "--quiet", "--allow-empty", "-m", "The a11y test (#92)"]);
+        tgit(&remote.work, &["push", "--quiet", "origin", "92-a11y-test"]);
+        tgit(&remote.work, &["switch", "--quiet", "main"]);
+        for project in BOTH {
+            let refused = ensure_branch(&project, &remote.work, "92-a11y-test", 92, "A11y test").unwrap_err();
+            assert!(refused.contains("with work on it (`The a11y test (#92)`)") && refused.contains("pass --take-over instead of --force"), "{refused}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
