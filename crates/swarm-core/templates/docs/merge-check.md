@@ -53,18 +53,16 @@ agent's. If only tests failed and they may be load flakes, `cargo xtask gate --r
 gate-mr<ids> --wait`, then land as usual. On a real failure: note the cause on the PRs,
 `cargo xtask lock drop`, log `session.stop`, and stop.
 
-Before landing, check each PR's own checks (`gh pr checks <m> --repo {{github.repo}}`, for the
-PR's head): a failed check is a stop; note it on the PR and don't land it. A Swarm Core pin bump
-lands only when every check of its head passed.
+CI is local: GitHub runs no workflows, so the gate is the only check before landing. A Swarm
+Core pin bump lands only when its gate passed.
 
 Step 6: land. `cargo xtask land <m>… --sub gate-mr<ids>`. If it stops on a PR, it names the PR
 and why: say so, and leave that PR.
 
-Step 7: end. `cargo xtask event session.stop --note "merged #<m> …"`. Check main's CI
-(`gh run list --repo {{github.repo}} --branch main --limit 3`): if the newest run that wasn't
-skipped failed, comment on the PR that caused it and say so.
+Step 7: end. `cargo xtask event session.stop --note "merged #<m> …"`.
 
-Report in three lines or fewer: what you merged, what you left and why, and main's CI.
+Report in three lines or fewer: what you merged, what you left and why, and whether `main` is red
+(an open `main-red` issue).
 ```
 
 ## Revision history

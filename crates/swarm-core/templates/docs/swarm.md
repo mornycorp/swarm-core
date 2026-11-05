@@ -65,27 +65,20 @@ step 4), after folding the batch into `docs/gaps.md`:
 
 ## What CI runs
 
-<!-- One line a job: what it runs and about how long it takes. -->
+<!-- One line a step of `cargo xtask ci`: what it runs and about how long it takes. -->
 
-`.github/workflows/ci.yml` runs `cargo xtask ci`. The rules it keeps:
+CI is local, for the coordinator and every worker: GitHub runs no workflows (no
+`.github/workflows/`). The rules:
 
-- **Once a day, on `main`** (owner, 2026-10-31): a schedule at 03:17 UTC, and by hand with
-  `gh workflow run ci --repo {{github.repo}}`. No run on pushes, PRs or `tracking`: workers'
-  `ci --changed`, the coordinator's local gate and the periodic full gate are what merges rest
-  on; CI is the daily check on Linux. A PR's `prwatch` therefore reports no checks, and `land`
-  has none to cancel.
-- **A red daily run** is `main` red: the coordinator files a `main-red` issue (the run, what broke,
-  the merges since the last green run) and nothing merges until it is fixed
+- **Workers** gate their own branches with `cargo xtask ci --changed` (`cargo xtask ready` runs
+  it); **the coordinator** gates each stack before it lands it; **the periodic full gate** runs
+  the whole of `ci` on `main`. Those are what merges rest on. A PR's `prwatch` reports no checks.
+- **`main` red** comes from those gates: the periodic full gate, or the coordinator's gate showing
+  `main` itself broken, files a `main-red` issue, and nothing merges until it is fixed
   ([the swarm protocol](swarm-protocol.md#the-coordinators-loop) step 3).
-- **Fetching Swarm Core:** it is a private repository, so the job points its URL at a read-only
-  token before cargo runs: a fine-grained token with **Contents: read** on
-  `mornycorp/swarm-core` (and any other private dependency), the organization's
-  `SWARM_CORE_TOKEN` secret, visible to its private repositories (its owner makes it, once).
 - **Branch protection on `main`:** no required status checks, since the coordinator's local gate
   is the check before a merge. Require PRs, and allow merge commits.
-- Nothing merges while `main`'s CI is red.
-- **The coordinator** checks the latest daily run each batch (`gh run list --repo {{github.repo}}
-  --workflow ci --limit 1`).
+- Nothing merges while `main` is red.
 
 ## Revision history
 

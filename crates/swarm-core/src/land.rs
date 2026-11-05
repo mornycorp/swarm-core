@@ -19,15 +19,15 @@
 //!    ([`tested_tip`]).
 //! 2. **Force-push the rebased branch, then check the remote is the local commit** (a push that
 //!    didn't land is never merged; one the server failed is tried again, [`PUSH_TRIES`]).
-//! 3. **Note the gate's summary** on the PR (the gate's log, [`gate_summary`]) and cancel the
-//!    workflow runs of its head still queued or running (the gate replaced them).
+//! 3. **Note the gate's summary** on the PR (the gate's log, [`gate_summary`]). GitHub runs no
+//!    workflows (CI is local: the gates), so there is nothing to cancel.
 //! 4. **Wait until it is mergeable,** bringing it up to `main` when GitHub says it is `behind`: a
 //!    rebase on the server, or, for a branch the server can't rebase (merge commits) or one `stack`
 //!    merged its base into, `main` merged in here and pushed: semi-linear history needs `main`'s
 //!    head.
 //! 5. **Merge it** with a merge commit at the head it saw, asked again while GitHub refuses it
-//!    ([`MERGE_TRIES`]): a docs-only PR with `[skip ci]` in its merge commit; `main`'s workflows
-//!    run for the rest.
+//!    ([`MERGE_TRIES`]): a docs-only PR with `[skip ci]` in its merge commit, inert while
+//!    GitHub runs no workflows.
 //!    Before each merge call, **that head must carry the gated change** (swarm-core#9,
 //!    [`carries_gated`]): the commit `land` pushed, or one whose tree is the gated change rebased
 //!    onto its base, or whose diff has the gated diff's patch-id (the server's rebase). A worker's
@@ -82,7 +82,7 @@ fn usage(project: &Project) -> String {
   HEAD the gate tested (<target>/gate-logs/<sub>.rc): checks each PR holds work and each remote
   branch is still its pre-rebase tip (or a worker's push since that, restacked onto the same base,
   is the tree the gate tested), force-pushes the rebased branch and checks it landed, notes the
-  gate's summary and cancels its workflow runs, brings it up to main when it is behind (a server
+  gate's summary, brings it up to main when it is behind (a server
   rebase, or main merged in), merges (docs-only: [skip ci]), confirms the merge, logs `merge --sub <gate sub>` and tidies
   each issue its description closes, fast-forwards the owner's checkout (on main, no tracked
   changes), then deletes the source branch. Then `cargo xtask gate --stop <gate sub>`. Stops at
@@ -197,8 +197,8 @@ pub enum Wait {
     Stuck(String),
 }
 
-/// Where `v` stands. `unstable` (a check that isn't required failed or was cancelled, as step 3
-/// cancels them) and `has_hooks` merge.
+/// Where `v` stands. `unstable` (a check that isn't required failed or was cancelled) and
+/// `has_hooks` merge.
 pub fn wait_state(v: &MrView) -> Wait {
     match (v.state.as_str(), v.merge_state.as_str()) {
         ("merged", _) => Wait::Merged,
@@ -212,8 +212,8 @@ pub fn wait_state(v: &MrView) -> Wait {
     }
 }
 
-/// The merge commit's body: a docs-only PR's says `[skip ci]`, so `main`'s workflows skip it;
-/// others keep GitHub's (the PR's title).
+/// The merge commit's body: a docs-only PR's says `[skip ci]`, so a repo that still has workflows
+/// skips it; others keep GitHub's (the PR's title).
 pub fn merge_message(title: &str, docs_only: bool) -> Option<String> {
     docs_only.then(|| format!("{title}\n\n[skip ci]"))
 }
@@ -302,8 +302,6 @@ pub fn red_check(red: &[(u64, String)], todo: &[Entry], while_red: Option<&str>)
 pub trait Effects {
     fn mr(&self, mr: u64) -> Result<MrView, String>;
     fn note(&self, mr: u64, body: &str) -> Result<(), String>;
-    /// Cancel the workflow runs of the PR's head still queued or running.
-    fn cancel_runs(&self, mr: u64) -> Result<(), String>;
     /// Rebase the PR `v` onto its base on the server, while its head is still `v.sha`:
     /// `Some(why)` when the server refuses (merge commits, a conflict).
     fn rebase(&self, mr: u64, v: &MrView) -> Result<Option<String>, String>;
@@ -378,9 +376,6 @@ fn land_one(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, body: &str, fx
 
     // 3.
     fx.note(e.mr, body)?;
-    if let Err(err) = fx.cancel_runs(e.mr) {
-        eprintln!("warning: land: #{}: cancelling its workflow runs: {err}", e.mr);
-    }
 
     // 4, 5.
     merge_when_ready(plan, remote, base, e, fx)?;
@@ -757,13 +752,6 @@ impl Effects for Real<'_> {
     }
     fn note(&self, mr: u64, body: &str) -> Result<(), String> {
         github::comment(self.project, mr, body)
-    }
-    fn cancel_runs(&self, mr: u64) -> Result<(), String> {
-        let sha = self.mr(mr)?.sha;
-        for id in github::cancel_runs(self.project, &sha)? {
-            println!("land: #{mr}: workflow run {id} cancelled");
-        }
-        Ok(())
     }
     fn rebase(&self, mr: u64, v: &MrView) -> Result<Option<String>, String> {
         let _ = mr;
@@ -1249,10 +1237,6 @@ mod tests {
             self.log(format!("note {mr}"));
             Ok(())
         }
-        fn cancel_runs(&self, mr: u64) -> Result<(), String> {
-            self.log(format!("cancel {mr}"));
-            Ok(())
-        }
         fn rebase(&self, mr: u64, v: &MrView) -> Result<Option<String>, String> {
             assert_eq!(v.node_id, format!("PR_{mr}"));
             self.log(format!("rebase {mr}"));
@@ -1389,12 +1373,12 @@ mod tests {
         assert_eq!(origin_tip(&w, "2-two"), tgit(&w.coord, &["rev-parse", "s-2"]).trim());
         let calls = fake.calls();
         let at = |c: &str| calls.iter().position(|x| x == c).unwrap_or_else(|| panic!("no `{c}` in {calls:#?}"));
-        // Per PR: note, cancel, merge (no rebase: each is up to main), the merge confirmed, its
+        // Per PR: note, merge (no rebase: each is up to main), the merge confirmed, its
         // event and tidy, then the delete.
         let merges = [format!("merge 1 {} [skip ci]", origin_tip(&w, "1-one")), format!("merge 2 {} -", origin_tip(&w, "2-two"))];
         for (m, merge) in [(1, merges[0].as_str()), (2, merges[1].as_str())] {
-            assert!(at(&format!("note {m}")) < at(&format!("cancel {m}")));
-            assert!(at(&format!("cancel {m}")) < at(merge));
+            assert!(at(&format!("note {m}")) < at(merge));
+            assert!(!calls.contains(&format!("cancel {m}")), "{calls:?}");
             assert!(!calls.contains(&format!("rebase {m}")), "{calls:?}");
             let confirmed = calls.iter().enumerate().skip(at(merge)).find(|(_, c)| **c == format!("mr {m}")).map(|(i, _)| i).unwrap();
             assert!(confirmed < at(&format!("event merge #{} #{m} gate-9 --note red: why", m + 100)));

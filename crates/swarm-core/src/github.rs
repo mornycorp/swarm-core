@@ -323,28 +323,6 @@ pub fn delete_branch(project: &Project, branch: &str) -> Result<(), String> {
     api_text(project, &["-X", "DELETE", &format!("{}/git/refs/heads/{branch}", repo_path(project, None)?)]).map(drop)
 }
 
-/// The workflow runs in `runs` (`GET …/actions/runs`) not finished: their ids.
-pub fn unfinished_runs(runs: &Value) -> Vec<u64> {
-    let live = ["queued", "in_progress", "waiting", "requested", "pending"];
-    runs.get("workflow_runs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|r| r.get("status").and_then(Value::as_str).is_some_and(|s| live.contains(&s)))
-        .filter_map(|r| r.get("id").and_then(Value::as_u64))
-        .collect()
-}
-
-/// Cancel the workflow runs of commit `sha` still queued or running: their ids.
-pub fn cancel_runs(project: &Project, sha: &str) -> Result<Vec<u64>, String> {
-    let repo = repo_path(project, None)?;
-    let ids = unfinished_runs(&api(project, &[&format!("{repo}/actions/runs?head_sha={sha}&per_page=100")])?);
-    for id in &ids {
-        api_text(project, &["-X", "POST", &format!("{repo}/actions/runs/{id}/cancel")])?;
-    }
-    Ok(ids)
-}
-
 // ---- Issues ----
 
 /// Issue `n` of `project`'s repository (`of` `None`) or of another.
@@ -542,13 +520,6 @@ mod tests {
         assert_eq!(numbers(&[json!({"number": 1}), json!({}), json!({"number": 2})]), [1, 2]);
     }
 
-    #[test]
-    fn only_unfinished_runs_are_cancelled() {
-        let runs = json!({"workflow_runs": [{"id": 1, "status": "in_progress"}, {"id": 2, "status": "completed"}, {"id": 3, "status": "queued"}, {"status": "queued"}]});
-        assert_eq!(unfinished_runs(&runs), [1, 3]);
-        assert!(unfinished_runs(&json!([])).is_empty());
-    }
-
     /// The read calls against GitHub itself: the queries' fields and the answers' shapes. Needs
     /// `gh`, signed in, and the network: `cargo test -p swarm-core --lib -- --ignored live`.
     /// `SWARM_CORE_LIVE_REPO` names the repository (default: this one).
@@ -563,7 +534,6 @@ mod tests {
         assert!(prs(&p, &[999_999]).unwrap().is_empty());
         assert!(labelled(&p, None, "main-red", "open", 1).is_ok());
         assert!(comments(&p, 999_999).is_err(), "no such issue");
-        assert!(unfinished_runs(&api(&p, &[&format!("{}/actions/runs?per_page=1", repo_path(&p, None).unwrap())]).unwrap()).len() <= 1);
     }
 
     #[test]

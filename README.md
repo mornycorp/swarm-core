@@ -49,6 +49,10 @@ its workspace dependency's `git` URL to `https://github.com/mornycorp/swarm-core
 `insteadOf` line and `SWARM_CORE_TOKEN` (now a token on `mornycorp`) follow. GitHub redirects the
 old URL for now, but don't rely on it.
 
+**No GitHub Actions** (owner, 2026-11-05): CI is local, for the coordinator and every worker.
+`init` writes no workflow, `land` cancels no runs, and this repo has none either: a PR here lands
+on its local checks (below). A consumer deletes its `.github/workflows/` and turns Actions off.
+
 **Starting a new swarm:** [docs/new-swarm.md](docs/new-swarm.md) walks a new repo through it from
 Swarm Core alone: the xtask that wires it in (from
 [`examples/consumer_xtask.rs`](crates/swarm-core/examples/consumer_xtask.rs)), its `ci`, the pin
@@ -116,8 +120,7 @@ differs. Change an asset here, then bump each consumer.
 
 **Templates** are the other kind: starting points a new consumer copies once and then owns
 (`AGENTS.md`, its `docs/swarm.md` and `docs/development.md`, the progress docs, the owner's
-directions, the scheduled merge check's prompt, nextest's `ci` profile, the GitHub Actions
-workflow). They live in
+directions, the scheduled merge check's prompt, nextest's `ci` profile). They live in
 `crates/swarm-core/templates/` (`templates::TEMPLATES`). `cargo xtask swarm-core init` writes each
 one the consumer doesn't have yet, with the same placeholders and `{{today}}`, and never
 overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swarm.md)).
