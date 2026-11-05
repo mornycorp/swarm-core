@@ -18,7 +18,7 @@
 //!   the same way before it files a `main-red` issue ([`crate::fullgate`]), and so does a worker's
 //!   `ready` before it gives up (mornycorp/swarm-core#14, [`crate::ready::own_gate`]).
 
-use super::{Cause, Kind, ci_summary, classify, field, rc_kind, rc_line, tokens};
+use super::{Cause, Kind, ci_summary, classify, failed_step, field, rc_kind, rc_line, tokens};
 use crate::stack::short;
 
 /// The most failed tests a rerun takes: more than that is not a load flake to verify one by one.
@@ -142,7 +142,7 @@ fn test_step(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Docs => None,
         Kind::Smoke => Some("golden"),
-        Kind::Tooling | Kind::Full => Some("test"),
+        Kind::Tooling | Kind::Changed | Kind::Full => Some("test"),
     }
 }
 
@@ -180,8 +180,7 @@ fn check_cause(of: &str, rc: &str, log: &str) -> Result<(), String> {
 fn skipped_after(of: &str, log: &str, step: &str) -> Result<Vec<String>, String> {
     let summary = ci_summary(log).ok_or_else(|| format!("gate {of}'s log has no `CI summary`: did it finish?"))?;
     let word = |l: &str, w: &str| l.trim_start().strip_prefix(w).map(|r| r.trim().to_owned());
-    let failed = summary.lines().find_map(|l| word(l, "FAIL ")).ok_or_else(|| format!("gate {of}'s `CI summary` names no failed step"))?;
-    let at = failed.split(':').next().unwrap_or_default().trim();
+    let at = failed_step(log).ok_or_else(|| format!("gate {of}'s `CI summary` names no failed step"))?;
     if at != step {
         return Err(format!("gate {of} failed at `{at}`, not `{step}`: only failed tests are rerun (a build or clippy failure is no flake): gate again"));
     }

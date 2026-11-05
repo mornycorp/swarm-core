@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (names no consumer; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-04 · **Change:** minor (a gate of the same stack after a failure notes itself its rerun; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -39,7 +39,7 @@ Every event has `t` (UTC, `YYYY-MM-DDTHH:MM:SSZ`, the agent's own clock) and `ev
 | `session.pause` / `session.resume` | | it waits (for the owner, say) and goes on |
 | `session.stop` | `reason`?, `of`? | it ends; `reason` `duplicate`: because another agent has its issue; `of`: the dead instance whose session the coordinator ends |
 | `claim` | `issue`, `mr` | it takes an issue |
-| `work` | `issue` | it starts or resumes work on an issue |
+| `work` | `issue`, `mr`? | it starts or resumes work on an issue; with `mr`, it picks up that PR sent back ([Send-backs](#send-backs)) |
 | `submit` | `issue`, `mr` | it marks the PR ready |
 | `stop` | `issue`, `reason` (`handoff`, `blocked`, `paused`, `done`) | it stops working on the issue |
 | `release` | `issue`, `reason`?, `of`? | it gives the issue up, or the coordinator freed a stale claim; `reason` `duplicate`: another agent has the issue, so the work so far is thrown away; `of`: the instance whose claim or work it ends, when not the logger's own |
@@ -115,7 +115,7 @@ gate analytics can read them:
 
 - **`sub.start`** `note`: the coordinator's text naming what it gates (`local gate: #<m> (#<i>)`,
   `docs gate: #<m>`; a rerun's begins `rerun of <sub>:`), then `; kind=<kind>` (the gate that
-  ran: `docs`, `tooling`, `smoke` or `full`), then `; capacity=<n> free=<GB>`: the builds
+  ran: `docs`, `tooling`, `smoke`, `changed` or `full`), then `; capacity=<n> free=<GB>`: the builds
   `cargo xtask capacity` suggested at the start and the free memory in GB, one decimal (`?` when
   it couldn't be read), then, for a gate that ran without the machine gate lock (a `docs` gate),
   `; machineLock=skipped`. The coordinator's text is cut so the tail always fits.
@@ -149,10 +149,27 @@ gate analytics can read them:
   `sub.stop`.
 - **A rerun** (`--retry-transient`, or `--rerun-failed <sub>`: the failed tests alone and the
   steps they skipped) is a gate of its own, `<sub>-rerun`, its start note `rerun of <sub>: …`.
+  **A gate of the same stack straight after a failure** is one too, whatever its `sub`
+  (mornycorp/swarm-core#20): when the last gate in the coordinator's gate worktree failed (its
+  `rc` not 0) and this gate tests the same PRs, in the same order, at the same heads (no new push
+  between), onto the same `main` (or the same `--merge` branches at the same commits, or, with no
+  stack, the same HEAD), `gate` begins its start note `rerun of <that sub>: ` itself. A restack
+  of an unchanged stack is the same stack; a gate of another stack between the two, or a last
+  gate that passed or has no result, makes it a gate of its own.
 - **A worker's own gate before it submits** is not one of these: `cargo xtask ready` runs it
   inside a sub named `ready` (`sub.start --sub ready-<short head> --name ready --note "ci
-  --changed before submitting"`, its `sub.stop` `rc=0` or `rc=1`), so a reader's gate counts
-  keep to the coordinator's gates.
+  --changed before submitting"`), so a reader's gate counts keep to the coordinator's gates. Its
+  `sub.stop` is `rc=0`, or a failure's `rc=<n>; cause=<cause>; step=<step>`: the exit code, the
+  cause as above and the `ci` step it failed at (the `CI summary`'s first `FAIL`), each left out
+  when unknown (`rc=1` alone when `ci` couldn't run). An older writer's failure is `rc=1` alone:
+  its cause unknown.
+- **A submit without its run** (sc#18): `cargo xtask ready --no-ci` skips that gate, and its
+  `submit` note's first `;`-separated part is `no-ci` (the rest, if any, as for any submit). The
+  coordinator's `gate` reads the latest `submit` of each PR it gates: when it says `no-ci`, a
+  smoke becomes the `changed` kind (`ci --changed --base origin/main`), its why naming the PRs:
+  `kind=changed (ready --no-ci: #<m> …)`. A reader may count a PR whose latest submit says
+  `no-ci` as submitted untested. Older writers wrote no note there: their `--no-ci` submits
+  can't be told apart.
 
 ```json
 {"event":"sub.start","name":"gate","note":"local gate: #154 (#141); capacity=1 free=9.8","sub":"gate-mr154","t":"2026-10-20T10:44:29Z"}
@@ -170,12 +187,29 @@ instead of merging it in two ways, and a reader may count both as a **send-back*
 - **A gate fails for the change's cause** (`rc≠0` and a cause that isn't transient). Each PR
   the gate gated is sent back once, unless its next gate is a rerun saying so (`rerun of <sub>`,
   whose result counts instead: a flake a rerun answers is no send-back). A rerun naming no PR
-  gates those of the gate it reruns.
+  gates those of the gate it reruns. A coordinator that just gates the same unchanged stack
+  again is rerunning it, and `gate` says so ([Gates](#gates), a rerun), so the rule stays the
+  reader's one: older files hold silent reruns with no note, which read as send-backs.
 - **A `sendback` event** (`sendback --issue <n> --mr <m> --note "<why>"`, [the swarm protocol ›
   The coordinator's loop](../crates/swarm-core/assets/docs/swarm-protocol.md#the-coordinators-loop)).
   A conflict at `stack`, before any gate ran, is one: its note starts `cause=conflict`. Its cause
   is the note's `cause=<cause>`, else the cause of the failed gate its `sub` names. A `sendback`
   after a gate's failure of the PR, before its next gate, is that same send-back.
+
+**The rework** (mornycorp/swarm-core#14): the worker logs `work --issue <n> --mr <m>` when it
+picks up a sent-back PR, once a send-back (`cargo xtask prwatch` logs it for the worker as it
+reads the send-back on the tracking branch, its note `rework: #<m> sent back <t>: <why>`; a
+worker not running it logs it itself). So a `work` naming the PR's issue after a send-back
+marks the start of the rework, and a reader may treat the time between the send-back and it as
+waiting (the PR sat with its worker untouched). A comment that only asks a question is no
+send-back and logs nothing. Older files have no such `work`: the rework's start there is the
+reader's guess. `mr` on `work` is optional, as on every issue event; the writer has always
+written it when given, so this adds no field and no version.
+
+```json
+{"event":"sendback","issue":7,"mr":9,"note":"cause=conflict: Cargo.toml","t":"2026-10-17T12:00:00Z"}
+{"event":"work","issue":7,"mr":9,"note":"rework: #9 sent back 2026-10-17T12:00:00Z: cause=conflict: Cargo.toml","t":"2026-10-17T12:20:00Z"}
+```
 
 A PR is **gated** when a gate names it (its notes, its merges) or a `sendback` sends it back;
 **merged** when a `merge` event names it or a gate that passed says `merged #<m>` (a docs gate
@@ -215,6 +249,10 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Gates and Send-backs: a gate of the same PRs at the same heads onto the same `main` straight after the last gate failed begins its start note `rerun of <sub>:` itself, so a silent rerun of a flake is no send-back; no format change (mornycorp/swarm-core#20) |
+| 2026-11-04 | minor | Gates: a `submit` whose note begins `no-ci` was readied without its author's `ci --changed` (`ready --no-ci`), and the gate kind `changed` gates a stack holding one; no format change (mornycorp/swarm-core#18) |
+| 2026-11-03 | minor | Send-backs: a `work --issue <n> --mr <m>` after a send-back marks the start of the rework (`prwatch` logs it once for the worker), and the time before it may read as waiting; no format change (mornycorp/swarm-core#14) |
+| 2026-11-02 | minor | A failed `ready` check's `sub.stop` adds `cause=` and `step=` (the failing `ci` step), as a gate's adds its cause; no format change |
 | 2026-10-30 | minor | Names no consumer: the reader's own details (its commands, panes and measurements) and its issue numbers dropped, the contract kept; no format change |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): an event's `mr` holds the PR's number; no format change |
 | 2026-10-30 | minor | swarm-foundation renamed swarm-core (its crate, command and issues); no format change |

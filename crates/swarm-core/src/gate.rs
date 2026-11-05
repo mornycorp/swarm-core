@@ -13,13 +13,16 @@
 //!   ([`Hooks::gate_kind`]), the **docs** gate, the **tooling** gate (both `ci --changed`) or the
 //!   **full** gate, which the coordinator turns into the **smoke** ([`coordinator_kind`]: `ci
 //!   --smoke`, no full test run; the periodic full gate of `main` runs the rest). `--full` forces
-//!   the full gate.
+//!   the full gate. A smoke of a stack holding a PR whose latest `submit` says `ready --no-ci`
+//!   skipped its author's run is the **changed** gate instead (`ci --changed`, [`untested`]).
 //! - **Takes the machine-wide gate lock** both swarms share ([`crate::machine_lock`]) when its kind
 //!   builds ([`Kind::takes_machine_lock`]: not a docs gate, whose notes say
-//!   `machineLock=skipped`), then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits
-//!   for each, else it refuses (keeping the gate lock). It holds the machine lock until its `ci`
-//!   ends; its `ci` gets `CARGO_BUILD_JOBS` from the free memory it saw unless the environment
-//!   sets it.
+//!   `machineLock=skipped`), then a test-run slot ([`Kind::takes_test_slot`],
+//!   [`crate::test_runs`]: how many test runs go at once on the machine, `ready`'s among them),
+//!   then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits for each, else it refuses
+//!   (keeping the gate lock). That order, never another, so nothing deadlocks. It holds the machine
+//!   lock and the slot until its `ci` ends; its `ci` gets `CARGO_BUILD_JOBS` from the free memory
+//!   it saw unless the environment sets it.
 //! - **Logs `sub.start --name gate`** with the capacity it saw and its kind ([`kind_field`]), and
 //!   runs the consumer's `cargo xtask ci` (the `ci` contract, docs/ci-contract.md) with this
 //!   xtask's own exe, through [`Hooks::around_ci`] (a project's Python and its GPU lease, say). The
@@ -31,6 +34,10 @@
 //!   logged `sub.stop` with `rc=<n>; cause=<cause>; kind=<kind>`, and keeps the lock: the
 //!   coordinator still owns the worktree. `--retry-transient` reruns once, as `<sub>-rerun`, when
 //!   the cause is the machine's ([`Cause::transient`]). The failing tests are listed.
+//! - **The same stack again**: a gate of the same PRs at the same heads onto the same `main` (or
+//!   the same `--merge` branches, or the same HEAD) as the last gate here, which failed, is its
+//!   rerun: its start note says `rerun of <that sub>:` with no flag, so a reader doesn't send its
+//!   PRs back for a flake the rerun answers ([`silent`], mornycorp/swarm-core#20).
 //! - **A test that failed under load**: `gate --rerun-failed <sub>`
 //!   reruns only the failed tests, each alone, and the steps the failure skipped, on the same HEAD,
 //!   as `<sub>-rerun`, and records a verified pass `land` accepts ([`rerun`]).
@@ -51,9 +58,11 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::stack::{self, Stack, short};
-use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock};
+use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock, test_runs};
 
 pub mod rerun;
+pub mod silent;
+pub mod untested;
 
 /// Where a gate writes its log and records: `<target dir>/gate-logs/<sub>.log`, `.rc`.
 pub use crate::gate_times::LOG_DIR;
@@ -190,18 +199,23 @@ pub enum Kind {
     /// it is unsure: `ci --smoke`, the build, the lints and the golden tests, with no full test
     /// run. The periodic full gate of `main` ([`crate::fullgate`]) runs the rest.
     Smoke,
+    /// `ci --changed`, as the author's `ready` runs it: the smoke of a stack holding a PR readied
+    /// without that run (`ready --no-ci`, [`untested`]), so a test run stands behind its gate
+    /// (mornycorp/swarm-core#18). The gate's own: no planner returns it.
+    Changed,
     /// The whole `ci`: `--full`, and the periodic full gate of `main`.
     Full,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Docs, Kind::Tooling, Kind::Smoke, Kind::Full];
+    pub const ALL: [Kind; 5] = [Kind::Docs, Kind::Tooling, Kind::Smoke, Kind::Changed, Kind::Full];
 
     pub fn name(self) -> &'static str {
         match self {
             Kind::Docs => "docs",
             Kind::Tooling => "tooling",
             Kind::Smoke => "smoke",
+            Kind::Changed => "changed",
             Kind::Full => "full",
         }
     }
@@ -214,7 +228,7 @@ impl Kind {
     /// `ci`'s arguments for this gate (the `ci` contract).
     pub fn ci_args(self) -> &'static [&'static str] {
         match self {
-            Kind::Docs | Kind::Tooling => &["--changed", "--base", BASE],
+            Kind::Docs | Kind::Tooling | Kind::Changed => &["--changed", "--base", BASE],
             Kind::Smoke => &["--smoke"],
             Kind::Full => &[],
         }
@@ -231,6 +245,12 @@ impl Kind {
     /// two gates' builds from filling memory together, so only the kinds that [build](Kind::builds)
     /// take it; a docs gate never waits behind the other swarm's full gate.
     pub fn takes_machine_lock(self) -> bool {
+        self.builds()
+    }
+
+    /// Does this gate hold one of the machine's test-run slots while its `ci` runs
+    /// ([`crate::test_runs`])? Only the kinds that [build](Kind::builds): a docs gate runs no tests.
+    pub fn takes_test_slot(self) -> bool {
         self.builds()
     }
 
@@ -334,6 +354,19 @@ pub fn passed_head(rc_line: &str) -> Result<&str, String> {
 /// A gate log's `CI summary`, from its last one on.
 pub fn ci_summary(log: &str) -> Option<&str> {
     log.rfind("CI summary").and_then(|at| log.get(at..))
+}
+
+/// The longest step name [`failed_step`] reads.
+const MAX_STEP: usize = 32;
+
+/// The `ci` step a log failed at: its last `CI summary`'s first `FAIL  <step>: …` (the `ci`
+/// contract), a name of letters, digits, `-`, `_` and `.`, at most 32 long, so it fits a note's
+/// `step=<step>`. None for a log with no summary or no failed step, or a name that isn't one.
+pub fn failed_step(log: &str) -> Option<&str> {
+    let failed = ci_summary(log)?.lines().find_map(|l| l.trim_start().strip_prefix("FAIL "))?;
+    let step = failed.split(':').next()?.trim();
+    let name = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    (!step.is_empty() && step.len() <= MAX_STEP && step.chars().all(name)).then_some(step)
 }
 
 /// A rerun's evidence from its `.rc` line: the gate it verified, the tests that failed there and
@@ -535,24 +568,29 @@ fn capacity_for_gate(root: &Path, target: &Path, wait: bool) -> Result<Seen, Str
     }
 }
 
-/// The machine for one build of a `kind` gate: the machine-wide gate lock when the kind takes it
-/// ([`Kind::takes_machine_lock`]), then capacity when it waits for it
-/// ([`Kind::waits_for_capacity`]), each at once or, with `wait`, once it is free. The lock's guard
-/// (none for a docs gate) and the capacity seen (a docs gate's as it is now).
-pub fn room_to_build(
-    project: &Project,
-    agent: &str,
-    root: &Path,
-    target: &Path,
-    wait: bool,
-    kind: Kind,
-) -> Result<(Option<machine_lock::Guard>, Seen), String> {
+/// The machine for one run of a gate: the machine-wide gate lock and a test-run slot, held until
+/// it goes out of scope (none for a docs gate), and the capacity seen.
+#[derive(Debug)]
+pub struct Room {
+    pub machine: Option<machine_lock::Guard>,
+    pub slot: Option<test_runs::Guard>,
+    pub seen: Seen,
+}
+
+/// The machine for one build of a `kind` gate by `agent`, running `what` (its sub): the
+/// machine-wide gate lock when the kind takes it ([`Kind::takes_machine_lock`]), then a test-run
+/// slot ([`Kind::takes_test_slot`]), then capacity when it waits for it
+/// ([`Kind::waits_for_capacity`]; the gate's own slot isn't counted), each at once or, with
+/// `wait`, once it is free. Always in that order: nothing waits for the machine lock while it
+/// holds a slot, so a gate and a `ready` never wait for each other (docs/swarm-protocol.md).
+pub fn room_to_build(project: &Project, (agent, what): (&str, &str), root: &Path, target: &Path, wait: bool, kind: Kind) -> Result<Room, String> {
     let machine = if kind.takes_machine_lock() {
         Some(machine_lock::take(project, agent, root, wait)?)
     } else {
         println!("gate: the machine gate lock is skipped: a {} gate builds no product crate", kind.name());
         None
     };
+    let slot = if kind.takes_test_slot() { Some(test_runs::take(project, agent, root, what, wait, "gate")?) } else { None };
     let seen = if kind.waits_for_capacity() {
         capacity_for_gate(root, target, wait)?
     } else {
@@ -562,7 +600,7 @@ pub fn room_to_build(
         }
         (more, free)
     };
-    Ok((machine, seen))
+    Ok(Room { machine, slot, seen })
 }
 
 /// The `CARGO_BUILD_JOBS` gate `sub` sets from `free` memory ([`machine_lock::build_jobs`]), said
@@ -812,10 +850,16 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     let target = capacity::our_target(root)?;
     lock::take(project, root, &agent)?;
     let head = tested_head(project, root, &o.merge, &sub)?;
-    // The kind before the machine: a docs gate doesn't take the machine lock.
-    let (kind, why) = if o.full { coordinator_kind((Kind::Full, String::new()), true) } else { coordinator_kind(hooks.gate_kind(root), false) };
+    // The kind before the machine: a docs gate doesn't take the machine lock. A smoke of a stack
+    // holding a PR readied without its `ci --changed` runs that instead ([`untested`]).
+    let (kind, why) = if o.full {
+        coordinator_kind((Kind::Full, String::new()), true)
+    } else {
+        untested::kind(project, root, &o.merge, coordinator_kind(hooks.gate_kind(root), false))
+    };
     println!("gate {sub}: the {} gate ({why})", kind.name());
     let field = kind_field(kind, &why);
+    let (logs, gated, start) = silent_start(project, root, &target, &o.merge, (&sub, &head, &note));
     let program = this_xtask()?;
     let g = Gate {
         project,
@@ -833,21 +877,37 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     };
     // Held until the run ends: dropped on every way out, pass, failure or error.
     let (rc, cause) = {
-        let (_machine, seen) = room_to_build(project, &agent, root, &target, o.wait, kind).map_err(lock_kept)?;
-        attempt(&g, &sub, Some(&note), seen)?
+        let room = room_to_build(project, (&agent, &sub), root, &target, o.wait, kind).map_err(lock_kept)?;
+        silent::record(&logs, &sub, &gated);
+        attempt(&g, &sub, Some(&start), room.seen)?
     };
     let (sub, rc) = match cause {
         Some(c) if o.retry && c.transient() => {
             let rerun = format!("{sub}-rerun");
             event::check_id(&rerun)?;
             println!("gate: rerunning once as {rerun} (cause {})", c.name());
-            let (_machine, seen) = room_to_build(project, &agent, root, &target, true, kind).map_err(lock_kept)?;
-            let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), seen)?;
+            let room = room_to_build(project, (&agent, &rerun), root, &target, true, kind).map_err(lock_kept)?;
+            silent::record(&logs, &rerun, &gated);
+            let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), room.seen)?;
             (rerun, rc)
         }
         _ => (sub, rc),
     };
     finish(&sub, rc)
+}
+
+/// Where gate `sub` of `head` keeps its records (`target`'s [`LOG_DIR`]), what it gates
+/// ([`silent::gated`]) and its start note: the coordinator's `note`, as the rerun of the last gate
+/// there when that one failed on the same stack, unchanged (sc#20).
+fn silent_start(project: &Project, root: &Path, target: &Path, merge: &[String], (sub, head, note): (&str, &str, &str)) -> (PathBuf, String, String) {
+    let logs = target.join(LOG_DIR);
+    let gated = silent::gated(project, root, merge, head);
+    let of = silent::rerun_in(&logs, &gated, sub);
+    if let Some(of) = &of {
+        println!("gate {sub}: the same stack {of} failed on, unchanged: logged as its rerun (`rerun of {of}:`)");
+    }
+    let start = silent::note(note, of.as_deref());
+    (logs, gated, start)
 }
 
 /// The last word of a gate run as `sub`: a failure keeps the lock, a pass says how to land.
@@ -903,8 +963,9 @@ fn rerun_failed(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str, 
         rerun: Some(&plan),
         program: &program,
     };
-    let (_machine, seen) = room_to_build(project, agent, root, &target, o.wait, plan.kind).map_err(lock_kept)?;
-    let (rc, _) = attempt(&g, &sub, Some(&note), seen)?;
+    let room = room_to_build(project, (agent, &sub), root, &target, o.wait, plan.kind).map_err(lock_kept)?;
+    silent::record(&target.join(LOG_DIR), &sub, &silent::gated(project, root, &[], &head));
+    let (rc, _) = attempt(&g, &sub, Some(&note), room.seen)?;
     finish(&sub, rc)
 }
 
@@ -938,12 +999,12 @@ pub fn full_attempt_with(project: &Project, hooks: &dyn Hooks, a: &fullgate::Att
         program,
     };
     let (rc, cause) = {
-        let (_machine, seen) = room_to_build(project, a.agent, a.checkout, a.target, true, Kind::Full)?;
+        let room = room_to_build(project, (a.agent, a.sub), a.checkout, a.target, true, Kind::Full)?;
         if let Some(what) = a.start {
-            let note = fullgate::start_note(what, seen.0, seen.1, a.commit, None);
+            let note = fullgate::start_note(what, room.seen.0, room.seen.1, a.commit, None);
             log_event(project, a.checkout, &["sub.start", "--agent", a.agent, "--sub", a.sub, "--name", "gate", "--note", &note]);
         }
-        attempt(&g, a.sub, None, seen)?
+        attempt(&g, a.sub, None, room.seen)?
     };
     Ok(ran_from_records(project, &logs, a.sub, a.commit, rc, cause))
 }
@@ -1029,7 +1090,8 @@ mod tests {
         assert_eq!(Kind::Tooling.ci_args(), ["--changed", "--base", "origin/main"]);
         assert_eq!(Kind::Smoke.ci_args(), ["--smoke"]);
         assert!(Kind::Full.ci_args().is_empty());
-        assert!(Kind::Docs < Kind::Tooling && Kind::Tooling < Kind::Smoke && Kind::Smoke < Kind::Full);
+        assert_eq!(Kind::Changed.ci_args(), ["--changed", "--base", "origin/main"]);
+        assert!(Kind::Docs < Kind::Tooling && Kind::Tooling < Kind::Smoke && Kind::Smoke < Kind::Changed && Kind::Changed < Kind::Full);
     }
 
     /// Only the gates that build take the machine gate lock and wait for build capacity; a docs
@@ -1037,10 +1099,15 @@ mod tests {
     #[test]
     fn only_the_gates_that_build_take_the_machine_lock_and_wait_for_capacity() {
         let taking: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.takes_machine_lock()).map(Kind::name).collect();
-        assert_eq!(taking, ["tooling", "smoke", "full"]);
+        assert_eq!(taking, ["tooling", "smoke", "changed", "full"]);
         let waiting: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.waits_for_capacity()).map(Kind::name).collect();
-        assert_eq!(waiting, ["tooling", "smoke", "full"]);
-        assert!(Kind::ALL.into_iter().all(|k| k.takes_machine_lock() == k.builds() && k.waits_for_capacity() == k.builds()), "one rule decides both");
+        assert_eq!(waiting, ["tooling", "smoke", "changed", "full"]);
+        let slotted: Vec<&str> = Kind::ALL.into_iter().filter(|k| k.takes_test_slot()).map(Kind::name).collect();
+        assert_eq!(slotted, ["tooling", "smoke", "changed", "full"], "the changed kind runs ci --changed's tests: it takes a test-run slot");
+        assert!(
+            Kind::ALL.into_iter().all(|k| k.takes_machine_lock() == k.builds() && k.takes_test_slot() == k.builds() && k.waits_for_capacity() == k.builds()),
+            "one rule decides the lock, the test-run slot and the capacity"
+        );
         assert_eq!((Kind::Docs.lock_note(), Kind::Full.lock_note()), ("; machineLock=skipped", ""));
     }
 
@@ -1256,6 +1323,20 @@ mod tests {
         let log = "Compiling a\nerror[E0308]: mismatched\nmore\n        FAIL [   1.0s] (1/2) a::b c\nCI summary:\n  ok    fmt\n  FAIL  test: x\n  skip  layers";
         assert_eq!(summary(log), "  error[E0308]: mismatched\n  failed test: a::b c\n  CI summary:\n    ok    fmt\n    FAIL  test: x\n    skip  layers\n");
         assert_eq!(summary("a\nb\nc\nd"), "  b\n  c\n  d\n", "no CI summary: the tail");
+    }
+
+    /// The step a log failed at is its last `CI summary`'s first failed one, a name fit for a
+    /// note's `step=`; none without a summary, a failure, or a name that is one.
+    #[test]
+    fn the_failed_step_is_read_from_the_last_ci_summary() {
+        let summary = "CI summary:\n  ok    fmt\n  FAIL  clippy: cargo clippy failed\n  skip  test\n";
+        assert_eq!(failed_step(summary), Some("clippy"));
+        assert_eq!(failed_step(&format!("{summary}\nCI summary:\n  ok    fmt\n  FAIL  golden-1.x: cargo test\n")), Some("golden-1.x"), "the last summary's");
+        assert_eq!(failed_step("CI summary: all 3 steps passed (fmt, clippy, test) in 2 min\n"), None);
+        assert_eq!(failed_step("  FAIL  test: no summary before it\n"), None);
+        for odd in ["two words", "semi;colon", "cause=test", "", &"x".repeat(33)] {
+            assert_eq!(failed_step(&format!("CI summary:\n  FAIL  {odd}: x\n")), None, "{odd:?}");
+        }
     }
 
     /// The full gate reads a run from its records: a pass; tests that failed under load, named,

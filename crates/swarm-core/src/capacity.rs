@@ -12,6 +12,11 @@
 //!   `SWARM_GB_PER_BUILD` ([`Costs`]). A build running now holds its cores; free memory already
 //!   counts it. A figure that can't be read counts as none: the suggestion errs towards fewer
 //!   builds.
+//! - **The machine's shared limits** (mornycorp/swarm-core#17): none while every test-run slot
+//!   is taken ([`crate::test_runs`]: the test runs going now, the asker's own left out), nor while
+//!   wired memory (macOS's `vm_stat` "Pages wired down": what a unified-memory GPU holds) is at
+//!   least [`MAX_WIRED_PERCENT`] of the total. On 2026-11-03 two test runs wired about 20 GB of a
+//!   24 GB Mac, and it locked up.
 //! - **Set up** (`--helper <name>`): refused in the clone's main worktree (the owner's checkout:
 //!   the first entry of `git worktree list --porcelain`), on a detached HEAD, or when the
 //!   suggestion is 0. Otherwise a worktree `<this worktree>-<name>` beside this one, on a new
@@ -24,8 +29,8 @@
 //!   branch whose id starts with [`READ_PREFIX`].
 //!
 //! Cores come from the standard library; memory and disk from the OS's own tools: `/proc/meminfo`
-//! and `df` on Linux, `sysctl`, `vm_stat` (free, inactive, speculative and purgeable pages) and
-//! `df` on macOS; on Windows one PowerShell (CIM for
+//! and `df` on Linux, `sysctl`, `vm_stat` (free, inactive, speculative and purgeable pages; wired
+//! pages apart) and `df` on macOS; on Windows one PowerShell (CIM for
 //! memory, `Get-PSDrive` for disk). Processes from `ps`, or that PowerShell's `Get-Process`. Each
 //! call has a deadline. No new crates.
 //!
@@ -57,6 +62,9 @@ pub const READ_PREFIX: &str = "read-";
 pub const MAX_MORE: u64 = 3;
 /// Under this much free disk (GB) on the target dir's drive, no more builds.
 pub const MIN_DISK_GB: u64 = 20;
+/// Wired memory at least this share of the total (percent) takes no more builds: on unified memory,
+/// what the GPU holds is wired, and the machine has little left for anything else.
+pub const MAX_WIRED_PERCENT: u64 = 50;
 /// A target dir written this recently is a build running now.
 pub const RECENT: Duration = Duration::from_secs(5 * 60);
 /// How long an OS tool may take.
@@ -84,6 +92,12 @@ pub struct Machine {
     pub nextest: Option<u64>,
     /// What a build takes on this machine: [`Costs::from_env`].
     pub costs: Costs,
+    /// Wired memory, in bytes: macOS's only (`None` elsewhere, or unread).
+    pub wired_memory: Option<u64>,
+    /// The test runs going now, holding the machine's slots ([`crate::test_runs`]), the asker's
+    /// own left out, and how many the machine takes.
+    pub test_runs: Vec<crate::test_runs::Holder>,
+    pub test_run_limit: crate::test_runs::Limit,
 }
 
 impl Machine {
@@ -176,8 +190,32 @@ pub fn suggest(m: &Machine) -> Suggestion {
             more = 0;
         }
     }
+    if shared_limits(m, &mut basis) {
+        more = 0;
+    }
     basis.push(format!("more builds: min({by_cores}, {by_memory}, {MAX_MORE}) = {more}"));
     Suggestion { more, basis }
+}
+
+/// The machine's shared limits, each with its figure in `basis`: every test-run slot taken, or
+/// wired memory at [`MAX_WIRED_PERCENT`] of the total. Whether either takes the suggestion to 0.
+fn shared_limits(m: &Machine, basis: &mut Vec<String>) -> bool {
+    let (runs, limit) = (m.test_runs.len() as u64, m.test_run_limit.runs);
+    let full = runs >= limit;
+    let who: Vec<String> = m.test_runs.iter().map(|h| format!("{}'s {} ({})", h.swarm, h.instance, h.what)).collect();
+    let who = if who.is_empty() { String::new() } else { format!(": {}", who.join(", ")) };
+    let zero = if full { ", every slot taken, so 0" } else { "" };
+    basis.push(format!("test runs: {runs} of {limit} going ({}){who}{zero}", m.test_run_limit.basis));
+    let wired = match (m.wired_memory, m.total_memory) {
+        (Some(w), Some(t)) => {
+            let high = w.saturating_mul(100) >= t.saturating_mul(MAX_WIRED_PERCENT);
+            let zero = if high { format!(", at least {MAX_WIRED_PERCENT}%, so 0") } else { String::new() };
+            basis.push(format!("wired: {} of {} (the GPU's, on unified memory){zero}", gb(w), gb(t)));
+            high
+        }
+        _ => false,
+    };
+    full || wired
 }
 
 /// `MemAvailable` (else `MemFree`) and `MemTotal` from `/proc/meminfo`, in bytes.
@@ -195,10 +233,26 @@ pub fn parse_meminfo(text: &str) -> (Option<u64>, Option<u64>) {
 /// Free memory from macOS's `vm_stat`: free, inactive, speculative and purgeable pages (purgeable
 /// memory is given back the moment it's asked for), at its page size.
 pub fn parse_vm_stat(text: &str) -> Option<u64> {
-    let page: u64 = text.lines().next()?.split("page size of ").nth(1)?.split_whitespace().next()?.parse().ok()?;
-    let pages = |name: &str| -> u64 { text.lines().find_map(|l| l.strip_prefix(name)?.trim().trim_end_matches('.').parse::<u64>().ok()).unwrap_or(0) };
+    let page = vm_page_size(text)?;
+    let pages = |name: &str| vm_pages(text, name).unwrap_or(0);
     let free = ["Pages free:", "Pages inactive:", "Pages speculative:", "Pages purgeable:"].iter().fold(0u64, |n, name| n.saturating_add(pages(name)));
     free.checked_mul(page)
+}
+
+/// Wired memory from macOS's `vm_stat`: "Pages wired down" at its page size. On unified memory
+/// what the GPU holds is wired.
+pub fn parse_vm_stat_wired(text: &str) -> Option<u64> {
+    vm_pages(text, "Pages wired down:")?.checked_mul(vm_page_size(text)?)
+}
+
+/// `vm_stat`'s page size, from its first line.
+fn vm_page_size(text: &str) -> Option<u64> {
+    text.lines().next()?.split("page size of ").nth(1)?.split_whitespace().next()?.parse().ok()
+}
+
+/// The pages `vm_stat` counts on its line `name`.
+fn vm_pages(text: &str, name: &str) -> Option<u64> {
+    text.lines().find_map(|l| l.strip_prefix(name)?.trim().trim_end_matches('.').parse::<u64>().ok())
 }
 
 /// Available bytes from `df -Pk <path>`: the second line's fourth column, in KB.
@@ -213,6 +267,8 @@ pub fn parse_df(text: &str) -> Option<u64> {
 pub struct Figures {
     pub free_memory: Option<u64>,
     pub total_memory: Option<u64>,
+    /// Wired memory: macOS's only.
+    pub wired_memory: Option<u64>,
     pub free_disk: Option<u64>,
     pub cargo: Option<u64>,
     pub rustc: Option<u64>,
@@ -225,7 +281,15 @@ pub struct Figures {
 pub fn parse_windows(text: &str) -> Figures {
     let mut n = text.lines().map(|l| l.trim().parse::<u64>().ok());
     let mut next = || n.next().flatten();
-    Figures { free_memory: next(), total_memory: next().and_then(|k| k.checked_mul(1024)), free_disk: next(), cargo: next(), rustc: next(), nextest: next() }
+    Figures {
+        free_memory: next(),
+        total_memory: next().and_then(|k| k.checked_mul(1024)),
+        wired_memory: None,
+        free_disk: next(),
+        cargo: next(),
+        rustc: next(),
+        nextest: next(),
+    }
 }
 
 /// Every Windows figure from one PowerShell (its start is most of the time; `tasklist` alone took
@@ -371,17 +435,33 @@ fn figures(path: &Path) -> Figures {
         let script = WINDOWS_SCRIPT.replace("{disk}", &disk);
         return parse_windows(&tool("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", &script]).unwrap_or_default());
     }
-    let (free_memory, total_memory) = if cfg!(target_os = "macos") {
-        (tool("vm_stat", &[]).as_deref().and_then(parse_vm_stat), tool("sysctl", &["-n", "hw.memsize"]).and_then(|s| s.trim().parse().ok()))
+    let (free_memory, total_memory, wired_memory) = if cfg!(target_os = "macos") {
+        let vm = tool("vm_stat", &[]);
+        (vm.as_deref().and_then(parse_vm_stat), total_memory(), vm.as_deref().and_then(parse_vm_stat_wired))
     } else {
-        std::fs::read_to_string("/proc/meminfo").map(|t| parse_meminfo(&t)).unwrap_or((None, None))
+        let (free, total) = std::fs::read_to_string("/proc/meminfo").map(|t| parse_meminfo(&t)).unwrap_or((None, None));
+        (free, total, None)
     };
     let free_disk = tool("df", &["-Pk", &at]).as_deref().and_then(parse_df);
     let (cargo, rustc, nextest) = tool("ps", &["-A", "-o", "comm="]).map_or((None, None, None), |t| {
         let (c, r, n) = count_processes(&t);
         (Some(c), Some(r), Some(n))
     });
-    Figures { free_memory, total_memory, free_disk, cargo, rustc, nextest }
+    Figures { free_memory, total_memory, wired_memory, free_disk, cargo, rustc, nextest }
+}
+
+/// The machine's total memory, in bytes: `sysctl hw.memsize` on macOS, `/proc/meminfo` on Linux,
+/// CIM's visible memory on Windows (one short PowerShell), within a deadline.
+pub fn total_memory() -> Option<u64> {
+    if cfg!(windows) {
+        let script = "(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize";
+        let kb: u64 = tool("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", script])?.trim().parse().ok()?;
+        kb.checked_mul(1024)
+    } else if cfg!(target_os = "macos") {
+        tool("sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()
+    } else {
+        std::fs::read_to_string("/proc/meminfo").ok().and_then(|t| parse_meminfo(&t).1)
+    }
 }
 
 /// Read the machine, for a checkout at `root` building into `target`.
@@ -407,6 +487,10 @@ pub fn read(root: &Path, target: &Path) -> Machine {
         rustc: f.rustc,
         nextest: f.nextest,
         costs: Costs::from_env(|name| std::env::var(name).ok()),
+        wired_memory: f.wired_memory,
+        // The asker's own slot (a gate's, held while it checks capacity) is no other run.
+        test_runs: crate::test_runs::running(Some(std::process::id())),
+        test_run_limit: crate::test_runs::limit_from(std::env::var(crate::test_runs::ENV).ok().as_deref(), f.total_memory),
     }
 }
 
@@ -420,6 +504,9 @@ pub fn report(m: &Machine, s: &Suggestion, target: &Path) -> String {
         _ => "couldn't read".to_owned(),
     };
     out.push_str(&format!("  memory: {memory}\n"));
+    if let Some(w) = m.wired_memory {
+        out.push_str(&format!("  wired:  {} (the GPU's, on unified memory)\n", gb(w)));
+    }
     out.push_str(&format!(
         "  disk:   {} on the target dir's drive ({})\n",
         m.free_disk.map_or_else(|| "couldn't read".to_owned(), |d| format!("{} free", gb(d))),
@@ -440,6 +527,16 @@ pub fn report(m: &Machine, s: &Suggestion, target: &Path) -> String {
     }
     for d in &m.busy_dirs {
         out.push_str(&format!("          {}\n", d.display().to_string().replace('\\', "/")));
+    }
+    out.push_str(&format!(
+        "  test runs: {} of the machine's {} slot(s) taken ({}; `cargo xtask lock show`)\n",
+        m.test_runs.len(),
+        m.test_run_limit.runs,
+        m.test_run_limit.basis
+    ));
+    let now = crate::lock::now();
+    for h in &m.test_runs {
+        out.push_str(&format!("          {}\n", h.describe(now)));
     }
     out.push_str(&format!("suggest: {} more build(s)\n", s.more));
     for b in &s.basis {
@@ -756,6 +853,9 @@ mod tests {
             rustc: None,
             nextest: None,
             costs: Costs::default(),
+            wired_memory: None,
+            test_runs: Vec::new(),
+            test_run_limit: crate::test_runs::Limit::default(),
         }
     }
 
@@ -822,6 +922,100 @@ mod tests {
         assert_eq!(unread.builds(), 1);
     }
 
+    /// `vm_stat` on the 24 GB, 12-core Mac of 2026-11-04 (load average 25), as captured.
+    const VM_STAT_MAC: &str = "Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                   555976.
+Pages active:                                 359566.
+Pages inactive:                               214534.
+Pages speculative:                            154953.
+Pages throttled:                                   0.
+Pages wired down:                             215698.
+Pages purgeable:                                 697.
+\"Translation faults\":                    11040379081.
+Pages copy-on-write:                       409042408.
+Pages zero filled:                        9190982041.
+Pages reactivated:                        1140746863.
+Pages purged:                              232666019.
+File-backed pages:                            329705.
+Anonymous pages:                              399348.
+Pages stored in compressor:                   390742.
+Pages occupied by compressor:                  37168.
+Decompressions:                           1700892617.
+Compressions:                             2435308435.
+Pageins:                                   166380431.
+Pageouts:                                     484919.
+Swapins:                                    78159211.
+Swapouts:                                   98279800.
+";
+
+    #[test]
+    fn wired_memory_is_read_from_vm_stat() {
+        assert_eq!(parse_vm_stat_wired(VM_STAT_MAC), Some(215_698 * 16_384), "about 3.3 GB");
+        assert_eq!(parse_vm_stat(VM_STAT_MAC), Some((555_976 + 214_534 + 154_953 + 697) * 16_384), "free, inactive, speculative, purgeable");
+        assert_eq!(parse_vm_stat_wired("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 1.\n"), None, "no wired line");
+        assert_eq!(parse_vm_stat_wired("Pages wired down: 5.\n"), None, "no page size");
+        assert_eq!(
+            parse_vm_stat_wired("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages wired down: 18446744073709551615.\n"),
+            None,
+            "no overflow"
+        );
+    }
+
+    fn holder(swarm: &str, instance: &str, what: &str) -> crate::test_runs::Holder {
+        crate::test_runs::Holder { swarm: swarm.into(), instance: instance.into(), pid: Some(1), taken: None, what: what.into(), worktree: None }
+    }
+
+    /// No more builds while every test-run slot is taken (the asker's own already left out), or
+    /// while wired memory is half the total or more (sc#17); each figure is said.
+    #[test]
+    fn the_machines_shared_limits_take_the_suggestion_to_none() {
+        use crate::test_runs::Limit;
+        for p in BOTH {
+            // The 24 GB, 12-core Mac with nothing running takes one build...
+            let mut m = machine(12, Some(14), Some(500), 0);
+            m.total_memory = Some(24 * GB);
+            m.test_run_limit = Limit { runs: 1, basis: "24.0 GB of memory, one per 16 GB".into() };
+            assert_eq!(suggest(&m).more, 1);
+            assert!(suggest(&m).basis.join("\n").contains("test runs: 0 of 1 going (24.0 GB of memory, one per 16 GB)"));
+            // ...and none while another swarm's full gate holds its one slot.
+            m.test_runs = vec![holder(p.name, "w-1", "gate-full-abc1234")];
+            let s = suggest(&m);
+            assert_eq!(s.more, 0);
+            let text = s.basis.join("\n");
+            assert!(
+                text.contains(&format!(
+                    "test runs: 1 of 1 going (24.0 GB of memory, one per 16 GB): {}'s w-1 (gate-full-abc1234), every slot taken, so 0",
+                    p.name
+                )),
+                "{text}"
+            );
+            let r = report(&m, &s, Path::new("t"));
+            assert!(r.contains("test runs: 1 of the machine's 1 slot(s) taken") && r.contains(&format!("{}'s w-1 (gate-full-abc1234", p.name)), "{r}");
+            // Two slots: one run going leaves room.
+            m.test_run_limit = Limit { runs: 2, basis: "SWARM_TEST_RUNS=2".into() };
+            assert_eq!(suggest(&m).more, 1);
+            m.test_runs.push(holder(p.name, "w-2", "ready-def5678"));
+            assert_eq!(suggest(&m).more, 0);
+        }
+        // Wired memory: 3.3 GB of 24 is room; 12 GB, half, is none.
+        let mut m = machine(12, Some(14), Some(500), 0);
+        m.total_memory = Some(24 * GB);
+        m.wired_memory = parse_vm_stat_wired(VM_STAT_MAC);
+        assert_eq!(suggest(&m).more, 1);
+        assert!(suggest(&m).basis.join("\n").contains("wired: 3.3 GB of 24.0 GB (the GPU's, on unified memory)"));
+        assert!(report(&m, &suggest(&m), Path::new("t")).contains("  wired:  3.3 GB (the GPU's, on unified memory)"));
+        m.wired_memory = Some(12 * GB);
+        let s = suggest(&m);
+        assert_eq!(s.more, 0);
+        assert!(s.basis.join("\n").contains("wired: 12.0 GB of 24.0 GB (the GPU's, on unified memory), at least 50%, so 0"));
+        // Wired memory with no total, or none read (not macOS): no figure, no limit.
+        m.total_memory = None;
+        assert_eq!(suggest(&m).more, 1);
+        m.wired_memory = None;
+        assert!(!suggest(&m).basis.join("\n").contains("wired"));
+        assert!(!report(&m, &suggest(&m), Path::new("t")).contains("wired"));
+    }
+
     /// The machine's own costs from SWARM_CORES_PER_BUILD and SWARM_GB_PER_BUILD; a bad value is
     /// ignored.
     #[test]
@@ -859,6 +1053,7 @@ mod tests {
         let all = Figures {
             free_memory: Some(10_031_513_600),
             total_memory: Some(33_457_472 * 1024),
+            wired_memory: None,
             free_disk: Some(1_197_333_721_088),
             cargo: Some(7),
             rustc: Some(4),

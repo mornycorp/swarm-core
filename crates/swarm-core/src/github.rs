@@ -288,6 +288,34 @@ pub fn close_pr(project: &Project, n: u64) -> Result<(), String> {
     api(project, &["-X", "PATCH", &format!("{}/pulls/{n}", repo_path(project, None)?), "-f", "state=closed"]).map(drop)
 }
 
+/// The open pull requests of `project`'s repository whose base is `branch` (stacked on it), every
+/// page's (up to [`MAX_PAGES`]).
+pub fn open_prs_onto(project: &Project, branch: &str) -> Result<Vec<Value>, String> {
+    let repo = repo_path(project, None)?;
+    let mut out = Vec::new();
+    for page in 1..=MAX_PAGES {
+        let v = api(project, &[&format!("{repo}/pulls?state=open&base={}&per_page=100&page={page}", encode(branch))])?;
+        let rows = v.as_array().cloned().unwrap_or_default();
+        out.extend(rows.iter().filter_map(pr_from_rest));
+        if rows.len() < 100 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Change pull request `n`'s base branch to `base` (`gh pr edit <n> --base <base>`). GitHub
+/// refuses it for a closed pull request.
+pub fn retarget_pr(project: &Project, n: u64, base: &str) -> Result<(), String> {
+    api(project, &["-X", "PATCH", &format!("{}/pulls/{n}", repo_path(project, None)?), "-f", &format!("base={base}")]).map(drop)
+}
+
+/// Reopen closed pull request `n` (`gh pr reopen <n>`). GitHub refuses it while its base branch
+/// is gone.
+pub fn reopen_pr(project: &Project, n: u64) -> Result<(), String> {
+    api(project, &["-X", "PATCH", &format!("{}/pulls/{n}", repo_path(project, None)?), "-f", "state=open"]).map(drop)
+}
+
 /// Mark pull request `n` ready for review (GitHub has no REST call for it: `gh pr ready`).
 pub fn mark_ready(project: &Project, n: u64) -> Result<(), String> {
     let (repo, n) = (check_repo(project.github.repo)?, n.to_string());
@@ -530,6 +558,9 @@ mod tests {
         let p = Project { github: crate::project::GitHub { host: "github.com", repo }, ..APP_SWARM };
         let open = open_prs(&p, None).unwrap();
         assert!(open.iter().all(|pr| pr["state"] == "open" && pr["number"].is_u64()), "{open:?}");
+        let onto = open_prs_onto(&p, "main").unwrap();
+        assert!(onto.iter().all(|pr| pr["state"] == "open" && pr["base_ref"] == "main"), "{onto:?}");
+        assert!(open_prs_onto(&p, "no-such-branch-sc19").unwrap().is_empty());
         assert!(issues(&p, None, &[999_999]).unwrap().is_empty(), "a missing issue is left out, the rest kept");
         assert!(prs(&p, &[999_999]).unwrap().is_empty());
         assert!(labelled(&p, None, "main-red", "open", 1).is_ok());

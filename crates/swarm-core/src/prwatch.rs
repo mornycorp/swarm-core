@@ -15,6 +15,11 @@
 //! - **Cost:** one GitHub GraphQL call per poll (the repository's open PRs, each with its merge
 //!   state, its head commit's checks and its comment count) and a `git ls-remote` of the tracking
 //!   branch; one more call when a PR leaves the list.
+//! - **A send-back** (mornycorp/swarm-core#14): when the coordinator sends one of the agent's open
+//!   PRs back (a `sendback`, or a gate that failed for the change's cause naming it, on the
+//!   tracking branch), it says so and logs `work --issue <n> --mr <m>` for the agent, once
+//!   ([`sendback`]), so a timeline reader sees where the rework starts. Two local git calls more a
+//!   poll (the branch's files, read from the tip already fetched), only while it has an open PR.
 //! - **The end of a session** (sc#10): when the agent's last open PR leaves the list and none of
 //!   its claimed issues is open (one more call, then only), it says to end the session with
 //!   `cargo xtask finish` ([`finish_line`], [`crate::finish`]).
@@ -23,7 +28,7 @@
 //!   (default 150) until stopped, printing changes as they come: a Claude Code worker runs it under
 //!   Monitor (each line wakes it), others as a background process.
 //! - **State:** the last poll, in the clone's git directory (`prwatch-<id>.json`, beside `event`'s
-//!   queue), so every worktree of the clone shares it.
+//!   queue), so every worktree of the clone shares it, with the send-backs it logged `work` for.
 //! - **`--ready`**: the coordinator's ready-PR watch instead
 //!   (docs/swarm-protocol.md › Staying awake). A PR is ready to gate when it is open, not a draft, its
 //!   Progress filled in and its branch not `progress-*` ([`ready_line`]); its line carries its head
@@ -45,6 +50,8 @@ use serde_json::{Value, json};
 use crate::needs::{self, Need, Ref};
 use crate::project::ReadyWatch;
 use crate::{Project, event, github};
+
+pub mod sendback;
 
 /// Shortest poll interval, in seconds.
 const MIN_INTERVAL: u64 = 30;
@@ -187,16 +194,19 @@ fn state_path(root: &Path, agent: &str) -> PathBuf {
 pub struct Polled {
     pub mrs: BTreeMap<u64, Pr>,
     pub needs: BTreeMap<Ref, Need>,
+    /// The send-backs of its open PRs it logged `work` for ([`sendback::SendBack::key`]).
+    pub resumed: BTreeSet<String>,
 }
 
-/// The last poll: `{mrs, needs}`.
+/// The last poll: `{mrs, needs, resumed}`.
 fn load(path: &Path) -> Option<Polled> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let list = |v: Option<&Value>| v.and_then(Value::as_array).cloned().unwrap_or_default();
-    let (mrs, needs) = (list(v.get("mrs")), list(v.get("needs")));
+    let (mrs, needs, resumed) = (list(v.get("mrs")), list(v.get("needs")), list(v.get("resumed")));
     Some(Polled {
         mrs: mrs.iter().filter_map(Pr::from_json).map(|m| (m.number, m)).collect(),
         needs: needs.iter().filter_map(Need::from_json).map(|n| (n.at(), n)).collect(),
+        resumed: resumed.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
     })
 }
 
@@ -204,26 +214,40 @@ fn save(path: &Path, polled: &Polled) -> Result<(), String> {
     let v = json!({
         "mrs": polled.mrs.values().map(Pr::to_json).collect::<Vec<_>>(),
         "needs": polled.needs.values().map(Need::to_json).collect::<Vec<_>>(),
+        "resumed": polled.resumed,
     });
     std::fs::write(path, v.to_string()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The agent's tracking file at the remote's tip (empty before its first event).
-pub(crate) fn tracking_file(project: &Project, root: &Path, agent: &str) -> Result<String, String> {
-    let Some(tip) = event::fetch_tip(root, project.branches.remote, &format!("refs/heads/{}", project.branches.tracking))? else { return Ok(String::new()) };
-    Ok(crate::process::git(root, &["show", &format!("{tip}:tracking/{agent}/work.jsonl")], None, &[]).unwrap_or_default())
+/// The tracking branch's tip on the remote, fetched (`None` before its first event).
+fn tracking_tip(project: &Project, root: &Path) -> Result<Option<String>, String> {
+    event::fetch_tip(root, project.branches.remote, &format!("refs/heads/{}", project.branches.tracking))
 }
 
-/// One poll: the agent's open PRs and its issues' needs now, and what to say (changes, then PRs
-/// that left the list, then needs that closed or were taken).
+/// The agent's file at the tracking branch's commit `tip` (empty before its first event).
+fn file_at(root: &Path, tip: &str, agent: &str) -> String {
+    crate::process::git(root, &["show", &format!("{tip}:tracking/{agent}/work.jsonl")], None, &[]).unwrap_or_default()
+}
+
+/// The agent's tracking file at the remote's tip (empty before its first event).
+pub(crate) fn tracking_file(project: &Project, root: &Path, agent: &str) -> Result<String, String> {
+    Ok(tracking_tip(project, root)?.map(|tip| file_at(root, &tip, agent)).unwrap_or_default())
+}
+
+/// One poll: the agent's open PRs and its issues' needs now, and what to say (send-backs it
+/// logged `work` for, which a first poll says too; then changes, PRs that left the list, and needs
+/// that closed or were taken).
 fn poll(project: &Project, root: &Path, agent: &str, before: Option<&Polled>) -> Result<(Polled, Vec<String>), String> {
-    let events = tracking_file(project, root, agent)?;
+    let tip = tracking_tip(project, root)?;
+    let events = tip.as_deref().map(|t| file_at(root, t, agent)).unwrap_or_default();
     let open = github::open_prs(project, None)?;
     let mine = agent_mrs(&events);
     let mrs: BTreeMap<u64, Pr> = open.iter().filter_map(Pr::from_api).filter(|m| mine.contains(&m.number)).map(|m| (m.number, m)).collect();
-    let mut now = Polled { mrs, needs: poll_needs(project, &agent_issues(&events), &open)? };
-    let Some(before) = before else { return Ok((now, Vec::new())) };
-    let (mut lines, left) = changes(&before.mrs, &mut now.mrs);
+    let mut now = Polled { mrs, needs: poll_needs(project, &agent_issues(&events), &open)?, resumed: before.map(|b| b.resumed.clone()).unwrap_or_default() };
+    let mut lines = pick_up_send_backs(project, root, agent, tip.as_deref(), &events, &mut now);
+    let Some(before) = before else { return Ok((now, lines)) };
+    let (changed, left) = changes(&before.mrs, &mut now.mrs);
+    lines.extend(changed);
     let last_left = !left.is_empty() && now.mrs.is_empty();
     lines.extend(left.into_iter().map(|n| left_line(project, &before.mrs, n)));
     lines.extend(needs::changes(&before.needs, &now.needs));
@@ -231,6 +255,46 @@ fn poll(project: &Project, root: &Path, agent: &str, before: Option<&Polled>) ->
         lines.push(finish_line(agent));
     }
     Ok((now, lines))
+}
+
+/// Log `work` for each send-back of the agent's open PRs it hasn't picked up ([`sendback::due`]),
+/// keep it in `now.resumed` so it is logged once, and say so; `own` is the agent's file at the
+/// tracking branch's `tip`. The record keeps only the open PRs' send-backs.
+fn pick_up_send_backs(project: &Project, root: &Path, agent: &str, tip: Option<&str>, own: &str, now: &mut Polled) -> Vec<String> {
+    let open: BTreeSet<u64> = now.mrs.keys().copied().collect();
+    now.resumed.retain(|k| open.iter().any(|m| k.starts_with(&format!("#{m}@"))));
+    let Some(tip) = tip.filter(|_| !open.is_empty()) else { return Vec::new() };
+    let files = match crate::claim::tracking_files_at(root, tip) {
+        Ok(files) => files,
+        Err(e) => {
+            eprintln!("prwatch: couldn't read the tracking branch for send-backs: {e}");
+            return Vec::new();
+        }
+    };
+    let mut lines = Vec::new();
+    for r in sendback::due(&files, own, &open, &now.resumed) {
+        let title = now.mrs.get(&r.back.mr).map(|m| m.title.as_str()).unwrap_or_default();
+        lines.push(r.line(title, &log_work(project, root, agent, &r)));
+        now.resumed.insert(r.back.key());
+    }
+    lines
+}
+
+/// Log the agent's `work` on a send-back it picks up, and say how it went: never fails the poll
+/// (offline, the event is queued and sent with the next).
+fn log_work(project: &Project, root: &Path, agent: &str, r: &sendback::Resume) -> String {
+    let logged = format!("logged `work --issue {} --mr {}`", r.issue, r.back.mr);
+    if project.env("TRACKING").is_some_and(|v| v.eq_ignore_ascii_case("off")) {
+        return format!("tracking is off ({}=off): log `work --issue {} --mr {}` when you start on it", project.env_name("TRACKING"), r.issue, r.back.mr);
+    }
+    let e = event::Event { issue: Some(r.issue), mr: Some(r.back.mr), note: Some(r.note()), ..event::Event::named("work") };
+    if let Err(why) = e.check_as(agent) {
+        return format!("couldn't log `work`: {why}");
+    }
+    match event::send(project, root, &event::queue_path(project, root), &[(agent.to_owned(), e.line(&crate::time::now_iso()))]) {
+        Ok(_) => format!("{logged}: your rework starts now"),
+        Err(why) => format!("{logged} (queued: {why}): your rework starts now"),
+    }
 }
 
 /// The open issues among `claimed` (at most 100, the newest), in [`github`]'s shape.
@@ -621,9 +685,51 @@ not json
         assert!(state.ends_with(".git/prwatch-pc-1.json"), "{}", state.display());
         let mrs: BTreeMap<u64, Pr> = [(7, pr(7, "dirty", Some("failure"), 3))].into_iter().collect();
         let need = Need { project: None, iid: 267, title: "S4".into(), state: "open".into(), by: [269].into_iter().collect(), mr: Some(293) };
-        let polled = Polled { mrs, needs: [(Ref::here(267), need)].into_iter().collect() };
+        let polled =
+            Polled { mrs, needs: [(Ref::here(267), need)].into_iter().collect(), resumed: ["#7@2026-10-18T15:03:00Z".to_owned()].into_iter().collect() };
         save(&state, &polled).unwrap();
         assert_eq!(load(&state), Some(polled));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// mornycorp/swarm-core#14, through git: the coordinator's `sendback` of the agent's open PR
+    /// logs the agent's `work` on it once, which the next poll, and a poll with no record, see.
+    #[test]
+    fn a_send_back_logs_the_workers_work_once() {
+        let dir = swarm_core_testkit::temp_dir("xtask-prwatch-sendback");
+        let remote = dir.join("remote.git");
+        crate::process::git(&dir, &["init", "--quiet", "--bare", remote.to_str().unwrap()], None, &[]).unwrap();
+        let clone = dir.join("clone");
+        crate::process::git(&dir, &["init", "--quiet", clone.to_str().unwrap()], None, &[]).unwrap();
+        crate::process::git(&clone, &["remote", "add", "origin", remote.to_str().unwrap()], None, &[]).unwrap();
+        let lines = [
+            ("pc-w", r#"{"event":"claim","issue":7,"mr":9,"t":"2026-10-18T15:00:00Z"}"#),
+            ("pc-w", r#"{"event":"submit","issue":7,"mr":9,"t":"2026-10-18T15:30:00Z"}"#),
+            ("pc-c", r#"{"event":"sendback","issue":7,"mr":9,"note":"cause=conflict: Cargo.toml","t":"2026-10-18T16:00:00Z"}"#),
+        ];
+        let events: Vec<(String, String)> = lines.iter().map(|(a, l)| ((*a).to_owned(), (*l).to_owned())).collect();
+        assert_eq!(event::send(&P, &clone, &dir.join("queue.jsonl"), &events), Ok(3));
+        let poll_once = |resumed: BTreeSet<String>| {
+            let tip = tracking_tip(&P, &clone).unwrap();
+            let own = file_at(&clone, tip.as_deref().unwrap(), "pc-w");
+            let mut now = Polled { mrs: [(9, pr(9, "clean", None, 1))].into_iter().collect(), needs: BTreeMap::new(), resumed };
+            let said = pick_up_send_backs(&P, &clone, "pc-w", tip.as_deref(), &own, &mut now);
+            (said, now.resumed)
+        };
+        let (said, resumed) = poll_once(["#4@2026-10-01T00:00:00Z".to_owned()].into_iter().collect());
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].starts_with("#9 sent back (2026-10-18T16:00:00Z): cause=conflict: Cargo.toml; logged `work --issue 7 --mr 9`"), "{}", said[0]);
+        assert_eq!(resumed.into_iter().collect::<Vec<_>>(), ["#9@2026-10-18T16:00:00Z"], "a closed PR's record is dropped");
+        let own = tracking_file(&P, &clone, "pc-w").unwrap();
+        let work: Vec<&str> = own.lines().filter(|l| l.contains(r#""event":"work""#)).collect();
+        assert_eq!(work.len(), 1, "{own}");
+        let v: Value = serde_json::from_str(work[0]).unwrap();
+        assert_eq!((v["issue"].as_u64(), v["mr"].as_u64()), (Some(7), Some(9)));
+        assert_eq!(v["note"], "rework: #9 sent back 2026-10-18T16:00:00Z: cause=conflict: Cargo.toml");
+        let (again, _) = poll_once(["#9@2026-10-18T16:00:00Z".to_owned()].into_iter().collect());
+        assert!(again.is_empty(), "logged once: {again:?}");
+        let (fresh, _) = poll_once(BTreeSet::new());
+        assert!(fresh.is_empty(), "the work on the branch says it was picked up: {fresh:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

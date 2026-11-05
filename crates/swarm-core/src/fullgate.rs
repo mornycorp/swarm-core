@@ -18,7 +18,10 @@
 //!   no stop after [`STALE`] is abandoned. The race is run before the shared checkout is touched.
 //! - **What:** the whole `ci` on a clean checkout of `origin/main` at the commit it recorded
 //!   ([`Project::full_gate_worktree`], beside the primary checkout; `main`'s own `cargo xtask
-//!   ci`), holding the machine-wide gate lock so it never runs beside either swarm's gate. A
+//!   ci`), holding the machine-wide gate lock so it never runs beside either swarm's gate, and a
+//!   test-run slot ([`crate::test_runs`]) so it never tests beside more runs than the machine
+//!   takes (a worker's `ready` among them). `claim` starts one only with room for a build
+//!   ([`before_claim`]), which there isn't while every slot is taken. A
 //!   project's extra inputs ([`Hooks::full_gate_env`]: a test corpus's reference, say) go into its start
 //!   note and its `ci`'s environment.
 //! - **Whose code**: the agent that won the race only checks the

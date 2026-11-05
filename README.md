@@ -63,7 +63,7 @@ machine, and the first coordinator and workers.
 
 | Phase | Commands | Library modules |
 |---|---|---|
-| 1 | `capacity`, `event`, `gate-times`, `lock`, `tidy` | `checkout`, `machine_lock`, `process`, `time` |
+| 1 | `capacity`, `event`, `gate-times`, `lock`, `tidy` | `checkout`, `machine_lock`, `test_runs`, `process`, `time` |
 | 2 | `claim`, `prwatch`, `ready`, `stack`, `land`, `fullgate` | `needs`, `empty` |
 | 3 | `gate` (and `gate --rerun-failed`) | `gate::rerun` |
 | 4 | `swarm-core` (`--version`, `bump`, `sync-assets [--check]`) | `changed` (with `changed::lock`, `changed::reads`), `pin`, `assets` |
