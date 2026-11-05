@@ -12,7 +12,8 @@ what it serves and how a consumer wires it in; the swarm protocol
   only one project wants goes behind `Project` settings or a `Hooks` method whose default keeps the
   others' behaviour unchanged. The tests run each module against two fixture projects that differ
   in every setting (`project::fixtures`).
-- **Landing:** a PR here merges once its CI passes. A consumer picks a change up with `cargo xtask swarm-core bump`, and its own gate runs the new code.
+- **Landing:** a PR here merges once the checks below pass locally; GitHub runs no workflows
+  (CI is local, for the coordinator and every worker). A consumer picks a change up with `cargo xtask swarm-core bump`, and its own gate runs the new code.
 - **GitHub, through `gh`:** every call to GitHub goes through `src/github.rs`, which reads REST
   and GraphQL answers into one shape for a PR and one for an issue; the commands' decisions are
   pure functions over those shapes, tested without a network. A change to `github.rs` also runs

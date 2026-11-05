@@ -1,6 +1,6 @@
 # Starting a new swarm
 
-> **Last updated:** 2026-10-30 · **Change:** major (GitLab to GitHub: access, labels, templates, the Actions workflow and its token)
+> **Last updated:** 2026-11-05 · **Change:** minor (no GitHub Actions: CI is local)
 
 How a new repo starts an agent swarm from Swarm Core alone: the xtask that wires it in, the
 `ci` it needs, the pin and the shared files, GitHub, each machine, and the first coordinator and
@@ -15,7 +15,7 @@ which the repo pins as `docs/swarm-protocol.md`: read it before starting the fir
 |---|---|---|
 | `xtask/`: the `Project`, the `Hooks`, the dispatch, `ci` | the repo's | step 2, from [`examples/consumer_xtask.rs`](../crates/swarm-core/examples/consumer_xtask.rs) |
 | The pinned copies: the protocol, `lessons.md`, `progress-docs.md`, the GitHub templates, `scripts/`, the skills | **Swarm Core's**: `sync-assets --check` fails on an edit | step 4, `cargo xtask swarm-core sync-assets` |
-| The starting points: `AGENTS.md`, `docs/swarm.md`, `docs/development.md`, the progress docs, the owner's directions, the merge check's prompt, nextest's `ci` profile, the CI workflow | **the repo's**, once copied: edit freely, nothing checks them | step 5, `cargo xtask swarm-core init` |
+| The starting points: `AGENTS.md`, `docs/swarm.md`, `docs/development.md`, the progress docs, the owner's directions, the merge check's prompt, nextest's `ci` profile | **the repo's**, once copied: edit freely, nothing checks them | step 5, `cargo xtask swarm-core init` |
 
 Why the two kinds: the pinned copies are the process every swarm shares, so a change to them is a
 Swarm Core PR and a bump in each repo. The starting points describe the repo itself (its crates,
@@ -128,8 +128,6 @@ Then make them the repo's own, before the first agent starts:
 - `docs/development.md`: how to build and test; measure **How many builds at once** on the
   owner's machine.
 - `docs/scorecard.md`: by hand to start; generate it later.
-- `.github/workflows/ci.yml`: the CI job (step 7); add the repo's own jobs (other platforms, a
-  web build).
 - `docs/merge-check.md`: the scheduled merge check's prompt (step 8).
 
 Add `target/`, `log/` and `.claude/worktrees/` to `.gitignore`.
@@ -146,30 +144,18 @@ Add `target/`, `log/` and `.claude/worktrees/` to `.gitignore`.
   `.github/pull_request_template.md`): `claim` opens each draft PR from the PR template.
 - **Protect `main`** (a ruleset or branch protection): changes only through PRs, merge commits
   allowed, and **no required status checks**: the coordinator's local gate is the check before a
-  merge, and `land` cancels a PR's runs as it lands it, so a required check would block every
-  merge. Only the coordinator merges.
+  merge, and GitHub runs nothing to report one, so a required check would block every merge. Only
+  the coordinator merges.
 - **Draft PRs** need a plan that has them for the repo's visibility (a private repository needs
   GitHub Pro, Team or Enterprise): `claim` opens every PR as a draft.
 
 ## 7. CI
 
-`cargo xtask swarm-core init` writes `.github/workflows/ci.yml`, which runs the repo's own
-`cargo xtask ci` once a day on `main` (owner, 2026-10-31), and by hand (`gh workflow run ci`):
-never on pushes or PRs, since local gates decide merges, and a red daily run is `main` red.
-Swarm Core is a private
-repository, so the job points its URL at a read-only token before cargo runs:
-
-```sh
-git config --global url."https://x-access-token:${SWARM_CORE_TOKEN}@github.com/mornycorp/swarm-core".insteadOf "https://github.com/mornycorp/swarm-core"
-```
-
-With `net.git-fetch-with-cli`, cargo's fetch goes through that rewrite. **The token** is a
-fine-grained personal access token whose resource owner is `mornycorp`, with **Contents: read**
-on `mornycorp/swarm-core` only (the organization may have to approve it), stored as the repo's
-`SWARM_CORE_TOKEN` Actions secret: `mornycorp` keeps it once, as an organization secret visible
-to its private repositories (`gh secret set SWARM_CORE_TOKEN --org mornycorp --visibility
-private`), so a new swarm needs nothing more. A repository secret of the same name overrides it.
-Until it is there, every run fails to fetch Swarm Core.
+CI is local, for the coordinator and every worker (owner, 2026-11-05): the repo has no
+`.github/workflows/`, and GitHub runs nothing. Workers gate with `cargo xtask ci --changed`, the
+coordinator gates each stack before `land`, and the periodic full gate runs all of `ci` on
+`main`; a red one files `main-red`. If the repo has GitHub Actions enabled, turn them off
+(Settings › Actions › Disable actions) so a stray workflow file never runs.
 
 ## 8. Each machine, then the first agents
 

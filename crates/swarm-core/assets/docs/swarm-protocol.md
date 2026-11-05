@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (gating the same stack again after a failure is its rerun; `claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-05 · **Change:** minor (no GitHub Actions: CI is local; gating the same stack again after a failure is its rerun; `claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -237,8 +237,8 @@ request. Always pass `--repo {{github.repo}}` to gh.
    PR stacked on another's branch), stopping on a conflict for you to resolve, runs `cargo xtask
    ci --changed` on the rebased tree, checks `main` once more (a move during the gate: it rebases
    again, pushing without a second gate when the PR's diff is unchanged, and stopping before the
-   push on a conflict), pushes, marks the PR ready for review (which starts its checks:
-   the workflows run on `ready_for_review`) and logs `submit`. Its gate:
+   push on a conflict), pushes, marks the PR ready for review (no GitHub Actions run: CI is
+   local) and logs `submit`. Its gate:
    - **Its own sub-agent**: it logs each gate it runs as `ready-<the head's short
      sha>` (`sub.start --name ready`, then `sub.stop` with `rc=0`, or a failure's
      `rc=<n>; cause=<cause>; step=<step>`: the exit code, the cause read from the log as the gate
@@ -395,10 +395,10 @@ What each line asks of you:
 
 | Line | Do |
 |---|---|
-| `#m merged: rebase what is stacked on it` | rebase the next PR of the stack onto `main` at once (`git rebase --onto origin/main <the old base's tip>`), gate, push (its checks run again) |
+| `#m merged: rebase what is stacked on it` | rebase the next PR of the stack onto `main` at once (`git rebase --onto origin/main <the old base's tip>`), gate, push |
 | `merge state: … -> dirty` | a conflict: rebase onto `main`, resolve, gate, push |
 | `merge state: … -> behind` | nothing: the coordinator brings it up to `main` at merge |
-| `checks: failure` | read the failed job's log (`gh run view --log-failed`); fix it if it is yours, else say whose it is on the PR (and file it) |
+| `checks: failure` | GitHub runs no workflows, so a check is something outside the swarm (an app, a hand-added workflow): say so on the PR and tell the owner |
 | `#m sent back (<when>): <why>; logged \`work …\`` | the coordinator sent it back: rework it (the `work` is logged), gate, push, and `ready` again |
 | `n new comments` | read them: a question (answer it), or a send-back's reasons (`prwatch` says `sent back` itself and logs its `work`; if it didn't, log `work --issue <n> --mr <m>` as you start) |
 | `#n closed (needed by #m): start what waited on it` | rebase `#m`'s branch onto `main` and build what waited on `#n` |
@@ -592,8 +592,7 @@ On each finished pull request:
       2026-10-19 a PR merged without its fix, whose push hadn't landed); a push that didn't
       land is tried again, three times in all;
    3. it notes the gate's `CI summary` on the PR (from that log; `--summary` to pass one),
-      and refuses a summary that isn't a pass; then it cancels the workflow runs of the PR's head
-      still queued or running, which the gate replaced. Then it retargets onto `main` every open
+      and refuses a summary that isn't a pass. Then it retargets onto `main` every open
       PR whose base is this PR's source branch (`gh pr edit <n> --base main`), the stack's later
       PRs first, so deleting that branch once it merged closes none of them; a retarget that fails
       stops it before the merge;
@@ -613,8 +612,8 @@ On each finished pull request:
       hadn't happened closed its PR).
 
    Then it closes the gate (`gate --stop`, which drops the lock). A rerun after a failure goes on
-   from the PR that stopped (an already pushed branch isn't pushed again). `main`'s own workflows
-   (Linux and the web build) run after each code merge and are watched.
+   from the PR that stopped (an already pushed branch isn't pushed again). Nothing runs on
+   GitHub after a merge: CI is local (owner, 2026-11-05).
    - **A red gate**. Read the failure's cause (the gate prints it, and its `.rc`
      and `sub.stop` name it). A project's own causes (`Hooks::extra_causes`, read from the log
      before the shared ones) are `gpu`, the GPU or the desktop under load, and `python`, no Python
@@ -648,14 +647,14 @@ On each finished pull request:
        starts it as `rerun of gate-<n>: …` itself, so a flake it answers sends no PR back. A new
        push, another PR, a moved `main` or a gate of another stack between makes it a gate of
        its own; so does reusing gate-<n>'s own `--sub`.
-   - **Stop on red**. While `main`'s CI is red, nothing merges and
-     no work starts from `main`. GitHub CI runs once a day on `main`, not on pushes or PRs (owner,
-     2026-10-31; [swarm.md › What CI runs](swarm.md#what-ci-runs)), so the coordinator checks the
-     latest daily run each batch. On a red one it files a `main-red` issue at once (what broke, the
-     workflow run, the merges since the last green run), so every agent holds; fixes forward or reverts the batch that broke it,
-     through the same local gate; and closes the issue when `main` is green again. The periodic
-     full gate files one the same way when `main` fails it ([The periodic full
-     gate](#the-periodic-full-gate)). While one is open, `cargo xtask claim` refuses to start new work (it names the issue), but for the
+   - **Stop on red**. While `main` is red, nothing merges and
+     no work starts from `main`. CI is local, for the coordinator and every worker: GitHub runs
+     no workflows (owner, 2026-11-05; [swarm.md › What CI runs](swarm.md#what-ci-runs)). The
+     periodic full gate files a `main-red` issue when `main` fails it ([The periodic full
+     gate](#the-periodic-full-gate)), and the coordinator files one at once when a local gate
+     shows `main` itself broken (what broke, the gate's log, the merges since the last green
+     gate), so every agent holds; fixes forward or reverts the batch that broke it, through the
+     same local gate; and closes the issue when `main` is green again. While one is open, `cargo xtask claim` refuses to start new work (it names the issue), but for the
      coordinator's own `--no-pr` claims and a claim of the `main-red` issue itself, `cargo xtask
      land` refuses to merge but for the fix (the land step above), and `claim
      --check` (`ci --changed`, the pre-push hook) warns that a failure may not be the branch's own.
@@ -712,14 +711,12 @@ On each finished pull request:
      wait for the full gate). The kind goes in the gate's notes (`capacity=<n> free=<GB>; kind=<kind>
      (<why>)` in `sub.start`, `kind=<kind>` in a failure's and a pass's `sub.stop`) and its `.rc`.
      `--merge <branch>` (repeatable) gates branches merged onto `origin/main`
-     instead of the stack. `main`'s daily CI and the periodic full
-     gate stay the backstops.
-   - **Docs-only merges skip main's workflows** (owner 2026-10-16): a PR whose every file
-     is Markdown (the progress folds, docs fixes) is merged with `[skip ci]` in its merge commit.
+     instead of the stack. The periodic full gate stays the backstop.
+   - **Docs-only merges** (owner 2026-10-16): a PR whose every file
+     is Markdown (the progress folds, docs fixes) is merged with `[skip ci]` in its merge commit,
+     inert now that GitHub runs no workflows.
      Its gate must pass, and a doc a test reads tests its reader (in one project a
-     change to `gaps.md` or the scorecard runs xtask's tests). It matters only to a repo whose CI
-     still runs on pushes to `main` (the template's runs once a day): there each new run cancels
-     the one still running, so a docs merge would otherwise restart the wait for the code before it. Its `ci --changed` run is a gate too: `sub.start --sub gate-<n> --name gate
+     change to `gaps.md` or the scorecard runs xtask's tests). Its `ci --changed` run is a gate too: `sub.start --sub gate-<n> --name gate
      --note "docs gate: #<m>"`, the run, the merge logged with `--sub gate-<n>` (when it closes an
      issue), then `sub.stop`, so `swarm.lint` finds no merge outside a gate.
    - **Then the label goes**: GitHub closes the issue on the merge but leaves its labels,
@@ -1115,8 +1112,9 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 - **Ready work** caps parallelism: the coordinator's most valuable job is splitting work so more
   of it is independent.
-- **CI capacity:** the runners' minutes are shared, so draft PRs get no workflow run (the
-  workflow skips drafts); workers rely on `cargo xtask ci --changed` locally.
+- **CI capacity:** CI is local (owner, 2026-11-05): GitHub runs no workflows, so each machine's
+  cores and disk are the limit (`cargo xtask capacity`); workers rely on `cargo xtask ci
+  --changed`, the coordinator on its gate.
 - **Empty draft PRs:** GitHub refuses a pull request whose branch has no commits of its own.
   Push a first commit before opening it (`claim`'s claim commit).
 
@@ -1124,6 +1122,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | No GitHub Actions (owner, 2026-11-05): CI is local for the coordinator and every worker; `land` no longer cancels workflow runs, and `main` red comes from the local gates and the periodic full gate |
 | 2026-11-04 | minor | Staying awake › Test runs share the machine (new): every `ci` run that builds and tests (a gate that builds, the periodic full gate's, `ready`'s) holds one of the machine's test-run slots, `SWARM_TEST_RUNS` or one per 16 GB; the order repo lock, machine lock, slot, capacity; `capacity` suggests none while every slot is taken or wired memory is half the total (sc#17) |
 | 2026-11-04 | minor | The coordinator's loop › A red gate: gating the same stack again (the same PRs at the same heads onto the same `main`) straight after a failure is its rerun, and `gate` notes it `rerun of <sub>:` itself, so a flake it answers sends nothing back (sc#20) |
 | 2026-11-04 | minor | Picking work › Taking over: a claim is stale on the coordinator's say-so (`release --of`, or a `released:` comment) or after 24 hours with no events, comments or commits; `claim <n> --take-over` adopts its PR and branch with their commits, logs `release --of` the old holder, comments the release and the claim, and takes `status::blocked` off when everything its hold waits on is closed; `--force` names `--take-over` for a branch with work on it; the coordinator's step 6 hands a stale claim over so (mornycorp/swarm-core#16) |

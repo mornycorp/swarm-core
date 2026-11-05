@@ -23,7 +23,7 @@ label "status::in-progress" "#1f75cb" "Claimed: a draft PR is open for it (see t
 label "status::blocked"     "#dc143c" "Waiting on something outside the claimer's control; the comment says what"
 label "sync"                "#8e44ad" "A twin of another swarm's change, to port here (docs/swarm-protocol.md, step 9)"
 label "needs::human"        "#ed9121" "An agent can't finish this alone (decision, credentials, hardware, permissions)"
-label "main-red"            "#b22222" "main's CI is red: nothing merges or starts from main until it is green (swarm-protocol.md, step 3)"
+label "main-red"            "#b22222" "main is red: nothing merges or starts from main until it is green (swarm-protocol.md, step 3)"
 # Kinds.
 label "type::task" "#6699cc" "Planned work"
 label "type::bug"  "#d9534f" "Behaves wrongly or crashes"

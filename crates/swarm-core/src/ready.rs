@@ -38,8 +38,8 @@
 //!    something itself), it gates again. A conflict aborts the rebase, leaves the branch as gated
 //!    and stops before pushing, naming the files. One re-check only: a base that moves again is
 //!    `stack`'s to handle.
-//! 5. **Submit:** push (`--force-with-lease`), mark the PR ready for review (GitHub Actions starts
-//!    its checks on `ready_for_review`), and log the `submit` event, whose note names the tests a
+//! 5. **Submit:** push (`--force-with-lease`), mark the PR ready for review (no GitHub Actions
+//!    run: the coordinator's local gate checks it), and log the `submit` event, whose note names the tests a
 //!    rerun passed alone. Whether it is draft is read again here, not taken from step 1: a gate
 //!    sends PRs back to draft while this one runs ([`mark_ready`]).
 //!
@@ -384,7 +384,7 @@ fn gated_push(dir: &Path, base: &str, gate: &mut dyn FnMut() -> Result<(), Strin
 /// rerun alone (`reran`), for the coordinator (mornycorp/swarm-core#14).
 fn submit(project: &Project, root: &Path, o: &Opts, pr: &Value, reran: &[own_gate::Reran]) -> Result<(), String> {
     mark_ready(&mut || github::pr(project, o.mr), &mut || github::mark_ready(project, o.mr))?;
-    println!("ready: #{} pushed and ready for review; GitHub Actions runs its checks", o.mr);
+    println!("ready: #{} pushed and ready for review", o.mr);
     let mut ev = vec!["submit".to_owned(), "--agent".to_owned(), o.agent.clone(), "--mr".to_owned(), o.mr.to_string()];
     if let Some(issue) = submitted_issue(pr) {
         ev.extend(["--issue".to_owned(), issue.to_string()]);

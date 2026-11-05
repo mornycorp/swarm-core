@@ -104,7 +104,7 @@ pub struct Entry {
     /// branch a worker moved since is restacked onto it to compare trees;
     /// empty in a record from before.
     pub onto: String,
-    /// Every file it changes is Markdown, so `main`'s workflows skip its merge.
+    /// Every file it changes is Markdown, so its merge commit says `[skip ci]`.
     pub docs_only: bool,
     /// It carries merge commits, so its base was merged in rather than rebased onto: `land`
     /// merges `main` in again rather than asking the server to rebase it.
@@ -226,10 +226,10 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
-/// A change is docs-only when every file it touches is Markdown: its merge skips `main`'s
-/// workflows (`[skip ci]`; docs/swarm-protocol.md › The coordinator's loop). Stricter than a docs gate (no
-/// crate built): a `scorecard/*.toml` or `.github/workflows/` change may get the docs gate locally,
-/// but `main`'s workflows still run. An empty change is not docs-only.
+/// A change is docs-only when every file it touches is Markdown: its merge commit says
+/// `[skip ci]` (docs/swarm-protocol.md › The coordinator's loop). Stricter than a docs gate (no
+/// crate built): a `scorecard/*.toml` change may get the docs gate locally, but is not docs-only.
+/// An empty change is not docs-only.
 pub fn docs_only(files: &[String]) -> bool {
     !files.is_empty() && files.iter().all(|f| f.to_ascii_lowercase().ends_with(".md"))
 }

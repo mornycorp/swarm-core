@@ -1,7 +1,8 @@
 //! The starting points a new consumer copies once and then owns (swarm-core#7): the files
 //! the swarm protocol and the coordinator's role assume a consumer has (`AGENTS.md`, its
 //! `docs/architecture.md`, `docs/swarm.md`, `docs/development.md`, the progress docs, the owner's directions, the
-//! scheduled merge check's prompt, nextest's `ci` profile, the GitHub Actions workflow). They live in
+//! scheduled merge check's prompt, nextest's `ci` profile). No GitHub Actions workflow: CI is
+//! local, the gates of the coordinator and every worker. They live in
 //! `crates/swarm-core/templates/`, at the path each takes in a consumer, built into the crate
 //! ([`TEMPLATES`]).
 //!
@@ -23,7 +24,6 @@ use crate::{Hooks, Project};
 /// The templates this revision ships, by path in a consumer.
 pub const TEMPLATES: &[Asset] = &[
     Asset { path: ".config/nextest.toml", text: include_str!("../templates/.config/nextest.toml") },
-    Asset { path: ".github/workflows/ci.yml", text: include_str!("../templates/.github/workflows/ci.yml") },
     Asset { path: "AGENTS.md", text: include_str!("../templates/AGENTS.md") },
     Asset { path: "ROADMAP.md", text: include_str!("../templates/ROADMAP.md") },
     Asset { path: "docs/architecture.md", text: include_str!("../templates/docs/architecture.md") },
