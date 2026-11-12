@@ -12,6 +12,14 @@
 //!   `SWARM_GB_PER_BUILD` ([`Costs`]). A build running now holds its cores; free memory already
 //!   counts it. A figure that can't be read counts as none: the suggestion errs towards fewer
 //!   builds.
+//! - **A gate has priority** where the project turns it on ([`crate::Hooks::gate_priority`],
+//!   mornycorp/swarm-core#41; off by default, which counts no gate): while a gate holds the
+//!   machine-wide gate lock ([`crate::machine_lock`], from before it waits for room until its
+//!   `ci` ends), the suggestion reserves one build for it (its cores and memory) unless its build
+//!   is counted already (a busy target dir in its worktree); the gate's own check, from the
+//!   worktree its lock names, never counts itself ([`gate_seen`]). So whatever consults it yields
+//!   to the gate: helper set-up, `ready` before each `ci` ([`yield_to_gate`]), a consumer's own
+//!   builds that read it with [`read_with`].
 //! - **The machine's shared limits** (mornycorp/swarm-core#17): none while every test-run slot
 //!   is taken ([`crate::test_runs`]: the test runs going now, the asker's own left out), nor while
 //!   wired memory (macOS's `vm_stat` "Pages wired down": what a unified-memory GPU holds) is at
@@ -98,6 +106,8 @@ pub struct Machine {
     /// own left out, and how many the machine takes.
     pub test_runs: Vec<crate::test_runs::Holder>,
     pub test_run_limit: crate::test_runs::Limit,
+    /// A gate holding the machine-wide gate lock, but the caller's own ([`gate_seen`]).
+    pub gate: Option<GateHold>,
 }
 
 impl Machine {
@@ -112,6 +122,50 @@ impl Machine {
         let dirs = self.busy_dirs.len() as u64;
         if dirs == 0 && self.rustc.is_some_and(|n| n > 0) { 1 } else { dirs }
     }
+
+    /// Builds reserved for a gate: one while a gate holds the machine lock and its build isn't
+    /// among those counted ([`GateHold::building`]), else none.
+    pub fn reserved(&self) -> u64 {
+        u64::from(self.gate.as_ref().is_some_and(|g| !g.building))
+    }
+
+    /// Under [`MIN_DISK_GB`] of disk free, or no figure: a floor no build goes below, a gate's
+    /// included.
+    pub fn disk_short(&self) -> bool {
+        self.free_disk.is_none_or(|d| d < MIN_DISK_GB.saturating_mul(GB))
+    }
+}
+
+/// A gate holding the machine-wide gate lock ([`crate::machine_lock`], both swarms'), as another
+/// caller sees it (mornycorp/swarm-core#41): it holds the lock from before it waits for room
+/// until its `ci` ends, so a gate has priority: [`suggest`] reserves a build for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GateHold {
+    /// Who: `<swarm>'s <instance>`.
+    pub holder: String,
+    /// Its build is running and counted already: a busy target dir in its worktree.
+    pub building: bool,
+}
+
+/// `p` as compared: `/` separators, no `//?/` prefix or trailing `/`, no case on Windows.
+fn norm(p: &str) -> String {
+    let s = p.trim().replace('\\', "/");
+    let s = s.strip_prefix("//?/").unwrap_or(&s).trim_end_matches('/').to_owned();
+    if cfg!(windows) { s.to_ascii_lowercase() } else { s }
+}
+
+/// The gate `held` (the machine lock's live holder) as the caller in worktree `own` sees it:
+/// `None` for none, or when the lock was taken in `own` (the gate's own capacity check, from the
+/// worktree it gates in, never counts itself). Its build is counted already when one of `busy`
+/// is in its worktree.
+pub fn gate_seen(held: Option<&crate::machine_lock::Held>, own: &str, busy: &[PathBuf]) -> Option<GateHold> {
+    let held = held?;
+    let worktree = held.worktree.as_deref().map(norm);
+    if worktree.as_deref() == Some(norm(own).as_str()) {
+        return None;
+    }
+    let building = worktree.is_some_and(|w| busy.iter().any(|d| norm(&d.display().to_string()).starts_with(&format!("{w}/"))));
+    Some(GateHold { holder: format!("{}'s {}", held.swarm, held.instance), building })
 }
 
 /// What one build takes, in cores and GB of memory: [`CORES_PER_BUILD`] and [`GB_PER_BUILD`],
@@ -164,22 +218,34 @@ fn gb(bytes: u64) -> String {
 }
 
 /// The suggestion's arithmetic: min(free cores / 8, free GB / 5, 3), 0 under 20 GB of disk, with
-/// the machine's own [`Costs`] for the 8 and the 5.
+/// the machine's own [`Costs`] for the 8 and the 5. A gate holding the machine lock whose build
+/// isn't counted yet has one build reserved: a build's cores and memory
+/// (mornycorp/swarm-core#41, [`Machine::reserved`]).
 pub fn suggest(m: &Machine) -> Suggestion {
     let builds = m.builds();
+    let reserved = m.reserved();
     let (per_core, per_gb) = (m.costs.cores.max(1), m.costs.gb.max(1));
-    let busy = builds.saturating_mul(per_core);
+    let busy = builds.saturating_add(reserved).saturating_mul(per_core);
     let free_cores = m.cores.saturating_sub(busy);
     let by_cores = free_cores / per_core;
-    let mut basis =
-        vec![format!("cores: {} logical - {per_core} x {builds} build(s) running = {free_cores} free; / {per_core} per build = {by_cores}", m.cores)];
+    let running = if reserved == 0 { format!("{builds} build(s) running") } else { format!("({builds} build(s) running + {reserved} reserved for a gate)") };
+    let mut basis = vec![format!("cores: {} logical - {per_core} x {running} = {free_cores} free; / {per_core} per build = {by_cores}", m.cores)];
     if m.costs.from_env {
         basis.push("costs: from SWARM_CORES_PER_BUILD / SWARM_GB_PER_BUILD".to_owned());
     }
+    if let Some(g) = &m.gate {
+        basis.push(if g.building {
+            format!("gate: {} holds the machine gate lock and is building (counted above): a gate has priority", g.holder)
+        } else {
+            format!("gate: {} holds the machine gate lock, its build not counted yet: a gate has priority, so 1 build is reserved for it", g.holder)
+        });
+    }
     let by_memory = match m.free_memory {
         Some(free) => {
-            let n = free / per_gb.saturating_mul(GB);
-            basis.push(format!("memory: {} free / {per_gb} GB per build = {n}", gb(free)));
+            let held = reserved.saturating_mul(per_gb.saturating_mul(GB));
+            let n = free.saturating_sub(held) / per_gb.saturating_mul(GB);
+            let less = if reserved == 0 { String::new() } else { format!(" - {} reserved", gb(held)) };
+            basis.push(format!("memory: {} free{less} / {per_gb} GB per build = {n}", gb(free)));
             n
         }
         None => {
@@ -226,6 +292,57 @@ fn shared_limits(m: &Machine, basis: &mut Vec<String>) -> bool {
         _ => false,
     };
     full || wired
+}
+
+/// How often a worker's build looks again while it yields to a gate ([`yield_to_gate`]).
+pub const YIELD_STEP: Duration = Duration::from_secs(60);
+/// How long a worker's build yields to a gate at most, then goes ahead: a full gate is 10 to 25
+/// minutes on the owner's desktop.
+pub const YIELD_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// How a worker's build yielded to a gate ([`yield_to_gate`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Yielded {
+    /// No gate held the machine lock, or there was room: it didn't wait.
+    No,
+    /// It waited for the gate holding it, and found room.
+    Room,
+    /// It waited [`YIELD_MAX`] (the `max` given) and went ahead.
+    GaveUp,
+}
+
+/// A worker's build (`who`: `ready`, say) yields to a gate (mornycorp/swarm-core#41): while
+/// the machine `look` reads has a gate holding the machine lock ([`Machine::gate`]) and
+/// [`suggest`] has no room, it waits, looking every `step`, saying once that a gate has priority;
+/// at most `max`, then it goes ahead. With no gate it never waits: workers' own builds are
+/// first-come, as before.
+pub fn yield_to_gate(who: &str, mut look: impl FnMut() -> Machine, step: Duration, max: Duration) -> Yielded {
+    let started = std::time::Instant::now();
+    let mut waited = false;
+    loop {
+        let m = look();
+        let Some(gate) = m.gate.as_ref().filter(|_| suggest(&m).more == 0) else {
+            if waited {
+                println!("{who}: room for a build now: going ahead");
+                return Yielded::Room;
+            }
+            return Yielded::No;
+        };
+        if started.elapsed() >= max {
+            println!("{who}: still no room after {} min while a gate has priority: going ahead", max.as_secs() / 60);
+            return Yielded::GaveUp;
+        }
+        if !waited {
+            println!(
+                "{who}: no room for another build: a gate has priority ({} holds the machine gate lock): waiting for room (every {} s, at most {} min)",
+                gate.holder,
+                step.as_secs(),
+                max.as_secs() / 60
+            );
+            waited = true;
+        }
+        std::thread::sleep(step);
+    }
 }
 
 /// `MemAvailable` (else `MemFree`) and `MemTotal` from `/proc/meminfo`, in bytes.
@@ -474,8 +591,16 @@ pub fn total_memory() -> Option<u64> {
     }
 }
 
-/// Read the machine, for a checkout at `root` building into `target`.
+/// Read the machine, for a checkout at `root` building into `target`; no gate is counted
+/// ([`read_with`] without gate priority), as before #40.
 pub fn read(root: &Path, target: &Path) -> Machine {
+    read_with(root, target, false)
+}
+
+/// [`read`], and with `priority` (the project's [`crate::Hooks::gate_priority`], #40) the gate
+/// holding the machine-wide gate lock, but the one gating at `root` ([`gate_seen`]), so
+/// [`suggest`] reserves a build for it.
+pub fn read_with(root: &Path, target: &Path, priority: bool) -> Machine {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
     let disk_at = if target.exists() { target } else { root };
     let f = figures(disk_at);
@@ -487,7 +612,10 @@ pub fn read(root: &Path, target: &Path) -> Machine {
     let mine = our_target_dir();
     let ours: Vec<&Path> = std::iter::once(target).chain(mine.as_deref()).collect();
     let busy_dirs = busy_target_dirs(&worktrees, &ours, since);
+    // A gate waiting for room or building (#41), but the one gating in this worktree: itself.
+    let gate = if priority { gate_seen(crate::machine_lock::live().as_ref(), &crate::lock::worktree_of(root), &busy_dirs) } else { None };
     Machine {
+        gate,
         cores,
         free_memory: f.free_memory,
         total_memory: f.total_memory,
@@ -547,6 +675,10 @@ pub fn report(m: &Machine, s: &Suggestion, target: &Path) -> String {
     let now = crate::lock::now();
     for h in &m.test_runs {
         out.push_str(&format!("          {}\n", h.describe(now)));
+    }
+    if let Some(g) = &m.gate {
+        let what = if g.building { "building" } else { "waiting for room, or building where this can't see: 1 build reserved for it" };
+        out.push_str(&format!("  gate:   {} holds the machine gate lock ({what}): a gate has priority\n", g.holder));
     }
     out.push_str(&format!("suggest: {} more build(s)\n", s.more));
     for b in &s.basis {
@@ -781,18 +913,20 @@ impl Start<'_> {
 }
 
 /// `cargo xtask capacity [--helper <name> --note <what>]`. The helper's events go through
-/// `timeline` (the `event` module's, [`Timeline`]).
-pub fn run(project: &Project, root: &Path, args: &[&str], timeline: &dyn Timeline) -> Result<(), String> {
+/// `timeline` (the `event` module's, [`Timeline`]); with `priority` (the project's
+/// [`crate::Hooks::gate_priority`], #40) a gate holding the machine lock has a build reserved.
+pub fn run(project: &Project, root: &Path, args: &[&str], timeline: &dyn Timeline, priority: bool) -> Result<(), String> {
     let o = parse_args(args)?;
     let ours = our_target_dir();
     let target = our_target(root)?;
-    let machine = read(root, &target);
+    let machine = read_with(root, &target, priority);
     let s = suggest(&machine);
     print!("{}", report(&machine, &s, &target));
     let Some(name) = o.helper else { return Ok(()) };
     if o.kind == Kind::Build && s.more == 0 {
+        let why = machine.gate.as_ref().map(|g| format!(" (a gate has priority: {})", g.holder)).unwrap_or_default();
         return Err(format!(
-            "capacity: no room for build helper {name}: this machine takes no more builds now (see above); do it yourself, wait, or use --kind read if it builds nothing"
+            "capacity: no room for build helper {name}: this machine takes no more builds now{why} (see above); do it yourself, wait, or use --kind read if it builds nothing"
         ));
     }
     let agent = agent_of(project, o.agent, project.env("AGENT"))?;
@@ -871,7 +1005,118 @@ mod tests {
             wired_memory: None,
             test_runs: Vec::new(),
             test_run_limit: crate::test_runs::Limit::default(),
+            gate: None,
         }
+    }
+
+    fn gate(building: bool) -> Option<GateHold> {
+        Some(GateHold { holder: "gpu-swarm's coord-1".into(), building })
+    }
+
+    /// #40: a gate holding the machine lock, its build not counted yet, has one build reserved:
+    /// 8 cores and 5 GB; one that is building is counted once, as a busy dir.
+    #[test]
+    fn a_waiting_gate_has_a_build_reserved() {
+        let more = |m: &Machine| suggest(m).more;
+        // The owner's desktop with two workers' builds: room for one more, but not with a gate waiting.
+        let mut m = machine(32, Some(9), Some(500), 2);
+        assert_eq!(more(&m), 1);
+        m.gate = gate(false);
+        assert_eq!((m.reserved(), more(&m)), (1, 0), "9 GB - 5 reserved: 0 by memory");
+        let text = suggest(&m).basis.join("\n");
+        for part in [
+            "8 x (2 build(s) running + 1 reserved for a gate) = 8 free",
+            "gate: gpu-swarm's coord-1 holds the machine gate lock, its build not counted yet: a gate has priority, so 1 build is reserved for it",
+            "9.0 GB free - 5.0 GB reserved / 5 GB per build = 0",
+        ] {
+            assert!(text.contains(part), "{part} in {text}");
+        }
+        // Cores decide too: 24 cores, two builds, a waiting gate: 0.
+        let mut m = machine(24, Some(64), Some(500), 2);
+        assert_eq!(more(&m), 1);
+        m.gate = gate(false);
+        assert_eq!(more(&m), 0);
+        // A gate that is building is a busy dir already: nothing more reserved.
+        let mut m = machine(32, Some(64), Some(500), 2);
+        m.gate = gate(true);
+        assert_eq!((m.reserved(), more(&m)), (0, 2));
+        assert!(suggest(&m).basis.join("\n").contains("is building (counted above): a gate has priority"));
+        // A big machine still has room beside a waiting gate.
+        let mut m = machine(64, Some(128), Some(500), 0);
+        m.gate = gate(false);
+        assert_eq!(more(&m), 3);
+        let report = report(&m, &suggest(&m), Path::new("t"));
+        assert!(report.contains("  gate:   gpu-swarm's coord-1 holds the machine gate lock (waiting for room"), "{report}");
+    }
+
+    /// #40: without gate priority (the default) the machine is read as before: no gate, whatever
+    /// holds the machine lock, so the suggestion and the report are unchanged.
+    #[test]
+    fn by_default_no_gate_is_counted() {
+        let dir = swarm_core_testkit::temp_dir("core-capacity-no-gate");
+        let m = read(&dir, &dir.join("target"));
+        assert_eq!((m.reserved(), m.gate), (0, None));
+        assert_eq!(read_with(&dir, &dir.join("target"), false).gate, None);
+        let m = machine(32, Some(9), Some(500), 2);
+        let text = report(&m, &suggest(&m), Path::new("t"));
+        assert!(!text.contains("gate:") && !text.contains("reserved") && !text.contains("priority"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #40: the machine lock's holder is a gate to every caller but the one in the worktree it
+    /// names; it is building when a busy target dir is in that worktree.
+    #[test]
+    fn a_gate_is_seen_by_others_never_by_itself() {
+        use crate::machine_lock::Held;
+        let held = |w: Option<&str>| Held { swarm: "gpu-swarm".into(), instance: "coord-1".into(), taken: None, worktree: w.map(str::to_owned) };
+        let lock = held(Some("D:/dev/ns/.claude/worktrees/gate"));
+        let busy = [PathBuf::from("D:/dev/ns/.claude/worktrees/alder/target/agent-alder")];
+        assert_eq!(gate_seen(None, "D:/dev/ns/.claude/worktrees/alder", &busy), None, "no lock, no gate");
+        assert_eq!(gate_seen(Some(&lock), "D:/dev/ns/.claude/worktrees/gate", &busy), None, "the gate's own check");
+        assert_eq!(gate_seen(Some(&lock), "D:/dev/ns/.claude/worktrees/gate/", &busy), None, "however it is spelled");
+        assert_eq!(
+            gate_seen(Some(&lock), "D:/dev/ns/.claude/worktrees/alder", &busy),
+            Some(GateHold { holder: "gpu-swarm's coord-1".into(), building: false }),
+            "a worker sees it waiting"
+        );
+        let building = [PathBuf::from(r"D:\dev\ns\.claude\worktrees\gate\target\agent-gate")];
+        assert_eq!(gate_seen(Some(&lock), "D:/dev/ns/.claude/worktrees/alder", &building).map(|g| g.building), Some(true));
+        // A sibling worktree whose name starts with the gate's is not the gate's.
+        let sibling = [PathBuf::from("D:/dev/ns/.claude/worktrees/gate-2/target/agent-x")];
+        assert_eq!(gate_seen(Some(&lock), "D:/dev/ns/.claude/worktrees/alder", &sibling).map(|g| g.building), Some(false));
+        // A lock with no worktree is another's gate, never building as far as this can see.
+        assert_eq!(gate_seen(Some(&held(None)), "D:/dev/ns", &building).map(|g| g.building), Some(false));
+    }
+
+    /// #40: a worker's build yields only to a gate with no room beside it; it says why, waits,
+    /// and goes ahead once there is room or after `max`.
+    #[test]
+    fn a_workers_build_yields_to_a_gate() {
+        let step = Duration::from_millis(5);
+        let free = machine(32, Some(9), Some(500), 2);
+        let full = Machine { gate: gate(false), ..free.clone() };
+        // No gate: never waits, even with no room.
+        let none = machine(32, Some(1), Some(500), 4);
+        assert_eq!(yield_to_gate("ready", || none.clone(), step, Duration::from_secs(5)), Yielded::No);
+        // A gate, but room beside it: no wait.
+        let roomy = Machine { gate: gate(false), ..machine(64, Some(128), Some(500), 0) };
+        assert_eq!(yield_to_gate("ready", || roomy.clone(), step, Duration::from_secs(5)), Yielded::No);
+        // A gate and no room: waits until the gate is building (or gone), then goes ahead.
+        let mut looks = 0;
+        let seen = yield_to_gate(
+            "ready",
+            || {
+                looks += 1;
+                if looks < 3 { full.clone() } else { free.clone() }
+            },
+            step,
+            Duration::from_secs(5),
+        );
+        assert_eq!((seen, looks), (Yielded::Room, 3));
+        // Never room: gives up after max.
+        let started = std::time::Instant::now();
+        assert_eq!(yield_to_gate("ready", || full.clone(), step, Duration::from_millis(30)), Yielded::GaveUp);
+        assert!(started.elapsed() >= Duration::from_millis(30));
     }
 
     /// One more build per 8 free cores and 5 GB free, at most 3; none under 20 GB of disk.

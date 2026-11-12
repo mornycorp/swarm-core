@@ -675,7 +675,7 @@ pub fn take_if_due(ctx: &Ctx<'_>, agent: &str, here: bool) -> Result<Outcome, St
         let sub = sub_id(&gates, agent, &main);
         let tail = tail(&main);
         let extra = ctx.hooks.full_gate_env(&sub, gates.iter().filter(|g| g.ran()).count());
-        let (_, more, free) = gate::room(root, &capacity_target(root));
+        let (_, more, free) = gate::room(root, &capacity_target(root), ctx.hooks.gate_priority());
         let note = start_note(NOTE, more, free, &main, extra.field.as_deref());
         let since = claim::now();
         gate::log_event(project, root, &["sub.start", "--agent", agent, "--sub", &sub, "--name", "gate", "--note", &note]);
@@ -915,7 +915,7 @@ pub fn before_claim(ctx: &Ctx<'_>, agent: &str) -> Option<Outcome> {
         return None;
     }
     // Only a machine with room for its build starts one; another agent's claim will.
-    if !gate::room(ctx.root, &capacity_target(ctx.root)).0 {
+    if !gate::room(ctx.root, &capacity_target(ctx.root), ctx.hooks.gate_priority()).0 {
         println!("fullgate: no room for a build now: not this claim's to run");
         return None;
     }
