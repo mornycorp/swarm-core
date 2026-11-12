@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** major (the contract, from swarm-foundation's) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** minor (one dispatch: a panic in a command's run is an `internal` error) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -294,8 +294,9 @@ impl Session {
 `call` is the one place that looks the command up (`unknown_command`), checks the params against
 its type (`bad_params`, with the key), checks that it is enabled (its requirements, then its own
 check: `unavailable`, with why not; [Enabled](#enabled-can-it-run-now)), refuses an effect that needs a
-consent the caller hasn't given (`consent_required`), runs it, and turns a panic into nothing
-(there is none: [Never crash](#never-crash)). A transport only frames: it reads a request, calls,
+consent the caller hasn't given (`consent_required`), runs it, and turns a panic in it into an
+`internal` error (the lints leave none in the app's own code, [Never crash](#never-crash); a
+dependency or an index can still raise one, and it must not take the surface down). A transport only frames: it reads a request, calls,
 writes a reply. **Adding a command adds it to every surface**, with no edit to any transport.
 
 - **`serve`** speaks JSON lines on stdio; **the loopback socket** the same frames over TCP on
@@ -552,4 +553,5 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | One dispatch: a panic in a command's `run` is caught by the dispatch and returned as `internal`, on the wire form and the typed one, and the session goes on (swarm-core#52) |
 | 2026-11-12 | major | The contract, from swarm-foundation's: the layers (with the optional `sources`), every action a command (the spec, the id rule, the enabled check, the menu path and shortcut, the error), one dispatch (the JSON-lines frame, the socket's auth, MCP from the registry), the UI as a client (its state as data, what is drawn is a command's result, the theme and the catalog, pictures), and the robustness rules, each naming the check that holds it (swarm-core#47) |
