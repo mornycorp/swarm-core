@@ -956,6 +956,104 @@ On each finished pull request:
       A trap it finds that isn't on the list goes on it, and into [lessons.md](lessons.md), with
       the issue that found it.
 
+## The gate daemon
+
+Steps 2 and 3 of [the coordinator's loop](#the-coordinators-loop) are mechanical, and run by hand
+they waited on the coordinator's wakes and slipped (owner, 2026-11-07, sc#44): two ready PRs that
+conflicted with `main` sat unnoticed for about 8 hours (the ready watch reports only PRs newly
+ready), a gate stood idle or waiting for about 45 minutes in a day (restacks while it waited for
+room, and the coordinator's wake latency), and the coordinator stacked heads a worker was still
+pushing, ran git in the gate worktree mid-gate, killed gates mid-compile (their stale incremental
+state broke a later link) and hit stale rerere replays. `cargo xtask gate --daemon` runs them
+instead, the same way every time.
+
+**What it does,** each round (every `--interval` seconds, 60 by default):
+
+1. **Pauses** while its off switch is set, a `main-red` issue is open, or GitHub can't say,
+   saying so once per change; it goes on when they clear. CI is local, so there is no pipeline
+   of `main` to read: a red `main` reaches it as a `main-red` issue, or by its own check (step 7).
+2. **Lists the ready PRs** through GitHub: open, not drafts, into `main`, their Progress
+   filled in, not a progress fold's (`prwatch --ready`'s test). One GitHub reports as conflicting
+   with `main` (`dirty`) gets a note, once per head, and waits for its worker, so a stuck ready PR is
+   always flagged.
+3. **Orders them:** a PR after every open PR whose commits its branch holds, then by the time
+   it was first seen ready. One that holds a draft's commits waits (they would land unchecked).
+4. **Stacks them** with `stack`'s code, rerere off (`GIT_CONFIG_PARAMETERS='rerere.enabled=false'`
+   for the daemon's whole process tree; plain `stack` is unchanged). A conflict drops that PR
+   and every PR stacked on it, and stacks the rest. When the PR conflicts with `main` itself
+   (`git merge-tree`, no checkout), its worker gets one note per head, "conflicts with main in
+   <files> (after #N landed): rebase onto main and run `cargo xtask ready`", and the daemon
+   logs `sendback … --note "cause=conflict: <files>"`; one that conflicts only with the PRs below
+   it waits for them to land. A PR `stack` refuses for another reason (no work, say) is held
+   at that head.
+5. **Folds, then gates.** While there is no room for the gate's build (the machine gate lock held
+   by another gate, or `capacity` says none), the stack waits, up to `--fold` seconds (120), and
+   a PR that becomes ready meanwhile is folded in by restacking, which is free. Then it runs
+   `cargo xtask gate --sub gate-<n> --wait --rerun` (numbered on from the gate logs) as a child,
+   and the stack is frozen: **the daemon never kills a gate**, and runs no git in the worktree
+   while one runs. A gate that still waits for room after the fold waits itself.
+6. **Reads the pushes made during the gate** after it ends, by patch-id, not SHA: a branch whose
+   own change is the same patch (a rebase) lands as gated (`land` pushes the gated tree); a real
+   change waits, with every PR above it, for the next round, and the PRs below it land.
+7. **Lands a pass** (or a pass of the gate's own rerun of its failed tests) with `land`. A
+   failure the machine caused (a transient cause the rerun didn't clear, or the gate machine's
+   setup) drops nothing and is gated again next round; after three in a row the daemon sets its
+   off switch for you. Any other failure is attributed: a build, clippy or fmt error names files,
+   a failed test its package and test file, and the PR that changed them is dropped: put back to
+   draft (as `prwatch --ready` re-drafts) with the log's excerpt in a note, a `sendback --sub
+   gate-<n> --note "cause=<cause>: <evidence>"` logged, not gated again at that head, and the rest
+   gated again (`regate of gate-<n>: …`). When no PR or several match, it gates the
+   first half of the stack (`bisect of gate-<n>: …`); a stack of one that fails is that PR's.
+   The bisection keeps its suspects, the failed gate's PRs, across gates and rounds: a half that
+   passes lands, and the culprit is among the rest; one left is dropped as above (its note says
+   gate-<n> failed with it and the half passed without it), several are bisected next, never
+   stacked again with newly ready PRs. A suspect that moves or leaves ends the bisection. A
+   stack that failed never lands. A `land` that stops at the same PR head twice holds it for you.
+   **`main` red on the gating machine** (a GPU driver update, a change that landed by hand) looks
+   like the PRs' failure, and with no server CI nothing else says so. Where the project turns it
+   on (`Hooks::verify_main`, off by default; a project that runs the daemon should), a stack's first failure at its tests first runs those
+   tests alone on `main` (`verify main for gate-<n>`, `gate --test-alone`, no PR: a plain
+   gate of `main` is a docs gate of an empty diff, which tests nothing). When one fails there
+   too, the daemon sets its off switch with the failed tests and sends no PR back: file
+   `main-red`, fix `main` or the machine, then `--resume`. When they pass, the failure is blamed
+   as above, and so is one whose tests it can't name plainly. A failed test `main` doesn't have
+   (no `fn <name>` there, or nextest's "no tests to run") is new in the stack, so its own: never
+   checked on `main` nor read as `main` failing. It costs a build and those tests per
+   failed stack. While paused, the daemon says why again every 30 minutes (`still paused: …`), so
+   a watch on its log sees it.
+
+Every decision (stacked, dropped, held, landed, paused) is printed with a time; those that change
+state are on the timeline: the gate's own `sub.start` and `sub.stop` (its note naming the step,
+`daemon gate:`, `regate of gate-<n>:` or `bisect of gate-<n>:`, and the PRs it gates), `land`'s
+merges, and a `sendback` for each PR it drops. A PR a failure only sets aside (stacked on the
+dropped one, or left out of a bisection's half) gets none: a gate that drops a PR it later lands
+in a regate or bisection is not a send-back ([tracking-format.md › Send-backs](https://github.com/mornycorp/swarm-core/blob/main/docs/tracking-format.md#send-backs)), and `prwatch` logs a worker's rework only for a PR a `sendback` names.
+
+**Running it.** On the gating machine, in the gate's worktree, with the gate's environment
+(its `CARGO_TARGET_DIR`, `{{env}}_AGENT` the coordinator's instance, and whatever else the
+project's gate needs: [swarm.md](swarm.md)), as a background process that outlives the
+coordinator's turns:
+
+```sh
+cargo xtask gate --daemon --dry-run      # one round: what it would stack and gate; no note, no event, no state saved (safe beside a live daemon)
+cargo xtask gate --daemon                # the loop; --once for one round
+cargo xtask gate --daemon --status       # the switch, the pause, the PRs it dropped or holds, its latest decisions (saved with each, so a gate shows while it runs)
+cargo xtask gate --daemon --stop --note "<why>"   # the off switch: it pauses at its next round
+cargo xtask gate --daemon --resume       # clears the switch and the PRs it held
+```
+
+`--stop` never interrupts a gate. The switch is read when a round starts and again before a
+pass lands: a gate running when it is set runs to its end, and a pass after it is closed
+without landing (its PRs are gated again once resumed). To end the process, set the switch, wait for `--status` to say `paused`, then stop it.
+Its state and switch are in `<target>/gate-daemon/`. While it runs, the coordinator doesn't
+stack, gate or land by hand, and the ready watch and the merge-only scheduled task
+([Staying awake](#staying-awake)) stand down: set the switch first to gate by hand.
+
+**What stays with the coordinator:** `main-red` issues and their fixes (the daemon only
+pauses), judgment calls (a PR held or dropped twice, a conflict to resolve by hand, a `--full`
+gate, a `--while-red` landing), the batch's progress docs (step 4), and keeping the workers fed
+(steps 5 to 9). Read `--status` on each wake.
+
 ## Staying awake
 
 A coordinator session acts only when something wakes it: the owner's message, a background task
@@ -1276,6 +1374,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | The gate daemon (new): `cargo xtask gate --daemon` runs steps 2 and 3 of the coordinator's loop on the gating machine: pauses on its switch or an open `main-red` issue; flags a ready PR that conflicts with `main` once per head; stacks in dependency order with rerere off, dropping a conflict and what is stacked on it; folds newly ready PRs in while the gate waits for room and never kills a gate; lands what didn't change during the gate; drops the PR a failure points at (back to draft, the log's excerpt in a comment) or bisects, keeping its suspects; where the project turns it on (`Hooks::verify_main`) runs a stack's failed tests alone on `main` before blaming a PR. `--status`, `--stop`, `--resume`; what stays with the coordinator. A daemon gate's failure is a send-back only of what its `sendback` names (sc#44) |
 | 2026-11-12 | minor | Where the project turns it on (`Hooks::gate_priority`, off by default: no change), a gate has priority over workers' builds: `gate --wait` waits for room at most 2 minutes, then goes ahead of the running builds (a disk under the floor still waits, then refuses); while a gate holds the machine-wide gate lock, `capacity` reserves a build for it (but for the gate's own check), so helpers and anything asking `capacity` yield, and `ready` waits before each `ci`, before its test-run slot, while there is no room beside it, saying `a gate has priority` (at most 30 minutes) (sc#41) |
 | 2026-11-12 | minor | Staying awake and Starting a worker: `prwatch --ready` puts a PR that is ready but holds no work back to draft with a comment, once per head, and says `redrafted:`; `--no-redraft` only reports; a PR from a fork is only reported; a worker keeps its PR a draft until `ready` (sc#42) |
 | 2026-11-12 | minor | Parallel agents: on a machine where the coordinator gates, workers cap their builds' jobs (`CARGO_BUILD_JOBS`, `capacity`'s new `worker builds:` line, 4 unless the machine sets its own cost of a build), so a gate keeps memory for its own; a measurement window the coordinator calls is the exception. `ready` sets it on its builds where the project turns it on (`Hooks::worker_build_jobs`, off by default) on a `full-gate` machine, unless `CARGO_BUILD_JOBS` is set; `gate` sizes its own as before (sc#40) |

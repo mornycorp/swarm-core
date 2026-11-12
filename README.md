@@ -69,6 +69,7 @@ machine, and the first coordinator and workers.
 | 4 | `swarm-core` (`--version`, `bump`, `sync-assets [--check]`) | `changed` (with `changed::lock`, `changed::reads`), `pin`, `assets` |
 | new swarms (sc#7) | `swarm-core init` | `templates` (and `examples/consumer_xtask.rs`) |
 | ending a session (sc#10) | `finish`, `install-tools` | `finish` |
+| the gate daemon (sc#44) | `gate --daemon` (`--once`, `--dry-run`, `--status`, `--stop`, `--resume`): the coordinator's stack, gate and land loop ([docs/gate-daemon.md](docs/gate-daemon.md)) | `gate::daemon` (`policy`, `blame`) |
 | architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template), `checks` (`checks::layers`, `checks::scan`, `checks::check`) |
 
 A consumer describes itself in a `Project` (a `const`) and implements `Hooks`, whose methods all
@@ -79,6 +80,9 @@ have defaults:
 - `gate_reruns`: whether a failed gate reruns once by itself: a failure only at the tests, its
   failed tests alone; else a transient failure, the whole gate. Off by default; `gate --rerun` and
   `--no-rerun` choose for one run.
+- `verify_main`: whether the gate daemon runs a failed stack's tests alone on `main` before it
+  blames a PR, and pauses when they fail there too. Off by default; a project that runs the daemon
+  should turn it on, since nothing else here reads `main`.
 - `gate_priority`: whether a gate has priority over workers' builds: with `--wait` it goes ahead
   of the running builds after 2 minutes, `capacity` reserves a build for it while it holds the
   machine lock, and `ready` yields to it before each `ci`. Off by default.
