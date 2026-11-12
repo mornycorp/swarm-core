@@ -69,7 +69,7 @@ machine, and the first coordinator and workers.
 | 4 | `swarm-core` (`--version`, `bump`, `sync-assets [--check]`) | `changed` (with `changed::lock`, `changed::reads`), `pin`, `assets` |
 | new swarms (sc#7) | `swarm-core init` | `templates` (and `examples/consumer_xtask.rs`) |
 | ending a session (sc#10) | `finish`, `install-tools` | `finish` |
-| architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template) |
+| architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template), `checks` (`checks::layers`, `checks::scan`, `checks::check`) |
 
 A consumer describes itself in a `Project` (a `const`) and implements `Hooks`, whose methods all
 have defaults:
@@ -95,6 +95,29 @@ have defaults:
   `#![warn(clippy::undocumented_unsafe_blocks)]` instead of `#![forbid(unsafe_code)]`. None by
   default. Such a consumer's workspace sets `unsafe_code = "deny"`, not `"forbid"`, since a
   crate can't lift a `forbid`; every other library root still forbids it.
+- `architecture`: the layers as each manifest declares them (`[package.metadata.swarm] layer =
+  "engine"`), in place of the table of `layers`: the layers' names, the UI toolkits and the lints
+  a crate root denies (`checks::Layers::STANDARD` is the usual set). None by default, so no
+  manifest is read for a layer.
+- `scans`: the pattern scans, with the globs of the files each reads and its allow-list. None by
+  default.
+
+**The manifests' checks** (`checks`), which `cargo xtask layers` runs when a project sets
+`architecture` or `scans`, beside or in place of the table. They read the repository's files (what
+git tracks, and the untracked files it doesn't ignore) and never build.
+`checks::layers(root, &Layers)`: every member declares its layer, dependencies point to strictly
+lower layers, a UI toolkit is linked only by the UI layer and the apps built on it, the testkit is
+only a dev-dependency, `[lints] workspace = true`, the crate roots' headers, and no committed
+override of Swarm Core's pin, in any member's manifest or cargo config, read as TOML.
+`checks::scan(root, &[Scan])` reads production code (outside `#[cfg(test)]` modules, `tests`
+directories and `tests.rs` files, without comments or string literals) for patterns a layer may
+not use; each file is held to an allow-list whose every entry gives a reason and a count, a
+ratchet (more matches fail, fewer ask to lower the count). The built-in scans
+(`Scan::process_command`, `file_writes`, `ui_file_writes`, `ui_process_starts`, `ui_colours`,
+`ui_strings`, `value_reads`, `command_spec`, `real_config_dir`) are `const fn`s a project points
+at its files with globs. Every finding names the file, the line, the rule and the fix. On this
+path `layers` still counts the code-health exemptions, and holds AGENTS.md's crate map to the
+manifests (each member's layer, name and `description`) where it has the markers.
 
 **`ci --changed`'s plan** (`changed`): the consumer's `ci` runs the steps; Swarm Core says for
 which packages. The changed files map to packages or classes (docs, tooling, data read from

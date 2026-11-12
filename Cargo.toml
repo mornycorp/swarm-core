@@ -11,6 +11,8 @@ publish = false
 [workspace.dependencies]
 # GitHub's API replies (`gh api`) and the tracking lines.
 serde_json = "1"
+# The architecture's checks read manifests and cargo configs (`checks`, `pin`): parse only.
+toml = { version = "1", default-features = false, features = ["parse", "serde"] }
 swarm-core-testkit = { path = "crates/testkit" }
 
 [workspace.lints.rust]

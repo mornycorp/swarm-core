@@ -181,3 +181,60 @@ fn raw_nul_bytes_in_tracked_source_are_refused() {
     assert!(found.len() == 1 && found[0].starts_with("src/bad.rs:2: a raw NUL"), "{found:?}");
     assert_eq!(nul_lines(b"\0\n\n\0\0\na"), [1, 3]);
 }
+
+/// A project that declares its layers in its manifests, not in a table.
+struct Manifests;
+impl crate::Hooks for Manifests {
+    fn architecture(&self) -> Option<crate::checks::Layers> {
+        Some(crate::checks::Layers::STANDARD)
+    }
+}
+
+/// A one-member repository whose manifest declares its layer; `agents` is its AGENTS.md.
+fn declared_workspace(name: &str, agents: &str) -> std::path::PathBuf {
+    let dir = swarm_core_testkit::temp_dir(name);
+    swarm_core_testkit::git::git(&dir, &["init", "--quiet"]);
+    std::fs::create_dir_all(dir.join("crates/core/src")).unwrap();
+    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/core\"]\n").unwrap();
+    let manifest = "[package]\nname = \"my-core\"\ndescription = \"the model\"\n[package.metadata.swarm]\nlayer = \"model\"\n[lints]\nworkspace = true\n";
+    std::fs::write(dir.join("crates/core/Cargo.toml"), manifest).unwrap();
+    let root = format!(
+        "#![forbid(unsafe_code)]\n{DENY_LINE}\n{LIMITS_LINE}\n{LIMITS_TEST_LINE}\n#[expect(clippy::too_many_lines, reason = \"a table\")]\nfn f() {{}}\n"
+    );
+    std::fs::write(dir.join("crates/core/src/lib.rs"), root).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), agents).unwrap();
+    dir
+}
+
+/// `layers` on a project whose manifests declare its layers: the manifests' checks run, and the
+/// two rules the table path holds are held too: the exemptions, and the crate map where
+/// AGENTS.md has the markers.
+#[test]
+fn a_project_that_declares_its_layers_in_its_manifests_is_checked_from_them() {
+    let dir = declared_workspace("layers-manifests", &format!("# Agents\n{MAP_START}\n{MAP_END}\n"));
+    let stale = run(&Manifests, &dir, &[]).unwrap_err();
+    assert!(stale.contains("1 layering problem(s)") && stale.contains("crate map is stale"), "{stale}");
+    run(&Manifests, &dir, &["--write"]).unwrap();
+    let agents = std::fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    assert!(agents.contains(" model my-core  the model\n"), "{agents}");
+    run(&Manifests, &dir, &[]).unwrap();
+    // A member with no layer is a finding of the manifests' check, named as it names it.
+    std::fs::write(dir.join("crates/core/Cargo.toml"), "[package]\nname = \"my-core\"\n[lints]\nworkspace = true\n").unwrap();
+    let found = run(&Manifests, &dir, &[]).unwrap_err();
+    assert!(found.contains("crates/core/Cargo.toml") && found.contains("[layer-declared]"), "{found}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An AGENTS.md with no markers keeps no generated map: nothing to hold on the manifests' path.
+/// A project that configures nothing has nothing checked, as before.
+#[test]
+fn no_markers_is_no_map_and_no_configuration_is_nothing_to_check() {
+    let dir = declared_workspace("layers-manifests-no-map", "# Agents\n");
+    run(&Manifests, &dir, &[]).unwrap();
+    // A code-health exemption without a reason is a problem on this path too.
+    let lib = dir.join("crates/core/src/lib.rs");
+    std::fs::write(&lib, std::fs::read_to_string(&lib).unwrap().replace(", reason = \"a table\"", "")).unwrap();
+    assert!(run(&Manifests, &dir, &[]).unwrap_err().contains("needs a `reason`"));
+    run(&crate::Defaults, &dir, &[]).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
