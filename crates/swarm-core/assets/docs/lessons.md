@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # Lessons for a new swarm
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (requirements in a spec's tables that never became work) · **Target:** M1
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (lessons 5–15: the robustness mistakes, chained PRs, a timeout rerun with no limit, a squash that reverted `main`; the two after them are now 16 and 17) · **Target:** M1
 
 The early design mistakes the first two swarms made: how each was found, what it cost, and the
 guardrail now in place (a rule, a check, or an item on the architecture review's checklist). It
@@ -12,6 +12,9 @@ lives in swarm-core, beside the tracking format and the
 pinned copy and its AGENTS.md §1 links it. **Required reading before starting a new swarm**, and
 the source of the [architecture review](swarm-protocol.md#the-coordinators-loop)'s checklist of
 known traps: a trap a review finds that isn't listed here is added, with the issue that found it.
+
+Lessons 5–12 are the robustness mistakes apps have already paid for: a hang, a freeze, lost
+settings, a leaked secret. Each is a rule for every app, whatever it does.
 
 ## 1. Untyped contracts at the engine's boundary
 
@@ -90,7 +93,184 @@ known traps: a trap a review finds that isn't listed here is added, with the iss
     under load rerun alone on the same HEAD; to fix a flake, make the failing condition
     deterministic in a test, never loop it (a swarm's AGENTS.md test rules).
 
-## 5. A front end building the core's logic
+## 5. A child process outlived its caller and held the shell's pipe
+
+- **The mistake:** a command started a program and waited for it, and the program started its own
+  child. When the command timed out or was cancelled, only the program was killed; the grandchild
+  lived on, still holding the pipe the caller's shell was reading, so the shell never saw the end
+  of the output and hung with it. Another start left the child's stdin open, and a program that
+  read it waited for ever.
+- **How it was found:** by a person: a command that had finished (or been killed) still did not
+  return, and the only thing left running was a process nobody had started on purpose.
+- **What it cost:** a hung session each time, killed by hand, and no log of what the program had
+  said; every place that started a program was suspect, because each had its own way of doing it.
+- **The guardrail:**
+  - **Rule:** one process module starts every child: stdin closed, a wall-clock and an idle
+    deadline, the output capped and drained on its own threads, its own process group killed on a
+    timeout, a cancel and a drop, and every failure a typed error.
+  - **Check:** the architecture's scan (swarm-core#46) refuses `std::process::Command` outside
+    that module; the module's tests run a child that ignores its stdin, one that floods its
+    output, one that spawns a grandchild and one that never exits.
+
+## 6. A second lock taken in one statement froze every run
+
+- **The mistake:** a statement took one lock and, while it held it, a second, as in
+  `f(a.lock(), b.lock())`. Another thread took the two in the other order, and the app was stuck
+  with every run waiting on a lock nobody would release. The standard mutex waits for ever and
+  says nothing.
+- **How it was found:** by a hang with no error and no log line; only a thread dump showed two
+  threads each holding one lock and wanting the other.
+- **What it cost:** a frozen app for every run that touched either lock, and a long read of the
+  code to find the one statement; nothing in the code said which locks were involved.
+- **The guardrail:**
+  - **Rule:** one lock read per statement: take one, copy out what is needed, drop it, take the
+    next; the app's own mutex errors out on a deadlock instead of waiting, naming the lock.
+  - **Check:** clippy's `disallowed-types` refuses `std::sync::Mutex` and `MutexGuard`; the lock's
+    own tests; the architecture review reads for a second lock in a statement.
+
+## 7. Files read while drawing froze the window
+
+- **The mistake:** the UI read a file (a preview, a size, a listing) in the code that draws a
+  frame. On a local disk it went unnoticed; on a slow or a network disk, or a large folder, every
+  frame waited for it, and the window stopped answering.
+- **How it was found:** by a person on a slower disk: the window froze while a list was on screen
+  and thawed when it was closed. Nothing in a test saw it, because a test's disk is fast.
+- **What it cost:** a UI that couldn't be trusted to stay responsive, and a hunt through every
+  draw function for a read hidden behind a helper.
+- **The guardrail:**
+  - **Rule:** the UI draws memory and calls commands on workers; it never writes a file, starts a
+    program, blocks its own thread or reads the disk while drawing, and a result arrives as a
+    message the next frame draws.
+  - **Check:** the architecture's scan (swarm-core#46) refuses file access and process starts in
+    the UI crate, and `cargo xtask layers` keeps the toolkit in the UI layer.
+
+## 8. A non-blocking read's defaults were saved over the person's settings
+
+- **The mistake:** the app loaded its settings without blocking, and until the read finished (or
+  when it failed, because the file was locked or briefly unreadable) it ran on defaults. Something
+  then changed a setting and saved, and the save wrote the whole file: the defaults, and the one
+  change, over everything the person had chosen.
+- **How it was found:** by a person whose settings were reset after an unrelated change; the file
+  on disk held defaults and the one new value.
+- **What it cost:** the person's settings, with no copy to restore them from, and a loss of trust
+  in every save.
+- **The guardrail:**
+  - **Rule:** state is loaded without ever writing defaults over what it couldn't read: a read that
+    fails or blocks leaves the person's file alone, and nothing saves until the load has
+    succeeded.
+  - **Check:** the state module owns the read and the write, and the one atomic writer is the only
+    writer (the scan, swarm-core#46); a test saves after a failed read and finds the file as it was.
+
+## 9. Memory changed before a failed save
+
+- **The mistake:** a command updated the app's state in memory and then saved it. When the save
+  failed (a full disk, a locked file), the screen and every later command went on showing and using
+  the new state, while the file held the old one; the next start undid it without a word.
+- **How it was found:** by a person: a setting that read as changed until the app restarted,
+  when it was back.
+- **What it cost:** changes that were reported done and weren't, and a state in memory no one
+  could trust to match the disk.
+- **The guardrail:**
+  - **Rule:** save before memory changes: write the new state to disk first and change memory only
+    when that succeeded, so a failed save returns its typed error and leaves both as they were.
+  - **Check:** the writer's tests fail a write and find the memory unchanged; the architecture
+    review reads each new command that changes state for the order.
+
+## 10. A settings view printed secrets
+
+- **The mistake:** the command that returned the app's settings returned every one, a token
+  included, so the CLI, the control channel, MCP and the UI each showed it, and a journal that
+  logged results kept it.
+- **How it was found:** by reading a result that was pasted into a report: the token was in it.
+- **What it cost:** a credential to revoke and replace, and a search of the logs and the journal
+  for every place it had been written.
+- **The guardrail:**
+  - **Rule:** a secret setting is stored and shown redacted, a command that needs one reads it from
+    the store, and no result, log line, journal entry or error message carries its value.
+  - **Check:** the tests of every result that holds settings must show the redaction, with obvious
+    fakes for secrets; the architecture review asks of every new setting, "is this one?".
+
+## 11. A best-effort step hid its error
+
+- **The mistake:** a step that was meant not to matter (a cleanup, a cache write, a notification)
+  discarded its error with `let _ =` or `.ok()`. It did matter: when it failed, the work that
+  depended on it failed later, somewhere else, with a message about the wrong thing.
+- **How it was found:** by tracing a failure back from the symptom, which took longer than the
+  fix: the first failing step had left no trace.
+- **What it cost:** hours reading code that was behaving as written, and a failure no one could
+  reproduce on demand.
+- **The guardrail:**
+  - **Rule:** every failure is a typed error with a message and a remediation, and a caller that
+    chooses to continue past one logs it and says why.
+    A step is best-effort only when its failure is reported and the work stays correct without it.
+  - **Check:** the architecture review and every PR's reviewer look for a discarded `Result`;
+    clippy's `must_use` and unused-result lints hold the rest.
+
+## 12. A test wrote to the real config dir
+
+- **The mistake:** a test saved settings through the app's real config path. It ran on a person's
+  machine, as every test does, and reset their settings to the test's values.
+- **How it was found:** by a person: their settings were not what they had set, and the values
+  were the ones in a test.
+- **What it cost:** the person's settings, and the trust of everyone who ran the tests; every test
+  was suspect until the config path was audited.
+- **The guardrail:**
+  - **Rule:** a test uses temporary directories for config and state, makes no network call and
+    runs no installer or GUI program; the config dir comes from one function a test points at a
+    temp dir.
+  - **Check:** the architecture's scan (swarm-core#46) refuses the real config dir named in a test.
+
+## 13. PRs chained because they touched the same files
+
+- **The mistake:** told to stack its PRs that touched the same files, a worker branched a small
+  banners change from its own earlier PR (row heights) rather than from `main`, and submitted it
+  `--onto` that PR. The banners change needed none of the other's code.
+- **How it was found:** the earlier PR failed a gate three times; the banners PR, which never
+  failed a gate of its own, could land only after it, and the coordinator saw it still waiting.
+- **What it cost:** about four hours for the banners change, and three gates of the shared machine
+  spent on a stack whose top was fine.
+- **The guardrail:**
+  - **Rule:** a worker branches every PR from `main`, and stacks on another open PR only when its
+    change needs that PR's code to build or work; PRs that only touch the same files stay on
+    `main` ([swarm-protocol.md › Picking work](swarm-protocol.md#picking-work), step 4).
+  - **Where ordering lives:** with the coordinator. `stack` composes each gate's batch from the
+    ready PRs, in the order it chooses; when it stops on a textual conflict, the second PR's
+    author rebases once after the first lands, a few minutes' work, against hours of waiting.
+  - **Review:** an PR submitted `--onto` another says in its description what code of the other
+    it needs.
+
+## 14. A timeout repeated alone, rerun with no limit
+
+- **The mistake:** the periodic full gate went red on a timeout: nextest's `terminate-after`
+  ended one long test at 600 s in the run, and again in its rerun alone. The worker's first step
+  was to run it alone with no time limit, "to rule out load".
+- **How it was found:** the uncapped run took 75 minutes and showed a real slowdown, which the two
+  timeouts had already shown: the rerun alone had ruled load out.
+- **What it cost:** `main` red, with every merge held, for about two hours, most of it the uncapped
+  run.
+- **The guardrail:**
+  - **Rule:** a timeout repeated in the rerun alone is proof of a slowdown. Time one unit of the
+    test (one event, one capture, one input) on the failing commit and the last green one, bisect
+    the merges between them with that unit, fix, and measure the whole test once, on the fix
+    ([swarm-protocol.md › The periodic full gate](swarm-protocol.md#the-periodic-full-gate)).
+  - **Where the uncapped run belongs:** only after a rerun alone that **passed**, which points at
+    load.
+
+## 15. A squash that reverted what `main` gained
+
+- **The mistake:** a worker squashed its branch with `git reset --soft origin/main` and one
+  commit, on a branch it hadn't just rebased onto that `origin/main`. The index still held the
+  branch's old base, so the commit undid everything `main` had gained since.
+- **How it was found:** in one swarm, 2026-10-19: the PR merged, and the next PR had to
+  revert it.
+- **What it cost:** two PRs and their gates, and `main` without the reverted work until the
+  revert landed.
+- **The guardrail:**
+  - **Rule:** squash onto the merge base, `git reset --soft $(git merge-base HEAD origin/main)`,
+    or reset to `origin/main` only right after rebasing onto that same `origin/main`.
+  - **Review:** an PR whose diff deletes work it doesn't mention is a squash gone wrong.
+
+## 16. A front end building the core's logic
 
 - **The mistake:** a swarm's UI front end needed rows, row heights, hit-testing and drag state
   before the core had a layout or an interaction module, so it built them itself: which rows are
@@ -111,7 +291,7 @@ known traps: a trap a review finds that isn't listed here is added, with the iss
   - **Rule:** a front end that needs an answer the engine doesn't give asks for the command
     (an issue, or the algorithm in the core first), rather than computing it.
 
-## 6. Requirements in a spec's tables that never became work
+## 17. Requirements in a spec's tables that never became work
 
 - **The mistake:** a swarm built its gap list from the spec's sections, one gap a section, and
   marked each done when the issues filed under it merged. The issues were written from the
@@ -147,6 +327,7 @@ there, then bump.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Lessons 5–15, from swarm-foundation: the robustness lessons (5–12: a child that outlived its caller, a second lock in one statement, files read while drawing, defaults saved over settings, memory changed before a failed save, secrets in a settings view, a best-effort step's hidden error, a test in the real config dir), PRs chained for touching the same files (13), a timeout repeated alone and rerun with no limit (14), a squash that reverted `main` (15). The lessons that were 5 and 6 are 16 and 17 (swarm-core#28) |
 | 2026-10-31 | minor | Lesson 6: requirements in a spec's tables that never became work, and its checklist item |
 | 2026-10-30 | minor | Lesson 5: a front end building the core's logic (layout, hit-testing, interaction state), and its checklist item |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
