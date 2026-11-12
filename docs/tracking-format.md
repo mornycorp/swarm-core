@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-04 · **Change:** minor (a gate of the same stack after a failure notes itself its rerun; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-12 · **Change:** minor (a full gate's `superseded:` stop after its recheck; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -135,7 +135,9 @@ gate analytics can read them:
   too, `sub` `gate-full-<short commit>`, whose notes end `; kind=full; commit=<sha>`: its start
   `full gate of main; capacity=<n> free=<GB>; kind=full; commit=<sha>`, its stop
   `rc=<n>[; cause=<cause>]; kind=full; commit=<sha>`, or, when it never ran,
-  `superseded: <why>; …` or `abandoned: <error>; …` with no `rc`. A gate whose notes name a
+  `superseded: <why>; …` or `abandoned: <error>; …` with no `rc`. `superseded` says it lost the
+  race, or that once it held the machine lock `main` was verified meanwhile or had moved (it then
+  began again for the new tip). A gate whose notes name a
   `commit` tested `main` at that commit; it merges nothing, and one stopped `superseded` or
   `abandoned` is stopped, not failed. Together they are `main`'s health: a commit one passed is
   green until the next landing, one that failed for the change's cause red until its `main-red`
@@ -249,6 +251,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | The periodic full gate: a `superseded:` stop also says `main` was verified, or moved, while it waited for the machine lock (mornycorp/swarm-core#36); no format change |
 | 2026-11-04 | minor | Gates and Send-backs: a gate of the same PRs at the same heads onto the same `main` straight after the last gate failed begins its start note `rerun of <sub>:` itself, so a silent rerun of a flake is no send-back; no format change (mornycorp/swarm-core#20) |
 | 2026-11-04 | minor | Gates: a `submit` whose note begins `no-ci` was readied without its author's `ci --changed` (`ready --no-ci`), and the gate kind `changed` gates a stack holding one; no format change (mornycorp/swarm-core#18) |
 | 2026-11-03 | minor | Send-backs: a `work --issue <n> --mr <m>` after a send-back marks the start of the rework (`prwatch` logs it once for the worker), and the time before it may read as waiting; no format change (mornycorp/swarm-core#14) |
