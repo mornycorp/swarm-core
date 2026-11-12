@@ -387,6 +387,12 @@ impl Me {
     pub(crate) fn is(&self, instance: &str, name: Option<&str>) -> bool {
         self.instance.as_deref() == Some(instance) || (self.name.is_some() && self.name.as_deref() == name)
     }
+
+    /// Does the caller know who it is? The guard run with no `--agent` and no instance doesn't, so
+    /// no claim can be told to be its own (mornycorp/swarm-core#33).
+    pub(crate) fn known(&self) -> bool {
+        self.instance.is_some() || self.name.is_some()
+    }
 }
 
 /// What GitHub and the tracking branch say about an issue.
@@ -416,14 +422,16 @@ pub enum Holder {
 /// The open PRs of `facts` for `issue` that are mine: named by my own claim (in the tracking
 /// branch, or my claim comment), or from my branch when no one else's claim names it. Every agent
 /// derives the same branch name for an issue, so the branch alone doesn't make a PR mine: that
-/// let a second claim adopt the first's PR (mornycorp/swarm-core#7).
+/// let a second claim adopt the first's PR (mornycorp/swarm-core#7). A caller that doesn't know
+/// who it is ([`Me::known`]) keeps the branch rule alone: every claim would be another's.
 pub fn my_mrs(issue: u64, facts: &Facts, me: &Me, now: i64) -> BTreeSet<u64> {
     let live = live_claims(&facts.tracked, issue, now);
     let theirs: BTreeSet<u64> = live
         .iter()
+        .filter(|_| me.known())
         .filter(|c| !me.is(&c.instance, c.name.as_deref()))
         .filter_map(|c| c.mr)
-        .chain(facts.claims.iter().filter(|n| me.name.as_deref() != Some(n.name.as_str())).filter_map(|n| n.mr))
+        .chain(facts.claims.iter().filter(|n| me.known() && me.name.as_deref() != Some(n.name.as_str())).filter_map(|n| n.mr))
         .collect();
     let mut mine: BTreeSet<u64> =
         facts.mrs.iter().filter(|m| me.branch.as_deref() == Some(m.head_ref.as_str()) && !theirs.contains(&m.number)).map(|m| m.number).collect();
@@ -463,7 +471,8 @@ pub fn holders(project: &Project, issue: u64, facts: &Facts, me: &Me, now: i64, 
             continue;
         }
         let shared = c.mr.is_some_and(|m| mine.contains(&m));
-        let first = my_start.as_ref().is_none_or(|(t, inst)| (c.claimed_at, c.instance.as_str()) < (*t, inst.as_str()));
+        // A caller that doesn't know who it is can't tell a claim on its branch's PR from its own.
+        let first = me.known() && my_start.as_ref().is_none_or(|(t, inst)| (c.claimed_at, c.instance.as_str()) < (*t, inst.as_str()));
         if !shared || first {
             out.push(Holder::Tracking(c));
         }
@@ -2031,6 +2040,47 @@ mod tests {
         assert_eq!(held.len(), 3, "the label, the PR and cedar's claim: {held:?}");
         // cedar, resuming, is held by nobody.
         assert!(holders(&P, 18, &facts, &me("mac-cedar", "cedar", "18-env"), now, true).is_empty());
+    }
+
+    /// mornycorp/swarm-core#33: the guard run with no `--agent` and no instance, on cedar's own
+    /// branch, keeps the branch rule alone: its PR and cedar's claim on it aren't another's.
+    #[test]
+    fn an_anonymous_check_on_its_own_claimed_branch_says_nobody_else_holds_it() {
+        let notes = [note("claimed: cedar, PR #38", "2026-10-31T12:25:50Z")];
+        let tracked = parse_tracking(&[agent("mac-cedar", "cedar", 18, &[("claim", Some(38), "2026-10-31T12:25:49Z")])]);
+        let now = t("2026-10-31T12:27:20Z");
+        let facts = Facts {
+            labels: vec![LABEL.into()],
+            mrs: vec![mr(38, "18-env", "Environment (#18)", "Closes #18")],
+            claim_note: latest_claim(&notes),
+            claims: active_claims(&notes, &tracked, 18, now),
+            tracked,
+            ..Facts::default()
+        };
+        let anonymous = Me { branch: Some("18-env".into()), ..Me::default() };
+        assert_eq!(my_mrs(18, &facts, &anonymous, now), BTreeSet::from([38]));
+        assert!(holders(&P, 18, &facts, &anonymous, now, false).is_empty(), "the guard says nothing about another agent");
+    }
+
+    /// Foundation's `another_agents_mr_on_the_same_branch_name_holds_the_issue`, in these shapes:
+    /// an anonymous guard on another branch than the claimed PR's is still told the issue is held.
+    #[test]
+    fn another_agents_mr_on_another_branch_holds_the_issue_for_an_anonymous_check() {
+        let notes = [note("claimed: cedar, PR #38", "2026-10-31T12:25:50Z")];
+        let tracked = parse_tracking(&[agent("mac-cedar", "cedar", 18, &[("claim", Some(38), "2026-10-31T12:25:49Z")])]);
+        let now = t("2026-10-31T12:27:20Z");
+        let facts = Facts {
+            labels: vec![LABEL.into()],
+            mrs: vec![mr(38, "18-env", "Environment (#18)", "Closes #18")],
+            claim_note: latest_claim(&notes),
+            claims: active_claims(&notes, &tracked, 18, now),
+            tracked,
+            ..Facts::default()
+        };
+        let anonymous = Me { branch: Some("18-env-again".into()), ..Me::default() };
+        assert!(my_mrs(18, &facts, &anonymous, now).is_empty());
+        let held = holders(&P, 18, &facts, &anonymous, now, false);
+        assert_eq!(held.len(), 3, "the label, cedar's PR and cedar's claim: {held:?}");
     }
 
     /// mc-engine#61: three claims 2 s apart, each on PR #62 before the others' events landed.
