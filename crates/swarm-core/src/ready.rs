@@ -211,7 +211,8 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     } else {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let set = std::env::var("CARGO_BUILD_JOBS").ok();
-        let jobs = job_cap(hooks, set.as_deref(), cores, || crate::fullgate::capable(project, hooks))?;
+        let gb = capacity::Costs::from_env(|name| std::env::var(name).ok()).gb;
+        let jobs = job_cap(hooks, set.as_deref(), (cores, gb), || crate::fullgate::capable(project, hooks))?;
         if let Some(n) = jobs {
             println!("{}", capped(n));
         }
@@ -287,10 +288,10 @@ fn ci_command(project: &Project, root: &Path, built_from: &str, jobs: Option<u64
 
 /// The build jobs `ready` caps its builds at (mornycorp/swarm-core#40): the project's
 /// [`Hooks::worker_build_jobs`] (none by default: no cap), on a machine where gates run
-/// (`gate_machine`: the `full-gate` capability, asked only for a project that caps), unless the
+/// (`gate_machine`: the `full-gate` capability, asked only for a project that caps), from the
+/// machine's `cores` and a build's `gb` (read by the caller, so the decision reads no environment), unless the
 /// environment sets `CARGO_BUILD_JOBS` (`set`), which wins. At least 1: cargo refuses 0.
-fn job_cap(hooks: &dyn Hooks, set: Option<&str>, cores: u64, gate_machine: impl FnOnce() -> Result<bool, String>) -> Result<Option<u64>, String> {
-    let gb = capacity::Costs::from_env(|name| std::env::var(name).ok()).gb;
+fn job_cap(hooks: &dyn Hooks, set: Option<&str>, (cores, gb): (u64, u64), gate_machine: impl FnOnce() -> Result<bool, String>) -> Result<Option<u64>, String> {
     let Some(n) = hooks.worker_build_jobs(capacity::worker_jobs(cores, gb)) else { return Ok(None) };
     if set.is_some_and(|v| !v.trim().is_empty()) || !gate_machine()? {
         return Ok(None);
@@ -765,7 +766,7 @@ mod tests {
     fn by_default_readys_builds_are_not_capped() {
         let asked = std::cell::Cell::new(false);
         for (set, gate_machine) in [(None, true), (None, false), (Some("8"), true)] {
-            let cap = job_cap(&crate::Defaults, set, 32, || {
+            let cap = job_cap(&crate::Defaults, set, (32, capacity::GB_PER_BUILD), || {
                 asked.set(true);
                 Ok(gate_machine)
             });
@@ -779,13 +780,13 @@ mod tests {
     /// run, set on its `ci` and said; an explicit `CARGO_BUILD_JOBS` wins; elsewhere, nothing.
     #[test]
     fn a_project_that_caps_gets_the_cap_where_gates_run() {
-        assert_eq!(job_cap(&Caps(None), None, 32, || Ok(true)), Ok(Some(4)), "capacity's figure");
-        assert_eq!(job_cap(&Caps(Some(6)), None, 32, || Ok(true)), Ok(Some(6)), "the project's own");
-        assert_eq!(job_cap(&Caps(Some(0)), None, 32, || Ok(true)), Ok(Some(1)), "never 0, which cargo refuses");
-        assert_eq!(job_cap(&Caps(None), Some("12"), 32, || Ok(true)), Ok(None), "an explicit value wins");
-        assert_eq!(job_cap(&Caps(None), Some(" "), 32, || Ok(true)), Ok(Some(4)), "an empty one doesn't");
-        assert_eq!(job_cap(&Caps(None), None, 32, || Ok(false)), Ok(None), "not a machine where gates run");
-        assert!(job_cap(&Caps(None), None, 32, || Err("SWARM_INSPECTOR_FULLGATE=maybe: expected on or off".to_owned())).is_err());
+        assert_eq!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(Some(4)), "capacity's figure");
+        assert_eq!(job_cap(&Caps(Some(6)), None, (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(Some(6)), "the project's own");
+        assert_eq!(job_cap(&Caps(Some(0)), None, (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(Some(1)), "never 0, which cargo refuses");
+        assert_eq!(job_cap(&Caps(None), Some("12"), (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(None), "an explicit value wins");
+        assert_eq!(job_cap(&Caps(None), Some(" "), (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(Some(4)), "an empty one doesn't");
+        assert_eq!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Ok(false)), Ok(None), "not a machine where gates run");
+        assert!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Err("SWARM_INSPECTOR_FULLGATE=maybe: expected on or off".to_owned())).is_err());
         assert_eq!(jobs_on_ci(Some(4)), [Some("4".to_owned())]);
         let said = capped(4);
         assert!(
