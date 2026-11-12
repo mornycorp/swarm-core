@@ -68,6 +68,13 @@ pub trait Hooks {
         (gate::Kind::Full, "the project plans no gate kind: unsure".to_owned())
     }
 
+    /// Whether a failed gate reruns once by itself (mornycorp/swarm-core#39): a failure only at the tests, its failed
+    /// tests alone, else a transient failure, the whole gate ([`gate`]'s `--rerun`, `--no-rerun`).
+    /// The default: no, as before (a rerun by `--retry-transient` or `gate --rerun-failed`).
+    fn gate_reruns(&self) -> bool {
+        false
+    }
+
     /// The project's own cause of a failed gate, read from its `log` before the machine's
     /// ([`gate::classify`]), such as `gpu` (the GPU or the desktop under load) and `python` (no
     /// Python for its oracle tests). The default: none.
