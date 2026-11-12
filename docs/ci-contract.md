@@ -1,6 +1,6 @@
 # The `ci` contract
 
-> **Last updated:** 2026-10-30 · **Change:** minor (GitLab to GitHub)
+> **Last updated:** 2026-11-12 · **Change:** minor (a lock-file change tests what it reaches, #31)
 
 Swarm Core's gate never builds or tests a consumer itself. It runs the consumer's own
 `cargo xtask ci`, as that consumer's xtask executable, and reads what it leaves behind. This page
@@ -27,10 +27,10 @@ anything else with exit code 2.
 
 - **`--changed --base <ref>`:** run the gate's steps only for the packages that the change since
   the merge base with `<ref>` affects, plus their dependents and the packages that read a changed
-  file. A `Cargo.lock` change reaches only the packages whose resolved dependencies include a
-  package whose lock entry changed (`changed::lock`, `changed::lock_for`); a lockfile that can't
-  be read plans everything. When the plan reaches everything (the workspace manifest, the lint or
-  test settings, an unreadable lockfile), run everything.
+  file. A `Cargo.lock` change tests the packages whose resolved dependencies it changed, at any
+  depth, and what depends on them; a lock and manifest change that only moves Swarm Core's pin
+  tests what depends on Swarm Core. When the plan reaches everything (the workspace manifest, the
+  lint or test settings, or a lock file that can't be read or compared), run everything.
 - **`--plan`:** with `--changed`, print the plan and run nothing.
 - **`--head <ref>`:** with `--plan`, plan a pushed ref instead of the worktree.
 - **`--smoke`:** the coordinator's smoke. That is the build, fmt, clippy, layers, the generated

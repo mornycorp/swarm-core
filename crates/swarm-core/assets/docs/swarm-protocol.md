@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (standing rules; a fresh context for a different task; every PR branched from `main`; a timeout repeated alone is proof; the review's checklist gains the robustness traps) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (standing rules; a fresh context for a different task; every PR branched from `main`; a timeout repeated alone is proof; the review's checklist gains the robustness traps; the periodic full gate reads again under the machine lock) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -1126,7 +1126,12 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
   at the commit it recorded: the project's `Project::full_gate_worktree`, `{{full_gate_worktree}}`,
   under the primary checkout (gitignored), shared by the clone's agents (who take turns in it), with its own `target/` so
   its builds stay incremental. The winner then waits for the machine-wide gate lock and
-  room for a build, as `gate --wait` does, so it never runs beside either swarm's gate; it sets
+  room for a build, as `gate --wait` does, so it never runs beside either swarm's gate. Holding
+  the lock, it **reads again** (sc#36): when another gate passed `main` while it waited (another
+  full gate, or a landed `--full` gate), it steps aside, `superseded: <who>'s <sub> verified main
+  (<commit>) while this gate waited for the machine`; when `main` moved, it stops,
+  `superseded: main moved to <commit> …: gating it instead`, and begins again for the new tip
+  (a few times at most); else it runs. It sets
   `CARGO_BUILD_JOBS` as `gate` does, and leaves its log, `.rc` and `.junit.xml` (its tests'
   times) in that checkout's `target/gate-logs/`.
 - **Whose code**: the claiming agent's xtask, which may predate `main`,
@@ -1183,7 +1188,8 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
   - `sub.start --name gate --note "full gate of main; capacity=<n> free=<GB>; kind=full;
     commit=<sha>"`;
   - `sub.stop --note "rc=<n>[; cause=<cause>]; kind=full; commit=<sha>"`; a gate that lost the
-    race, `superseded: <why>; kind=full; commit=<sha>`; one that stopped on an error before its
+    race, or found `main` verified or moved once it held the machine lock,
+    `superseded: <why>; kind=full; commit=<sha>`; one that stopped on an error before its
     result, `abandoned: <error>; kind=full; commit=<sha>`. Neither has an `rc`: neither ran.
 
   "The last passed full gate" is the newest `sub.stop` with `kind=full`, a `commit=` and `rc=0`,
@@ -1210,6 +1216,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 |---|---|---|
 | 2026-11-12 | minor | Standing rules, a section of their own: product first and tooling when it hurts twice, "wind down" means finish, decide don't ask, a heavy job run by hand waits for an idle gate, a quiet gate log is not a dead gate, stopping a shell on Windows leaves its children, long runs to a log rather than under a monitor (which stops them at its timeout), squash onto the merge base (lessons.md 15). Starting a worker: a different task gets a fresh context; the worker stops and names its next issue, and the coordinator clears its session or starts a fresh worker; a similar follow-on keeps its session. Picking work, step 4: a worker branches every PR from `main`, and stacks on another open PR (`ready --onto`) only when its change needs that PR's code (lessons.md 13). The periodic full gate, a real failure: a timeout repeated in the rerun alone is proof of a slowdown; time one unit against the last green commit, bisect with it, and measure the whole test once on the fix (lessons.md 14) (swarm-core#29) |
 | 2026-11-12 | minor | The architecture review's checklist: the robustness traps (lessons.md 5–12: a child process outside the process module or with no deadline, a second lock in one statement, a file read while drawing, defaults saved over unread state, memory changed before its save, a secret in a result, a discarded `Result`, a test in the real config dir); the two lessons the checklist already cited are 16 and 17 (swarm-core#28) |
+| 2026-11-12 | minor | The periodic full gate: holding the machine lock, it reads again: it steps aside for a `main` another gate verified while it waited, and begins again for a `main` that moved (sc#36) |
 | 2026-11-05 | minor | No GitHub Actions (owner, 2026-11-05): CI is local for the coordinator and every worker; `land` no longer cancels workflow runs, and `main` red comes from the local gates and the periodic full gate |
 | 2026-11-04 | minor | Staying awake › Test runs share the machine (new): every `ci` run that builds and tests (a gate that builds, the periodic full gate's, `ready`'s) holds one of the machine's test-run slots, `SWARM_TEST_RUNS` or one per 16 GB; the order repo lock, machine lock, slot, capacity; `capacity` suggests none while every slot is taken or wired memory is half the total (sc#17) |
 | 2026-11-04 | minor | The coordinator's loop › A red gate: gating the same stack again (the same PRs at the same heads onto the same `main`) straight after a failure is its rerun, and `gate` notes it `rerun of <sub>:` itself, so a flake it answers sends nothing back (sc#20) |

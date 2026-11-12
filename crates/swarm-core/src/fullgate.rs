@@ -20,7 +20,9 @@
 //!   ([`Project::full_gate_worktree`], beside the primary checkout; `main`'s own `cargo xtask
 //!   ci`), holding the machine-wide gate lock so it never runs beside either swarm's gate, and a
 //!   test-run slot ([`crate::test_runs`]) so it never tests beside more runs than the machine
-//!   takes (a worker's `ready` among them). `claim` starts one only with room for a build
+//!   takes (a worker's `ready` among them). Holding the machine lock it reads again
+//!   ([`recheck`]): a `main` another gate verified while it waited is left to that gate, and a
+//!   `main` that moved is gated at its new tip. `claim` starts one only with room for a build
 //!   ([`before_claim`]), which there isn't while every slot is taken. A
 //!   project's extra inputs ([`Hooks::full_gate_env`]: a test corpus's reference, say) go into its start
 //!   note and its `ci`'s environment.
@@ -56,7 +58,7 @@ use serde_json::Value;
 use crate::claim::{self, Ctx};
 use crate::gate::{self, Cause};
 use crate::stack::{self, short};
-use crate::{Hooks, Project, capacity, event, lock};
+use crate::{Hooks, Project, capacity, event, lock, machine_lock};
 
 pub mod lock_ref;
 
@@ -76,6 +78,10 @@ const LIST_MAX: usize = 30;
 /// The line a handed-over full gate ends with: how it ended ([`outcome_line`]), for the caller
 /// ([`parse_outcome`]). A stable format: the two sides may be built from different commits.
 pub const OUTCOME: &str = "fullgate-outcome:";
+
+/// How many times a full gate that waited for the machine follows `main` on to a newer tip
+/// ([`recheck`]) before it gates the one it has.
+const MAX_RETARGETS: u32 = 3;
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
 pub const USAGE: &str = "cargo xtask fullgate [--check] [--agent <instance>]";
@@ -327,6 +333,30 @@ pub fn race(gates: &[FullGate], me: &str, sub: &str, now: i64) -> Result<(), Str
         Some(w) if w.instance == me && w.sub == sub => Ok(()),
         Some(w) => Err(format!("{} began a full gate of {} first ({})", w.instance, short(&w.commit), w.sub)),
         None => Err("no open full gate".to_owned()),
+    }
+}
+
+/// What a full gate that won the race does once it holds the machine lock ([`recheck`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recheck {
+    /// Nothing changed while it waited: it gates the commit it began for.
+    Run,
+    /// Another gate verified `main` while it waited: it steps aside (a `superseded:` stop), why.
+    Verified(String),
+    /// `main` moved on to this commit while it waited: it gates that instead.
+    Moved(String),
+}
+
+/// Read again under the machine lock (mornycorp/swarm-core#36): a full gate begun at `since` for
+/// `gated` that waited for the lock, with `main` now at `main` and `gates` read now. A pass of
+/// `main` that stopped since it began (another periodic gate's, or a landed `--full` gate's)
+/// verified it: step aside. Else a `main` that moved is gated at its new tip; else the gate runs.
+pub fn recheck(gates: &[FullGate], since: i64, gated: &str, main: &str) -> Recheck {
+    let verified = gates.iter().filter(|g| g.passed() && g.commit == main).find(|g| g.end.as_ref().is_some_and(|e| e.t >= since));
+    match verified {
+        Some(g) => Recheck::Verified(format!("{}'s {} verified main ({}) while this gate waited for the machine", g.instance, g.sub, short(main))),
+        None if main != gated => Recheck::Moved(main.to_owned()),
+        None => Recheck::Run,
     }
 }
 
@@ -628,37 +658,71 @@ pub fn handover_command(wt: &Path, sub: &str, commit: &str, agent: &str) -> (Str
 
 /// The full gate of `main` as `agent`, when it is due ([`due`]) and this agent wins the race
 /// ([`race`]) and the lock ([`lock_ref::take`]): the start logged, the race checked, the lock
-/// taken, then run by `main`'s own code ([`hand_over`]),
-/// or, with `here` (`--here`), by this xtask's.
+/// taken, then, holding the machine lock, read again ([`recheck`]): it steps aside for a `main`
+/// another gate verified while it waited, or begins again for a `main` that moved; then it is run
+/// by `main`'s own code ([`hand_over`]), or, with `here` (`--here`), by this xtask's.
 pub fn take_if_due(ctx: &Ctx<'_>, agent: &str, here: bool) -> Result<Outcome, String> {
     let (project, root) = (ctx.project, ctx.root);
-    let main = main_commit(project, root)?;
-    let gates = read_gates(project, root)?;
-    if let Due::No(why) = due(&gates, &main, claim::now(), &drift_of(ctx, &gates)) {
-        return Ok(Outcome::NotDue(why));
+    let mut main = main_commit(project, root)?;
+    // Held from the first recheck to the run: a retarget doesn't let another gate in between.
+    let mut machine: Option<machine_lock::Guard> = None;
+    // A `main` that keeps moving is retargeted a few times, then gated where it is.
+    for retargets in 0.. {
+        let gates = read_gates(project, root)?;
+        if let Due::No(why) = due(&gates, &main, claim::now(), &drift_of(ctx, &gates)) {
+            return Ok(Outcome::NotDue(why));
+        }
+        let sub = sub_id(&gates, agent, &main);
+        let tail = tail(&main);
+        let extra = ctx.hooks.full_gate_env(&sub, gates.iter().filter(|g| g.ran()).count());
+        let (_, more, free) = gate::room(root, &capacity_target(root));
+        let note = start_note(NOTE, more, free, &main, extra.field.as_deref());
+        let since = claim::now();
+        gate::log_event(project, root, &["sub.start", "--agent", agent, "--sub", &sub, "--name", "gate", "--note", &note]);
+        let won = read_gates(project, root).and_then(|g| {
+            race(&g, agent, &sub, claim::now())?;
+            lock_ref::take(root, project.branches.remote, &g, agent, &sub, &main)
+        });
+        if let Err(why) = won {
+            gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+            return Ok(Outcome::Yielded(why));
+        }
+        let rechecked = (|| {
+            if machine.is_none() {
+                machine = Some(machine_lock::take(project, agent, root, true)?);
+            }
+            let now_main = main_commit(project, root)?;
+            Ok::<_, String>(recheck(&read_gates(project, root)?, since, &main, &now_main))
+        })();
+        match rechecked {
+            Err(e) => {
+                let why = gate::one_line(&event::one_line(&e), 120);
+                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("abandoned: {why}{tail}")]);
+                return Err(e);
+            }
+            Ok(Recheck::Verified(why)) => {
+                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+                return Ok(Outcome::Yielded(why));
+            }
+            Ok(Recheck::Moved(to)) if retargets < MAX_RETARGETS => {
+                let why = format!("main moved to {} while this gate waited for the machine: gating it instead", short(&to));
+                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+                println!("fullgate: {why}");
+                main = to;
+                continue;
+            }
+            Ok(_) => {}
+        }
+        println!("fullgate: {sub} won the race for {}: the whole ci", short(&main));
+        let runs = |a: &Attempt<'_>| gate::full_attempt(project, ctx.hooks, a);
+        let won = Won { ctx: *ctx, agent, sub: &sub, main: &main, gates: &gates, env: &extra.env, runs: &runs };
+        let ran = if here { checkout(project, root, &main).and_then(|wt| run_won(&won, &wt, &|a| gate::log_event(project, root, a))) } else { hand_over(&won) };
+        return ran.inspect_err(|e| {
+            let why = gate::one_line(&event::one_line(e), 120);
+            gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("abandoned: {why}{tail}")]);
+        });
     }
-    let sub = sub_id(&gates, agent, &main);
-    let tail = tail(&main);
-    let extra = ctx.hooks.full_gate_env(&sub, gates.iter().filter(|g| g.ran()).count());
-    let (_, more, free) = gate::room(root, &capacity_target(root));
-    let note = start_note(NOTE, more, free, &main, extra.field.as_deref());
-    gate::log_event(project, root, &["sub.start", "--agent", agent, "--sub", &sub, "--name", "gate", "--note", &note]);
-    let won = read_gates(project, root).and_then(|g| {
-        race(&g, agent, &sub, claim::now())?;
-        lock_ref::take(root, project.branches.remote, &g, agent, &sub, &main)
-    });
-    if let Err(why) = won {
-        gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
-        return Ok(Outcome::Yielded(why));
-    }
-    println!("fullgate: {sub} won the race for {}: the whole ci", short(&main));
-    let runs = |a: &Attempt<'_>| gate::full_attempt(project, ctx.hooks, a);
-    let won = Won { ctx: *ctx, agent, sub: &sub, main: &main, gates: &gates, env: &extra.env, runs: &runs };
-    let ran = if here { checkout(project, root, &main).and_then(|wt| run_won(&won, &wt, &|a| gate::log_event(project, root, a))) } else { hand_over(&won) };
-    ran.inspect_err(|e| {
-        let why = gate::one_line(&event::one_line(e), 120);
-        gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("abandoned: {why}{tail}")]);
-    })
+    Err("fullgate: no gate ran".to_owned())
 }
 
 /// The target dir capacity is read for before the checkout exists: this checkout's.
@@ -979,6 +1043,37 @@ mod tests {
     const T0: i64 = 1_790_000_000;
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn stopped(instance: &str, sub: &str, commit: &str, started: i64, stopped: i64, rc: Option<i32>) -> FullGate {
+        FullGate { instance: instance.into(), sub: sub.into(), commit: commit.into(), started, end: Some(End { t: stopped, rc, cause: None }) }
+    }
+
+    /// mornycorp/swarm-core#36: a full gate that waited for the machine lock reads again. Nothing
+    /// changed: it runs. Another gate passed `main` meanwhile: it steps aside. `main` moved: it
+    /// gates the new tip, unless that was verified meanwhile too.
+    #[test]
+    fn a_gate_that_waited_for_the_machine_rechecks_main() {
+        let since = T0;
+        let mine = FullGate { instance: "w-2".into(), sub: format!("{SUB}aaaaaaa"), commit: A.into(), started: since, end: None };
+        assert_eq!(recheck(std::slice::from_ref(&mine), since, A, A), Recheck::Run, "nothing changed");
+        // A pass of A that stopped before this gate began doesn't count: due() already weighed it.
+        let old = stopped("w-1", "gate-full-aaaaaaa", A, since - 7200, since - 3600, Some(0));
+        assert_eq!(recheck(&[old, mine.clone()], since, A, A), Recheck::Run);
+        // A landed `--full` gate left main at A while this one waited.
+        let landed = stopped("coord", "gate-37", A, since + 60, since + 600, Some(0));
+        match recheck(&[mine.clone(), landed.clone()], since, A, A) {
+            Recheck::Verified(why) => assert!(why.contains("coord's gate-37 verified main (aaaaaaa)"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // A failure, or a stop that never ran, verifies nothing.
+        for rc in [Some(1), None] {
+            let failed = stopped("w-1", "gate-full-aaaaaaa-2", A, since + 60, since + 600, rc);
+            assert_eq!(recheck(&[mine.clone(), failed], since, A, A), Recheck::Run, "{rc:?}");
+        }
+        assert_eq!(recheck(std::slice::from_ref(&mine), since, A, B), Recheck::Moved(B.into()), "main moved on");
+        let b_landed = stopped("coord", "gate-38", B, since + 60, since + 600, Some(0));
+        assert!(matches!(recheck(&[mine, b_landed], since, A, B), Recheck::Verified(_)), "and the new tip was verified too");
+    }
 
     /// The caller hands the won gate to `main`'s own xtask, built in the checkout, with the sub,
     /// the commit and the agent; that xtask takes them back as `--run`.
