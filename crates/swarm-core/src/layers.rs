@@ -3,6 +3,11 @@
 //! [`Table`] ([`crate::Hooks::layers`]) and wires the check in as its own command and as a step of
 //! its `ci`; a consumer without a table has nothing checked.
 //!
+//! A consumer may instead (or as well) declare each crate's layer in its own manifest and turn
+//! pattern scans on ([`crate::Hooks::architecture`], [`crate::Hooks::scans`]): the same command
+//! then runs [`crate::checks`], and with no table holds the exemptions and the crate map from
+//! the manifests.
+//!
 //! - **Layers.** Every package is in the table at a layer, or exempt (apps, tooling); a crate
 //!   depends (normally) only on crates in strictly lower layers, and never on an exempt one.
 //! - **UI crates stay up.** Nothing below [`Table::ui_layer`] uses [`Table::ui_crates`].
@@ -41,7 +46,7 @@ pub struct Entry {
 }
 
 /// A library package allowed `unsafe` ([`crate::Hooks::unsafe_crates`]), and why.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unsafe {
     pub package: &'static str,
     /// One line: what it binds that can't be written without `unsafe`.
@@ -103,23 +108,71 @@ pub fn run(hooks: &dyn crate::Hooks, root: &Path, args: &[&str]) -> Result<(), S
         ["--write"] => true,
         _ => return Err(format!("usage: {USAGE}")),
     };
-    let Some(table) = hooks.layers() else {
+    let (table, manifests) = (hooks.layers(), crate::checks::configured(hooks));
+    if table.is_none() && !manifests {
         println!("layers: this project describes no layers (Hooks::layers): nothing to check");
         return Ok(());
-    };
+    }
+    let mut problems = Vec::new();
+    if let Some(table) = &table {
+        problems.extend(table_problems(hooks, table, root, write)?);
+    }
+    if manifests {
+        problems.extend(manifest_problems(hooks, root, write, table.is_none())?);
+    }
+    problems.extend(raw_nuls(root));
+    if !problems.is_empty() {
+        return Err(format!("{} layering problem(s):\n  {}", problems.len(), problems.join("\n  ")));
+    }
+    if let Some(table) = &table {
+        println!("layers: {} packages, all in order", table.entries.len());
+    }
+    Ok(())
+}
+
+/// The table's checks ([`crate::Hooks::layers`]): `cargo metadata` held to it, and its crate map.
+fn table_problems(hooks: &dyn crate::Hooks, table: &Table, root: &Path, write: bool) -> Result<Vec<String>, String> {
     let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cmd.current_dir(root).args(["metadata", "--no-deps", "--format-version", "1"]);
     let text = crate::process::output(cmd, None, METADATA_DEADLINE, "cargo metadata")?;
     let meta: Value = serde_json::from_str(&text).map_err(|e| format!("cargo metadata: {e}"))?;
-    let mut problems = check_unsafe(&table, hooks.unsafe_crates(), &meta, root);
-    problems.extend(raw_nuls(root));
-    problems.extend(crate_map_problem(&table, root, write)?);
-    if problems.is_empty() {
-        println!("layers: {} packages, all in order", table.entries.len());
-        Ok(())
-    } else {
-        Err(format!("{} layering problem(s):\n  {}", problems.len(), problems.join("\n  ")))
+    let mut problems = check_unsafe(table, hooks.unsafe_crates(), &meta, root);
+    problems.extend(map_problem(&crate_map(table), root, write, true)?);
+    Ok(problems)
+}
+
+/// The manifests' checks ([`crate::checks`]: the layers each manifest declares, the scans), which
+/// print their own report. With `alone` (no table), the two rules the table path holds are held
+/// here too: the code-health exemptions, and AGENTS.md's crate map when it has the markers,
+/// rendered from the manifests.
+fn manifest_problems(hooks: &dyn crate::Hooks, root: &Path, write: bool, alone: bool) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    match crate::checks::check_with(hooks, root, false) {
+        Ok(report) => println!("{report}"),
+        Err(findings) => problems.extend(findings.0.iter().map(ToString::to_string)),
     }
+    if !alone {
+        return Ok(problems);
+    }
+    let members = crate::checks::declared_members(root);
+    let mut exemptions = BTreeMap::new();
+    for m in &members {
+        for file in rust_files(&root.join(&m.dir).join("src")) {
+            let text = std::fs::read_to_string(&file).unwrap_or_default();
+            let shown = file.strip_prefix(root).unwrap_or(&file).display().to_string().replace('\\', "/");
+            let (counts, found) = limit_exemptions(&text, &shown);
+            problems.extend(found);
+            let tally: &mut [usize; 3] = exemptions.entry(m.package.clone()).or_default();
+            for (t, c) in tally.iter_mut().zip(counts) {
+                *t += c;
+            }
+        }
+    }
+    println!("{}", exemptions_line(&exemptions));
+    if hooks.architecture().is_some() {
+        problems.extend(map_problem(&crate::checks::crate_map(&members), root, write, false)?);
+    }
+    Ok(problems)
 }
 
 /// A workspace member from `cargo metadata`: its name, directory and dependencies (name, dev).
@@ -376,11 +429,19 @@ pub fn crate_map(table: &Table) -> String {
     s
 }
 
-/// AGENTS.md's crate map against the table: rewritten with `write`, else a problem when stale.
-fn crate_map_problem(table: &Table, root: &Path, write: bool) -> Result<Option<String>, String> {
+/// AGENTS.md's crate map against `map`: rewritten with `write`, else a problem when stale. An
+/// AGENTS.md without the markers (or none at all) is an error when the map is `required` (the
+/// table's), and nothing to hold otherwise (a project that keeps no generated map).
+fn map_problem(map: &str, root: &Path, write: bool, required: bool) -> Result<Option<String>, String> {
     let agents = root.join("AGENTS.md");
-    let text = std::fs::read_to_string(&agents).map_err(|e| format!("{}: {e}", agents.display()))?.replace("\r\n", "\n");
-    let wanted = with_map(&text, &crate_map(table)).ok_or_else(|| format!("AGENTS.md has no crate map markers ({MAP_START} … {MAP_END})"))?;
+    let text = match std::fs::read_to_string(&agents) {
+        Ok(text) => text.replace("\r\n", "\n"),
+        Err(_) if !required => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", agents.display())),
+    };
+    let Some(wanted) = with_map(&text, map) else {
+        return if required { Err(format!("AGENTS.md has no crate map markers ({MAP_START} … {MAP_END})")) } else { Ok(None) };
+    };
     if wanted == text {
         return Ok(None);
     }

@@ -21,6 +21,7 @@ pub mod capabilities;
 pub mod capacity;
 pub mod changed;
 pub mod checkout;
+pub mod checks;
 pub mod claim;
 pub mod empty;
 pub mod event;
@@ -168,6 +169,22 @@ pub trait Hooks {
     /// ([`layers::Unsafe`]). The default: none, so every library root forbids `unsafe`.
     fn unsafe_crates(&self) -> &'static [layers::Unsafe] {
         &[]
+    }
+
+    /// The project's architecture as its manifests declare it, for `cargo xtask layers`
+    /// ([`checks::layers`]): every member says its layer in `[package.metadata.swarm]`, and this
+    /// names the layers and what each may do ([`checks::Layers::STANDARD`] is the contract's). A
+    /// project uses this or the table of [`Hooks::layers`]. [`Hooks::unsafe_crates`] is added to
+    /// its `unsafe_crates`. The default: none, so no manifest is read for a layer.
+    fn architecture(&self) -> Option<checks::Layers> {
+        None
+    }
+
+    /// The pattern scans of [`checks::scan`]: the built-in ones the project turns on
+    /// ([`checks::Scan::process_command`], …) pointed at its files by globs, each with its
+    /// allow-list. The default: none.
+    fn scans(&self) -> Vec<checks::Scan> {
+        Vec::new()
     }
 }
 
