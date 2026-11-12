@@ -413,7 +413,19 @@ impl World for Real<'_> {
     }
     fn next_sub(&self) -> String {
         let names: Vec<String> = std::fs::read_dir(&self.logs).map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default();
-        policy::next_sub(&names)
+        // The tracking branch too: the logs go when the target dir is cleaned, the timeline stays.
+        // Unread (offline), the logs alone number it, as before.
+        let logged = match claim::tracking_files(self.project, self.root) {
+            Ok(files) => policy::logged_subs(&files),
+            Err(e) => {
+                self.say(&format!(
+                    "warning: couldn't read the tracking branch to number the gate ({}): numbering from the gate logs alone",
+                    gate::one_line(&e, 120)
+                ));
+                Vec::new()
+            }
+        };
+        policy::next_sub(&names, &logged)
     }
     fn gate(&self, sub: &str, note: &str) -> GateRun {
         self.run_gate(sub, &["--note", note, "--wait", "--rerun"])

@@ -990,7 +990,8 @@ instead, the same way every time.
 5. **Folds, then gates.** While there is no room for the gate's build (the machine gate lock held
    by another gate, or `capacity` says none), the stack waits, up to `--fold` seconds (120), and
    a PR that becomes ready meanwhile is folded in by restacking, which is free. Then it runs
-   `cargo xtask gate --sub gate-<n> --wait --rerun` (numbered on from the gate logs) as a child,
+   `cargo xtask gate --sub gate-<n> --wait --rerun` (numbered on from the gate logs and the
+   tracking branch, whichever is higher) as a child,
    and the stack is frozen: **the daemon never kills a gate**, and runs no git in the worktree
    while one runs. A gate that still waits for room after the fold waits itself.
 6. **Reads the pushes made during the gate** after it ends, by patch-id, not SHA: a branch whose
