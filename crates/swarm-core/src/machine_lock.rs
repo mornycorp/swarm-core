@@ -17,6 +17,8 @@
 //!   ends, pass or fail: the build is what fills the machine. Another holder (the other swarm, or
 //!   another instance) is waited for with `--wait`. A lock older than [`STALE_SECS`] was left
 //!   behind and is taken over; the same instance may take it again.
+//! - **Seen by others** (mornycorp/swarm-core#41): a live lock is a gate waiting for room or
+//!   building, so `capacity` reserves a build for it ([`live`], [`crate::capacity::GateHold`]).
 //! - **Taken atomically:** the line is written beside the lock, then hard-linked to its name,
 //!   which fails when the file exists: of two gates that find it free at once, one gets it. A
 //!   lock that can't be read is still a lock, aged by its file's time.
@@ -95,6 +97,17 @@ fn read(file: &Path) -> Option<Held> {
     let mut held = parse(&text).unwrap_or(Held { swarm: "?".to_owned(), instance: "?".to_owned(), taken: None, worktree: None });
     held.taken = held.taken.or_else(|| mtime(file));
     Some(held)
+}
+
+/// The live lock at `file` at `now`: one younger than [`STALE_SECS`] (a gate waiting for room or
+/// building, mornycorp/swarm-core#41); a lock left behind is none.
+pub fn live_at(file: &Path, now: i64) -> Option<Held> {
+    read(file).filter(|h| age(h.taken, now) < STALE_SECS)
+}
+
+/// The machine lock's live holder now ([`live_at`]), if any.
+pub fn live() -> Option<Held> {
+    path().and_then(|file| live_at(&file, now()))
 }
 
 /// Take the machine lock at `file` for `instance` of `swarm` at `now`, in `worktree`.
@@ -324,6 +337,19 @@ mod tests {
             assert_eq!(left.len(), 1, "no temporary file is left: {left:?}");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// #40: a live lock is a gate others see; none, or one left behind, is no gate.
+    #[test]
+    fn a_live_lock_is_a_gate_and_a_stale_one_is_none() {
+        let dir = swarm_core_testkit::temp_dir("core-machine-lock-live");
+        let file = dir.join("gate.lock");
+        assert_eq!(live_at(&file, T), None, "no lock");
+        take_at(&file, "gpu-swarm", "coord-1", T, "D:/dev/gate").unwrap();
+        let held = live_at(&file, T + 60).unwrap();
+        assert_eq!((held.swarm.as_str(), held.instance.as_str(), held.worktree.as_deref()), ("gpu-swarm", "coord-1", Some("D:/dev/gate")));
+        assert_eq!(live_at(&file, T + STALE_SECS), None, "left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Two gates that both found the lock free: the one whose lock went in first keeps it.

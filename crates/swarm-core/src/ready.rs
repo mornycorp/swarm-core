@@ -33,7 +33,11 @@
 //!    Where the project caps its workers' builds ([`Hooks::worker_build_jobs`]), on a machine
 //!    with the `full-gate` capability, each build it starts gets `CARGO_BUILD_JOBS` (unless the
 //!    environment sets it), said aloud and on its log's first line, so a gate there keeps memory
-//!    for its own (mornycorp/swarm-core#40, [`job_cap`]).
+//!    for its own (mornycorp/swarm-core#40, [`job_cap`]). And where the project gives its
+//!    gates priority ([`Hooks::gate_priority`], off by default), before each `ci` it yields to a
+//!    gate: while a gate holds the machine-wide gate lock and `capacity` has no room beside it, it
+//!    waits (every minute, at most 30), saying "a gate has priority" (mornycorp/swarm-core#41,
+//!    [`capacity::yield_to_gate`]).
 //! 4. **Check the base once more**: the gate takes minutes, and a PR merged
 //!    meanwhile makes the branch stale before it is pushed. So it fetches again; when the base
 //!    moved, it rebases once more. Clean, with the PR's own diff unchanged (`git patch-id` of
@@ -222,6 +226,8 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         let mut log = |args: &[&str]| log_event(project, root, args);
         // Each gate is named for the HEAD it tests: a second one, after the base moved, is its own.
         gated_push(root, &base, &mut || {
+            // Before it takes a slot: it yields holding nothing a gate waits for.
+            yield_to_gate(hooks, root);
             let _slot = test_slot(project, hooks, root, &o.agent)?;
             reran.extend(g.run(&mut log)?);
             Ok(())
@@ -241,6 +247,20 @@ fn test_slot(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str) -> 
     }
     let what = own_gate::sub_of(&rev(root, "HEAD")?);
     test_runs::take(project, agent, root, &what, true, "ready").map(Some)
+}
+
+/// Before each `ci` it runs, where the project gives its gates priority
+/// ([`Hooks::gate_priority`]), `ready` yields to a gate (mornycorp/swarm-core#41): while one
+/// holds the machine-wide gate lock and `capacity` has no room beside it, it waits, saying that a
+/// gate has priority ([`capacity::yield_to_gate`], at most [`capacity::YIELD_MAX`]). Whether it
+/// looked: not by default, nor with no live lock (the machine isn't even read).
+fn yield_to_gate(hooks: &dyn Hooks, root: &Path) -> bool {
+    if !hooks.gate_priority() || crate::machine_lock::live().is_none() {
+        return false;
+    }
+    let Ok(target) = capacity::our_target(root) else { return false };
+    capacity::yield_to_gate("ready", || capacity::read_with(root, &target, true), capacity::YIELD_STEP, capacity::YIELD_MAX);
+    true
 }
 
 /// Log an event (AGENTS.md › Tracking): never fails `ready`; offline, it queues.
@@ -774,6 +794,14 @@ mod tests {
         }
         assert!(!asked.get(), "the machine isn't asked about");
         assert!(jobs_on_ci(None).is_empty(), "nothing set on its ci");
+    }
+
+    /// #40: by default `ready` never yields to a gate: it doesn't look at the machine lock or the
+    /// machine, whatever holds them.
+    #[test]
+    fn by_default_ready_never_yields_to_a_gate() {
+        assert!(!yield_to_gate(&crate::Defaults, Path::new(".")));
+        assert!(!yield_to_gate(&Caps(None), Path::new(".")), "capping is no priority");
     }
 
     /// #38: a project that caps gets `capacity`'s figure (or its own) on a machine where gates

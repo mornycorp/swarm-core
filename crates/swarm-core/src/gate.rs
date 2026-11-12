@@ -20,7 +20,12 @@
 //!   `machineLock=skipped`), then a test-run slot ([`Kind::takes_test_slot`],
 //!   [`crate::test_runs`]: how many test runs go at once on the machine, `ready`'s among them),
 //!   then checks capacity ([`Kind::waits_for_capacity`]); `--wait` waits for each, else it refuses
-//!   (keeping the gate lock). That order, never another, so nothing deadlocks. It holds the machine
+//!   (keeping the gate lock). That order, never another, so nothing deadlocks. Where the project
+//!   turns it on ([`Hooks::gate_priority`], off by default: it queues for room up to two hours, as
+//!   before) a gate has priority (mornycorp/swarm-core#41): it waits for room at most
+//!   [`PATIENCE`]'s grace (2 minutes), then goes ahead of the running builds, saying so; only a
+//!   disk under the floor keeps it waiting ([`wait_for_room`]). While it holds the machine lock,
+//!   `capacity` reserves a build for it for everyone else. It holds the machine
 //!   lock and the slot until its `ci` ends; its `ci` gets `CARGO_BUILD_JOBS` from the free memory
 //!   it saw unless the environment sets it.
 //! - **Logs `sub.start --name gate`** with the capacity it saw and its kind ([`kind_field`]), and
@@ -92,8 +97,7 @@ const USAGE_TEXT: &str =
 /// The usage line, as [`crate::COMMANDS`] lists it.
 pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
 
-/// How often `--wait` looks at capacity again, and for how long at most.
-const WAIT_STEP: Duration = Duration::from_secs(60);
+/// How long `--wait` waits for a disk under the floor at most ([`PATIENCE`]).
 const WAIT_MAX: Duration = Duration::from_secs(2 * 3600);
 
 /// Why a gate failed: the machine's causes, a test's, a build's, and two that a project's gate
@@ -545,8 +549,10 @@ pub fn summary(log: &str) -> String {
 }
 
 /// Room for a gate's build now: whether there is, and the capacity seen (more builds, free memory).
-pub fn room(root: &Path, target: &Path) -> (bool, u64, Option<u64>) {
-    let m = capacity::read(root, target);
+/// With `priority` ([`Hooks::gate_priority`], #41) a gate holding the machine lock elsewhere has a
+/// build reserved ([`capacity::read_with`]).
+pub fn room(root: &Path, target: &Path, priority: bool) -> (bool, u64, Option<u64>) {
+    let m = capacity::read_with(root, target, priority);
     let s = capacity::suggest(&m);
     (s.more > 0, s.more, m.free_memory)
 }
@@ -554,24 +560,119 @@ pub fn room(root: &Path, target: &Path) -> (bool, u64, Option<u64>) {
 /// The capacity a gate saw: how many more builds, and the free memory in bytes.
 pub type Seen = (u64, Option<u64>);
 
-/// Capacity for the gate: at once, or after waiting (`wait`) up to [`WAIT_MAX`].
-fn capacity_for_gate(root: &Path, target: &Path, wait: bool) -> Result<Seen, String> {
+/// Whether and how a gate waits for the machine: not at all (no `--wait`: it refuses), in the
+/// queue as before (`--wait`), or with priority over workers' builds (`--wait` where the project
+/// turns on [`Hooks::gate_priority`], mornycorp/swarm-core#41).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wait {
+    No,
+    Queue,
+    Priority,
+}
+
+impl Wait {
+    /// `--wait` (`wait`) under the project's `hooks`.
+    pub fn of(wait: bool, hooks: &dyn Hooks) -> Wait {
+        match (wait, hooks.gate_priority()) {
+            (false, _) => Wait::No,
+            (true, false) => Wait::Queue,
+            (true, true) => Wait::Priority,
+        }
+    }
+
+    /// Whether it waits at all.
+    pub fn waits(self) -> bool {
+        self != Wait::No
+    }
+
+    /// Whether the project gives its gates priority ([`Hooks::gate_priority`]).
+    pub fn priority(self) -> bool {
+        self == Wait::Priority
+    }
+
+    /// How it waits for room: [`PATIENCE`] with priority, else [`QUEUE`].
+    pub fn patience(self) -> Patience {
+        if self.priority() { PATIENCE } else { QUEUE }
+    }
+}
+
+/// How a gate with `--wait` waits for room ([`wait_for_room`]): how often it looks, how long it
+/// lets the running builds have the machine before it goes ahead of them (`None`: never), and how
+/// long at most it waits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Patience {
+    pub step: Duration,
+    pub grace: Option<Duration>,
+    pub max: Duration,
+}
+
+/// A gate's [`Patience`] in the queue, as before #40: it looks every minute and waits up to two
+/// hours, never going ahead.
+pub const QUEUE: Patience = Patience { step: Duration::from_secs(60), grace: None, max: WAIT_MAX };
+
+/// A gate's [`Patience`] with priority (mornycorp/swarm-core#41): it looks every 30 s, goes
+/// ahead of the workers' builds after 2 minutes, and waits for disk up to two hours. On
+/// 2026-11-07 a gate waited about 25 minutes behind six workers' builds with six PRs ready.
+pub const PATIENCE: Patience = Patience { step: Duration::from_secs(30), grace: Some(Duration::from_secs(120)), max: WAIT_MAX };
+
+/// Capacity for the gate at `root`: [`wait_for_room`] with the machine as it reads now
+/// ([`capacity::read_with`], which never counts this gate's own machine lock).
+fn capacity_for_gate(root: &Path, target: &Path, wait: Wait) -> Result<Seen, String> {
+    wait_for_room(|| capacity::read_with(root, target, wait.priority()), wait.waits(), wait.patience())
+}
+
+/// Room for a gate's build, the machine read by `look`: at once when [`capacity::suggest`] has
+/// room; else refused without `wait`. With it, it waits up to `patience.max`, looking every
+/// `patience.step`. With a grace (a gate has priority, mornycorp/swarm-core#41) it waits that
+/// long at most for the running builds, then goes ahead of them, saying so, its build jobs
+/// following free memory ([`gate_jobs`]); a disk under the floor
+/// ([`capacity::Machine::disk_short`]) is never gone ahead of. The capacity seen: more builds (0
+/// when it went ahead) and free memory.
+pub fn wait_for_room(mut look: impl FnMut() -> capacity::Machine, wait: bool, patience: Patience) -> Result<Seen, String> {
     let started = Instant::now();
+    let mut said = None;
     loop {
-        let (ok, more, free) = room(root, target);
-        if ok {
-            return Ok((more, free));
+        let m = look();
+        let more = capacity::suggest(&m).more;
+        if more > 0 {
+            return Ok((more, m.free_memory));
         }
         if !wait {
             return Err("gate refused: no room for another build now (`cargo xtask capacity`); --wait waits for it".to_owned());
         }
-        if started.elapsed() > WAIT_MAX {
-            return Err(format!("gate: still no room for a build after {} min", WAIT_MAX.as_secs() / 60));
+        // Only a gate with priority tells the disk apart: in the queue, room is room.
+        let disk = patience.grace.is_some() && m.disk_short();
+        if let Some(grace) = patience.grace.filter(|g| !disk && started.elapsed() >= *g) {
+            println!(
+                "gate: still no room after {} s: going ahead with priority over the {} build(s) running (a gate has priority; its build jobs follow free memory)",
+                grace.as_secs(),
+                m.builds()
+            );
+            return Ok((0, m.free_memory));
         }
-        if started.elapsed() < WAIT_STEP {
-            eprintln!("gate: no room for another build now: waiting (every {} s)", WAIT_STEP.as_secs());
+        if started.elapsed() > patience.max {
+            let what = if disk { format!("under {} GB of disk free", capacity::MIN_DISK_GB) } else { "no room for a build".to_owned() };
+            return Err(format!("gate: still {what} after {} min", patience.max.as_secs() / 60));
         }
-        std::thread::sleep(WAIT_STEP);
+        if said != Some(disk) {
+            eprintln!("{}", waiting(patience, disk));
+            said = Some(disk);
+        }
+        std::thread::sleep(patience.step);
+    }
+}
+
+/// What a gate says once when it starts to wait for room (`disk`: for a disk under the floor).
+fn waiting(p: Patience, disk: bool) -> String {
+    let step = p.step.as_secs();
+    match p.grace {
+        None => format!("gate: no room for another build now: waiting (every {step} s)"),
+        Some(_) if disk => format!(
+            "gate: under {} GB of disk free (or unread): waiting for it (every {step} s, up to {} min); a gate goes ahead of builds, never of a full disk",
+            capacity::MIN_DISK_GB,
+            p.max.as_secs() / 60
+        ),
+        Some(g) => format!("gate: no room for another build now: waiting up to {} s (every {step} s), then going ahead with priority", g.as_secs()),
     }
 }
 
@@ -588,20 +689,20 @@ pub struct Room {
 /// machine-wide gate lock when the kind takes it ([`Kind::takes_machine_lock`]), then a test-run
 /// slot ([`Kind::takes_test_slot`]), then capacity when it waits for it
 /// ([`Kind::waits_for_capacity`]; the gate's own slot isn't counted), each at once or, with
-/// `wait`, once it is free. Always in that order: nothing waits for the machine lock while it
+/// `wait` says, once it is free. Always in that order: nothing waits for the machine lock while it
 /// holds a slot, so a gate and a `ready` never wait for each other (docs/swarm-protocol.md).
-pub fn room_to_build(project: &Project, (agent, what): (&str, &str), root: &Path, target: &Path, wait: bool, kind: Kind) -> Result<Room, String> {
+pub fn room_to_build(project: &Project, (agent, what): (&str, &str), root: &Path, target: &Path, wait: Wait, kind: Kind) -> Result<Room, String> {
     let machine = if kind.takes_machine_lock() {
-        Some(machine_lock::take(project, agent, root, wait)?)
+        Some(machine_lock::take(project, agent, root, wait.waits())?)
     } else {
         println!("gate: the machine gate lock is skipped: a {} gate builds no product crate", kind.name());
         None
     };
-    let slot = if kind.takes_test_slot() { Some(test_runs::take(project, agent, root, what, wait, "gate")?) } else { None };
+    let slot = if kind.takes_test_slot() { Some(test_runs::take(project, agent, root, what, wait.waits(), "gate")?) } else { None };
     let seen = if kind.waits_for_capacity() {
         capacity_for_gate(root, target, wait)?
     } else {
-        let (_, more, free) = room(root, target);
+        let (_, more, free) = room(root, target, wait.priority());
         if more == 0 {
             println!("gate: no room for another build now, but a {} gate builds none: going ahead", kind.name());
         }
@@ -895,7 +996,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     };
     // Held until the run ends: dropped on every way out, pass, failure or error.
     let (rc, cause) = {
-        let room = room_to_build(project, (&agent, &sub), root, &target, o.wait, kind).map_err(lock_kept)?;
+        let room = room_to_build(project, (&agent, &sub), root, &target, Wait::of(o.wait, hooks), kind).map_err(lock_kept)?;
         silent::record(&logs, &sub, &gated);
         attempt(&g, &sub, Some(&start), room.seen)?
     };
@@ -983,7 +1084,7 @@ fn again(g: &Gate<'_>, policy: Policy, (sub, note, gated): (&str, &str, &str), (
         }
     };
     let g = Gate { kind, kind_field: &field, rerun: plan.as_ref(), ..*g };
-    let room = room_to_build(g.project, (g.agent, &rerun), g.root, g.target, true, kind).map_err(lock_kept)?;
+    let room = room_to_build(g.project, (g.agent, &rerun), g.root, g.target, Wait::of(true, g.hooks), kind).map_err(lock_kept)?;
     silent::record(&logs, &rerun, gated);
     let (again, _) = attempt(&g, &rerun, Some(&start), room.seen)?;
     println!(
@@ -1060,7 +1161,7 @@ fn rerun_failed(project: &Project, hooks: &dyn Hooks, root: &Path, agent: &str, 
         rerun: Some(&plan),
         program: &program,
     };
-    let room = room_to_build(project, (agent, &sub), root, &target, o.wait, plan.kind).map_err(lock_kept)?;
+    let room = room_to_build(project, (agent, &sub), root, &target, Wait::of(o.wait, hooks), plan.kind).map_err(lock_kept)?;
     silent::record(&target.join(LOG_DIR), &sub, &silent::gated(project, root, &[], &head));
     let (rc, _) = attempt(&g, &sub, Some(&note), room.seen)?;
     finish(&sub, rc)
@@ -1096,7 +1197,7 @@ pub fn full_attempt_with(project: &Project, hooks: &dyn Hooks, a: &fullgate::Att
         program,
     };
     let (rc, cause) = {
-        let room = room_to_build(project, (a.agent, a.sub), a.checkout, a.target, true, Kind::Full)?;
+        let room = room_to_build(project, (a.agent, a.sub), a.checkout, a.target, Wait::of(true, hooks), Kind::Full)?;
         if let Some(what) = a.start {
             let note = fullgate::start_note(what, room.seen.0, room.seen.1, a.commit, None);
             log_event(project, a.checkout, &["sub.start", "--agent", a.agent, "--sub", a.sub, "--name", "gate", "--note", &note]);
@@ -1169,6 +1270,97 @@ mod tests {
         let transient: Vec<&str> = Cause::ALL.into_iter().filter(|c| c.transient()).map(Cause::name).collect();
         assert_eq!(transient, ["memory", "link", "toolchain", "git-temp", "gpu"]);
         assert!(Cause::Python.setup() && !Cause::Python.transient() && !Cause::Test.setup());
+    }
+
+    /// A machine with `free_gb` of memory, `disk_gb` of disk and `builds` running on 32 cores.
+    fn machine(free_gb: u64, disk_gb: Option<u64>, builds: usize) -> capacity::Machine {
+        let gb = 1u64 << 30;
+        capacity::Machine {
+            cores: 32,
+            free_memory: Some(free_gb * gb),
+            free_disk: disk_gb.map(|d| d * gb),
+            busy_dirs: (0..builds).map(|i| PathBuf::from(format!("t{i}"))).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// #41: a gate waits for room at most its grace, then goes ahead of the running builds; a
+    /// disk under the floor keeps it waiting, then refuses; without --wait it refuses at once.
+    #[test]
+    fn a_gate_goes_ahead_after_its_grace_but_never_past_a_full_disk() {
+        let p = Patience { step: Duration::from_millis(5), grace: Some(Duration::from_millis(40)), max: Duration::from_millis(120) };
+        let grace = Duration::from_millis(40);
+        // Room at once: no wait.
+        let roomy = machine(64, Some(500), 0);
+        assert_eq!(wait_for_room(|| roomy.clone(), true, p), Ok((3, roomy.free_memory)));
+        // Six workers' builds and 3 GB free: no room. It goes ahead after its grace, at 0 more.
+        let full = machine(3, Some(500), 6);
+        let (started, mut looks) = (Instant::now(), 0);
+        let seen = wait_for_room(
+            || {
+                looks += 1;
+                full.clone()
+            },
+            true,
+            p,
+        );
+        assert_eq!(seen, Ok((0, full.free_memory)));
+        assert!(started.elapsed() >= grace && looks > 1, "it waited its grace ({looks} looks)");
+        assert!(started.elapsed() < p.max, "and no longer");
+        // Room within the grace: taken as room.
+        let mut n = 0;
+        let seen = wait_for_room(
+            || {
+                n += 1;
+                if n < 3 { full.clone() } else { roomy.clone() }
+            },
+            true,
+            p,
+        );
+        assert_eq!(seen, Ok((3, roomy.free_memory)));
+        // A disk under 20 GB (or unread): waits past the grace up to max, then refuses.
+        for disk in [Some(19), None] {
+            let short = machine(64, disk, 0);
+            let started = Instant::now();
+            let e = wait_for_room(|| short.clone(), true, p).unwrap_err();
+            assert!(e.contains("under 20 GB of disk free") && started.elapsed() > p.max, "{e}");
+        }
+        // Without --wait: refused at once, as before.
+        assert!(wait_for_room(|| full.clone(), false, p).is_err_and(|e| e.starts_with("gate refused: no room") && e.contains("--wait")));
+        assert_eq!(PATIENCE.grace, Some(Duration::from_secs(120)), "the owner's desktop: two minutes");
+    }
+
+    /// A project that gives its gates priority (#41).
+    struct Priority;
+
+    impl Hooks for Priority {
+        fn gate_priority(&self) -> bool {
+            true
+        }
+    }
+
+    /// #41: priority is the project's to turn on; by default a gate with --wait queues as
+    /// before: every minute, up to two hours, never going ahead, a full disk no different.
+    #[test]
+    fn by_default_a_gate_queues_as_before() {
+        assert!(!crate::Defaults.gate_priority());
+        assert_eq!(Wait::of(false, &crate::Defaults), Wait::No);
+        assert_eq!(Wait::of(false, &Priority), Wait::No, "no --wait refuses, with priority too");
+        assert_eq!(Wait::of(true, &crate::Defaults), Wait::Queue);
+        assert_eq!(Wait::of(true, &Priority), Wait::Priority);
+        assert_eq!(Wait::Queue.patience(), QUEUE);
+        assert_eq!(QUEUE, Patience { step: Duration::from_secs(60), grace: None, max: Duration::from_secs(2 * 3600) }, "as before #41");
+        assert_eq!(Wait::Priority.patience(), PATIENCE);
+        assert!(Wait::Queue.waits() && !Wait::Queue.priority() && !Wait::No.waits());
+        // In the queue, no room is waited for up to max, never gone ahead of, and the error is as before.
+        let p = Patience { step: Duration::from_millis(5), grace: None, max: Duration::from_millis(60) };
+        for m in [machine(3, Some(500), 6), machine(64, Some(19), 0)] {
+            let started = Instant::now();
+            let e = wait_for_room(|| m.clone(), true, p).unwrap_err();
+            assert!(started.elapsed() > p.max, "it waited all of max");
+            assert_eq!(e, "gate: still no room for a build after 0 min");
+        }
+        assert_eq!(waiting(QUEUE, false), "gate: no room for another build now: waiting (every 60 s)", "the line it said before");
     }
 
     /// The coordinator smokes what needed the full gate, and what it is unsure of; the docs and

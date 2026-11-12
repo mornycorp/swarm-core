@@ -413,6 +413,16 @@ section's rule holds.
   worktree, branch and target dir of its own; `cargo xtask capacity` says whether the machine
   takes another build and `--helper <name>` sets one up
   ([Helpers in worktrees](#helpers-in-worktrees)).
+- **A gate has priority** where the project turns it on (sc#41, `Hooks::gate_priority`; off by
+  default, when `capacity` counts no gate and `ready` never waits): while a gate holds the
+  machine-wide gate lock (from before it waits for room until its `ci` ends), `capacity`
+  reserves one build for it (a build's cores and memory) unless its build is counted already (a
+  busy target dir in its worktree), and says so (`gate:` lines). The gate's own check, from the
+  worktree its lock names, doesn't count itself. So build helpers, the periodic full gate's
+  claim and a project's own builds that ask `capacity` (`capacity::read_with`) yield to it, and
+  `ready` waits before each `ci`, before it takes its test-run slot, while a gate holds the lock
+  and there is no room, saying `a gate has priority` (every minute, at most 30, then it goes
+  ahead).
 - **Cap your builds' jobs where the coordinator gates** (sc#40): on a machine where the
   coordinator gates, workers cap their builds' jobs, so a gate keeps memory for its own. A build
   left alone takes every core and whatever memory it gets, and `gate` sizes its build from the
@@ -1015,8 +1025,17 @@ overnight on 2026-10-18 for that reason. So (owner, 2026-10-19):
   - **Nor does a docs gate wait for build capacity**: it builds nothing worth
     room, so it is never refused for capacity or waits for it; its `sub.start` note still records
     the capacity it saw. One rule, `Kind::builds`, decides both the lock and the capacity. A
-    gate that builds checks capacity once, when it starts (again for a `--retry-transient`
-    rerun); with `--wait` it waits for room up to two hours, else it refuses.
+    gate that builds checks capacity once, when it starts (again for a rerun); without `--wait`
+    it refuses when there is no room.
+  - With `--wait` a gate waits for room up to two hours, looking every minute.
+  - **A gate has priority over workers' builds** where the project turns it on (sc#41,
+    `Hooks::gate_priority`, off by default): with `--wait` it waits for room at most
+    2 minutes, then goes ahead of the running builds, saying `going ahead with priority`; its
+    build jobs follow free memory (below). On 2026-11-07 a gate waited about 25 minutes behind
+    six workers' builds (one worker's helpers) with six PRs ready. Only a disk under the floor
+    (20 GB, or unread) keeps it waiting, up to two hours, then it refuses: a gate goes ahead of
+    builds, never of a full disk. Meanwhile `capacity` reserves a build for it for everyone else
+    ([Helpers in worktrees](#helpers-in-worktrees)).
   - The gate runs `ci` with `CARGO_BUILD_JOBS` set from free memory: one job per 1.5 GB, at
     least 2, at most the cores; half the cores when free memory can't be read. A
     `CARGO_BUILD_JOBS` the environment sets wins. A test binary's link took about 1.4 GB.
@@ -1250,6 +1269,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Where the project turns it on (`Hooks::gate_priority`, off by default: no change), a gate has priority over workers' builds: `gate --wait` waits for room at most 2 minutes, then goes ahead of the running builds (a disk under the floor still waits, then refuses); while a gate holds the machine-wide gate lock, `capacity` reserves a build for it (but for the gate's own check), so helpers and anything asking `capacity` yield, and `ready` waits before each `ci`, before its test-run slot, while there is no room beside it, saying `a gate has priority` (at most 30 minutes) (sc#41) |
 | 2026-11-12 | minor | Parallel agents: on a machine where the coordinator gates, workers cap their builds' jobs (`CARGO_BUILD_JOBS`, `capacity`'s new `worker builds:` line, 4 unless the machine sets its own cost of a build), so a gate keeps memory for its own; a measurement window the coordinator calls is the exception. `ready` sets it on its builds where the project turns it on (`Hooks::worker_build_jobs`, off by default) on a `full-gate` machine, unless `CARGO_BUILD_JOBS` is set; `gate` sizes its own as before (sc#40) |
 | 2026-11-12 | minor | Gate reruns, a project's choice (`Hooks::gate_reruns`, off by default; `--rerun`, `--no-rerun` for one run): where on, a failed gate reruns once by itself, a failure only at the tests its failed tests alone and the steps they skipped, else a transient failure the whole gate; as `gate-<n>-rerun`, both results printed (sc#39) |
 | 2026-11-12 | minor | The coordinator's loop, `land`'s step 1: a branch a worker rebased onto a newer `main` since `stack` lands without a re-gate when its own commits' patch-id is the stacked commit's, applied onto what the gate tested they are the gated tree, and the newer `main` changes none of the PR's files; the stacked commit is pushed over it. A changed patch, a conflict or a newer `main` touching the PR's files stops, saying which (sc#37) |
