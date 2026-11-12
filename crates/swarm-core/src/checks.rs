@@ -50,6 +50,7 @@ mod patterns;
 mod scan;
 mod source;
 
+pub(crate) use glob::matches as member_glob;
 pub use layers::{Layers, LayersReport, UNSAFE_LINES, Unsafe, layers};
 pub(crate) use manifest::dependency_tables;
 pub use scan::{Allowed, Pattern, Region, Scan, ScanReport, Strings, TEST_FILES, scan};

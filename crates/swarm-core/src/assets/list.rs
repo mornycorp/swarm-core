@@ -9,6 +9,8 @@ pub const ASSETS: &[Asset] = &[
     Asset { path: ".claude/skills/NOTICE", text: include_str!("../../assets/.claude/skills/NOTICE") },
     Asset { path: ".claude/skills/README.md", text: include_str!("../../assets/.claude/skills/README.md") },
     Asset { path: ".claude/skills/THIRD_PARTY_NOTICES.md", text: include_str!("../../assets/.claude/skills/THIRD_PARTY_NOTICES.md") },
+    Asset { path: ".claude/skills/add-command/SKILL.md", text: include_str!("../../assets/.claude/skills/add-command/SKILL.md") },
+    Asset { path: ".claude/skills/add-command/agents/openai.yaml", text: include_str!("../../assets/.claude/skills/add-command/agents/openai.yaml") },
     Asset { path: ".claude/skills/complexity-analyzer/.gitattributes", text: include_str!("../../assets/.claude/skills/complexity-analyzer/.gitattributes") },
     Asset { path: ".claude/skills/complexity-analyzer/.gitignore", text: include_str!("../../assets/.claude/skills/complexity-analyzer/.gitignore") },
     Asset { path: ".claude/skills/complexity-analyzer/SKILL.md", text: include_str!("../../assets/.claude/skills/complexity-analyzer/SKILL.md") },

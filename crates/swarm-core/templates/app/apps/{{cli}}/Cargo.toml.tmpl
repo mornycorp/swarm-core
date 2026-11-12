@@ -1,0 +1,26 @@
+[package]
+name = "{{cli}}"
+description = "{{product}}'s command line: run a command, list them, serve JSON lines, serve MCP"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "apps"
+
+[[bin]]
+name = "{{cli}}"
+path = "src/main.rs"
+
+[dependencies]
+{{crate_prefix}}automation = { path = "../../crates/automation" }
+{{crate_prefix}}engine = { path = "../../crates/engine" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+{{crate_prefix}}testkit = { path = "../../crates/testkit" }
+# The conformance run, pinned beside `swarm-core` (docs/new-swarm.md step 2).
+swarm-core-testkit = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "{{app}}"
+description = "{{product}}'s window: the UI shell, and the control socket when asked"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "apps"
+
+[[bin]]
+name = "{{app}}"
+path = "src/main.rs"
+
+[dependencies]
+{{crate_prefix}}automation = { path = "../../crates/automation" }
+{{crate_prefix}}engine = { path = "../../crates/engine" }
+{{crate_prefix}}ui = { path = "../../crates/ui" }
+# The window host: the toolkit's own crate, linked only here and in the UI layer. The renderer
+# (glow) and the Linux windowing backends are chosen here; change them to the app's needs.
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+
+[dev-dependencies]
+{{crate_prefix}}testkit = { path = "../../crates/testkit" }
+
+[lints]
+workspace = true

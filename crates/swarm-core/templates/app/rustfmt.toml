@@ -1,0 +1,5 @@
+# A starting point from swarm-core's skeleton (`cargo xtask swarm-core init --app`): this
+# repo's own now. The style the skeleton and the example xtask are formatted in; change it, then
+# run `cargo fmt --all`.
+max_width = 160
+use_small_heuristics = "Max"

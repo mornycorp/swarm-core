@@ -1,6 +1,6 @@
 //! The files both swarms keep the same (phase 4): the swarm protocol,
 //! the lessons and the progress-docs standard (`docs/`), the GitHub templates (`.github/`), the
-//! pre-push hook and the label script (`scripts/`), and the `complexity-analyzer` skill
+//! pre-push hook and the label script (`scripts/`), and the `complexity-analyzer` and `add-command` skills
 //! (`.claude/skills/`). They live here, in `crates/swarm-core/assets/`
 //! at the path each takes in a consumer, built into the crate ([`ASSETS`]), so a consumer's copy
 //! is the one its pinned revision ships.
@@ -13,8 +13,12 @@
 //!   consumer's value, from its [`Project`] (`env`, `project`, `github.host`, `github.repo`,
 //!   `checkout_marker`, `stack_state`, `full_gate_worktree`, and
 //!   `gate_lock_max_age`, its `limits.gate_lock_max_age_secs` in words) or its
-//!   [`Hooks::asset_vars`] (such as `product`, `cli`, `ui_crate`). One it doesn't give is refused.
-//!   The skills are copied as they are, but their README.
+//!   [`Hooks::asset_vars`] (such as `product`, `cli`, `ui_crate`), or the prefix of its package
+//!   names (`crate_prefix`, `crate_prefix_ident`: [`Hooks::changed`]'s `package_prefix`, as `my-`
+//!   and `my_`, for the app skeleton, [`crate::skeleton`]; or, when that is empty, a `crate_prefix`
+//!   in its [`Hooks::asset_vars`]). One it doesn't give is refused.
+//!   The skills are copied as they are, but their README and `add-command` (its commands name
+//!   the app's CLI, `{{cli}}`, and its environment prefix, `{{env}}`): see [`TEMPLATED`].
 //!
 //! Line endings: an asset is written with LF and compared without regard to CR, as a Windows
 //! checkout may hold either.
@@ -45,15 +49,33 @@ const VERBATIM: &str = ".claude/skills/";
 /// The assets a consumer runs as programs: written executable on Unix.
 const EXECUTABLE: &[&str] = &["scripts/hooks/pre-push"];
 
+/// What under [`VERBATIM`] is a template all the same: the skills' README, and every file of
+/// `add-command` (a path ending in `/` is a folder), whose commands differ by app.
+const TEMPLATED: &[&str] = &[".claude/skills/README.md", ".claude/skills/add-command/"];
+
 impl Asset {
     /// Whether its `{{name}}` placeholders take the consumer's values.
     pub fn is_template(&self) -> bool {
-        !self.path.starts_with(VERBATIM) || self.path == ".claude/skills/README.md"
+        !self.path.starts_with(VERBATIM) || TEMPLATED.iter().any(|t| self.path == *t || (t.ends_with('/') && self.path.starts_with(t)))
     }
 }
 
+/// The prefix of the workspace's package names, which the app skeleton's crates take (`my-` for
+/// `my-engine`): [`crate::changed::Rules::package_prefix`], so a project that has told `ci
+/// --changed` its prefix has told the skeleton too; when that is empty, `crate_prefix` in
+/// [`Hooks::asset_vars`]. `None` for neither.
+fn crate_prefix(hooks: &dyn Hooks) -> Option<&'static str> {
+    let own = || hooks.asset_vars().iter().find(|(k, _)| *k == "crate_prefix").map(|(_, v)| *v);
+    Some(hooks.changed().package_prefix).filter(|p| !p.is_empty()).or_else(own).filter(|p| !p.is_empty())
+}
+
 /// The value of placeholder `name` for `project`: its settings first, then its own values.
-fn var(project: &Project, hooks: &dyn Hooks, name: &str) -> Option<String> {
+pub(crate) fn var(project: &Project, hooks: &dyn Hooks, name: &str) -> Option<String> {
+    match name {
+        "crate_prefix" => return crate_prefix(hooks).map(str::to_owned),
+        "crate_prefix_ident" => return crate_prefix(hooks).map(|p| p.replace('-', "_")),
+        _ => {}
+    }
     let builtin = match name {
         "env" => Some(project.env_prefix),
         "project" => Some(project.name),

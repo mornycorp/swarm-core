@@ -18,6 +18,11 @@ what it serves and how a consumer wires it in; the swarm protocol
   and GraphQL answers into one shape for a PR and one for an issue; the commands' decisions are
   pure functions over those shapes, tested without a network. A change to `github.rs` also runs
   its live read test against GitHub: `cargo test -p swarm-core --lib -- --ignored live`.
+- **The app skeleton, built for real:** a change to `src/skeleton.rs`, `templates/app/`,
+  `src/checks`, the testkit's conformance run, `examples/consumer_xtask.rs` or `docs/new-swarm.md`
+  also runs `cargo test -p swarm-core --test app_skeleton -- --ignored` before it merges (minutes;
+  it needs the crates registry and `cargo nextest`, and fails without them). A change to the
+  skeleton's dependencies refreshes its locks: `SWARM_CORE_REFRESH_LOCKS=1` with the same command.
 - **Iterating from a consumer:** put a `[patch."https://github.com/mornycorp/swarm-core.git"]`
   table pointing at your checkout in your *user-level* cargo config, never in a repo. The
   consumers' `cargo xtask layers` refuses a committed one.
@@ -26,6 +31,6 @@ what it serves and how a consumer wires it in; the swarm protocol
   none (the test `no_asset_names_a_consumer`), with `{{name}}`
   placeholders for what differs (`assets::render`), and add a file to `src/assets/list.rs` (the
   test `every_file_under_assets_is_shipped` says when the list and the directory differ). The
-  skills under `.claude/skills/` are copied as they are.
+  skills under `.claude/skills/` are copied as they are, but `add-command`, a template.
 - **Checks:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`.

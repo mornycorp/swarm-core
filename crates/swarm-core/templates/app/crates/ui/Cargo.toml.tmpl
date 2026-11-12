@@ -1,0 +1,24 @@
+[package]
+name = "{{crate_prefix}}ui"
+description = "{{product}}: the UI shell (egui): draws memory, calls commands on workers, nothing else"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "ui"
+
+[dependencies]
+{{crate_prefix}}engine = { path = "../engine" }
+# The toolkit is the app's choice (docs/app-architecture.md › The UI is a client): egui, as both
+# reference apps use. Only this crate and the windowed app link one.
+egui = "0.37"
+
+[dev-dependencies]
+{{crate_prefix}}testkit = { path = "../testkit" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

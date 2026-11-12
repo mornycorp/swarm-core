@@ -11,7 +11,10 @@ fn every_file_under_templates_is_listed() {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
             if p.is_dir() {
-                walk(&p, root, out);
+                // `templates/app/` is the app skeleton (`skeleton::FILES`), not a starting point.
+                if dir != root || p.file_name().is_none_or(|n| n != "app") {
+                    walk(&p, root, out);
+                }
             } else {
                 out.push(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
             }
@@ -65,6 +68,48 @@ fn the_templates_hold_what_the_protocol_links_to() {
 }
 
 /// `init` writes what is missing and nothing else: a second run writes nothing, and a file the
+/// The app starting points follow the pinned contract: AGENTS.md's golden rules are its ten
+/// headings, each linked to an anchor that exists, and the architecture doc has the recipe.
+#[test]
+fn the_app_templates_follow_the_contract() {
+    let text = |p: &str| TEMPLATES.iter().find(|t| t.path == p).map(|t| t.text.replace("\r\n", "\n")).unwrap_or_else(|| panic!("{p}"));
+    let contract = crate::assets::ASSETS.iter().find(|a| a.path == "docs/app-architecture.md").expect("the contract is pinned").text.replace("\r\n", "\n");
+    let anchor = |heading: &str| heading.to_lowercase().replace(' ', "-");
+    let headings: Vec<&str> = contract.lines().filter_map(|l| l.strip_prefix("## ")).filter(|h| *h != "Revision history").collect();
+    assert_eq!(headings.len(), 10, "the contract's rules: {headings:?}");
+    let agents = text("AGENTS.md");
+    for h in &headings {
+        assert!(agents.contains(&format!("**[{h}](docs/app-architecture.md#{})", anchor(h))), "AGENTS.md §3 links the rule {h}");
+    }
+    let contract_anchors: Vec<String> =
+        contract.lines().filter(|l| l.starts_with('#') && !l.starts_with("# ")).map(|l| anchor(l.trim_start_matches('#').trim())).collect();
+    for p in ["AGENTS.md", "docs/architecture.md", "clippy.toml"] {
+        for link in text(p).split("app-architecture.md#").skip(1) {
+            let id: String = link.chars().take_while(|c| c.is_ascii_lowercase() || *c == '-').collect();
+            assert!(contract_anchors.contains(&id), "{p}: no heading `{id}` in the contract");
+        }
+    }
+    for layer in ["`model`", "`domain`", "`engine`", "`automation`", "`ui`", "`apps`", "`xtask/`", "`crates/testkit/`"] {
+        assert!(agents.contains(layer), "AGENTS.md §2: the layer {layer}");
+    }
+    let arch = text("docs/architecture.md");
+    // Every layer of the check's stack, numbered in its order, in the contract's table and both
+    // maps; the optional one says so .
+    let stack = crate::checks::Layers::STANDARD.stack;
+    for (doc, text) in [("the contract", contract.as_str()), ("AGENTS.md §2", agents.as_str()), ("docs/architecture.md", arch.as_str())] {
+        let at: Vec<Option<usize>> =
+            stack.iter().enumerate().map(|(n, l)| text.find(&format!("| {n} | `{l}`")).or_else(|| text.find(&format!("| {n} `{l}`")))).collect();
+        assert!(at.iter().all(Option::is_some) && at.is_sorted(), "{doc}: the layers {stack:?}, numbered in order: {at:?}");
+        assert!(text.contains("`sources` (optional)"), "{doc}: `sources` is optional");
+    }
+    for heading in ["## Layers", "## How a command flows", "## Where state lives", "## Adding a command", "## Revision history"] {
+        assert!(arch.contains(&format!("\n{heading}\n")), "docs/architecture.md: {heading}");
+    }
+    assert!(arch.contains("run <id> '<json params>'") && arch.contains("`add-command`"), "the recipe ends at the CLI and names the skill");
+    let clippy = text("clippy.toml");
+    assert!(clippy.contains("std::sync::Mutex") && clippy.contains("std::sync::MutexGuard") && clippy.contains("allow-unwrap-in-tests = true"));
+}
+
 /// consumer has, edited or not, is kept as it is.
 #[test]
 fn init_writes_only_what_is_missing() {

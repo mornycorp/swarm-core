@@ -1,0 +1,25 @@
+[package]
+name = "{{crate_prefix}}automation"
+description = "{{product}}: the transports (JSON lines on stdio and on the loopback socket, MCP), thin adapters over the engine's one dispatch"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "automation"
+
+[dependencies]
+{{crate_prefix}}engine = { path = "../engine" }
+{{crate_prefix}}model = { path = "../model" }
+# The operating system's random generator, for the control socket's token (std has none).
+getrandom = "0.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+{{crate_prefix}}testkit = { path = "../testkit" }
+# The socket's tests register a slow command of their own (the registry's schemas come from its types).
+schemars = { workspace = true }
+
+[lints]
+workspace = true

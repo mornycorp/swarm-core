@@ -38,7 +38,7 @@ moves in the same PR as the rename:
   `scripts/github-labels.sh` (its project's own labels in `scripts/github-labels.project.sh`);
 - its CI becomes a GitHub Actions workflow (`cargo xtask swarm-core init` writes a starting one),
   fetching this private repository with a read-only `SWARM_CORE_TOKEN` secret, and `main`'s
-  protection requires no status checks ([docs/new-swarm.md](docs/new-swarm.md) steps 6 and 7).
+  protection requires no status checks ([docs/new-swarm.md](docs/new-swarm.md) steps 7 and 8).
 
 The tracking format doesn't change: an event's `mr` field holds the PR's number. Issue numbers
 in this repo's docs before the move (`#7`, `sc#15`, …) are the GitLab project's.
@@ -70,6 +70,7 @@ machine, and the first coordinator and workers.
 | new swarms (sc#7) | `swarm-core init` | `templates` (and `examples/consumer_xtask.rs`) |
 | ending a session (sc#10) | `finish`, `install-tools` | `finish` |
 | the gate daemon (sc#44) | `gate --daemon` (`--once`, `--dry-run`, `--status`, `--stop`, `--resume`): the coordinator's stack, gate and land loop ([docs/gate-daemon.md](docs/gate-daemon.md)) | `gate::daemon` (`policy`, `blame`) |
+| the app skeleton (sc#49) | `swarm-core init --app [--ui]` | `skeleton` (and `templates/app/`) |
 | architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template), `checks` (`checks::layers`, `checks::scan`, `checks::check`) |
 
 A consumer describes itself in a `Project` (a `const`) and implements `Hooks`, whose methods all
@@ -100,7 +101,9 @@ have defaults:
 - `changed`, `xtask_reads`, `file_class`: what `ci --changed`'s plan needs from the consumer: its
   package prefix, the files its packages read from outside their directory, its runtime edges
   (a package whose tests launch or load another's build), the files xtask's tests read through the root, and any class of its own.
-- `asset_vars`: the consumer's values for the assets' placeholders (`product`, `cli`, …).
+- `asset_vars`: the consumer's values for the assets' placeholders (`product`, `cli`, …). The app
+  skeleton's crates also take `changed`'s package prefix as `{{crate_prefix}}` and
+  `{{crate_prefix_ident}}` (`my-`, `my_`), or a `crate_prefix` here when that prefix is empty.
 - `layers`: the consumer's crates and their layers, its UI crates, and where command replies are
   read, for `cargo xtask layers` (`layers::Table`); none, and `layers` checks nothing.
 - `unsafe_crates`: the library packages allowed `unsafe` (a GPU or OS binding), each with why;
@@ -149,7 +152,8 @@ a consumer, and are built into the crate (`assets::ASSETS`):
   typed command registry behind every surface, the UI as a client, the robustness rules, and the
   check that holds each), `docs/lessons.md`, `docs/progress-docs.md`;
 - `.github/` (the issue and PR templates), `scripts/hooks/pre-push`, `scripts/github-labels.sh`;
-- `.claude/skills/` (`complexity-analyzer`; the `refactoring` skill was dropped on 2026-10-31).
+- `.claude/skills/` (`complexity-analyzer`, `add-command`; the `refactoring` skill was dropped on
+  2026-10-31).
 
 `cargo xtask swarm-core sync-assets` writes them into the consumer from its pinned revision, with
 `{{name}}` placeholders filled in from its `Project` and `Hooks::asset_vars`, and lists them in
@@ -157,11 +161,43 @@ a consumer, and are built into the crate (`assets::ASSETS`):
 differs. Change an asset here, then bump each consumer.
 
 **Templates** are the other kind: starting points a new consumer copies once and then owns
-(`AGENTS.md`, its `docs/swarm.md` and `docs/development.md`, `clippy.toml`, the progress docs, the
-owner's directions, the scheduled merge check's prompt, nextest's `ci` profile). They live in
+(`AGENTS.md` with the layer map and golden rules, its `docs/swarm.md`, `docs/development.md` and
+`docs/architecture.md`, `clippy.toml`, the progress docs, the owner's directions, the scheduled merge check's prompt, nextest's `ci` profile). They live in
 `crates/swarm-core/templates/` (`templates::TEMPLATES`). `cargo xtask swarm-core init` writes each
 one the consumer doesn't have yet, with the same placeholders and `{{today}}`, and never
 overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swarm.md)).
+
+**The app skeleton** (`skeleton`, `crates/swarm-core/templates/app/`) is a small workspace in
+which one example command (`app.info`) already runs through every surface and the checks pass:
+`crates/model` (the id rule), `engine` (the session, the typed registry, the one dispatch),
+`automation` (JSON lines with the contract's caps, the loopback control socket with token auth, an
+MCP server generated from the registry), `testkit` (temp dirs, hostile request lines; the
+conformance run is this repo's testkit) and `apps/<cli>` (`run`, `commands`, `enabled`,
+`serve [--socket]`, `mcp`), with the lint headers and each crate's layer.
+`cargo xtask swarm-core init --app` writes it (and the starting points) where files are missing,
+never editing the app's root manifest: it reads it, writes nothing when the workspace dependencies
+or lints the crates inherit are missing, and fails after writing until the manifest's `members`
+cover the crates. **`init --app --ui`** adds the UI shell, `crates/ui` (an egui shell that lists
+the commands, runs one on a worker thread and draws its typed result; the toolkit is the app's
+choice), and `apps/<app>`, the window that hosts it. `skeleton::is_app(root)` and
+`skeleton::scans_at(root)` read which of these the workspace has, so the example xtask runs the
+skeleton's scans and the `conformance` step only in an app and serves a repo with no app unchanged.
+
+The tests that build it (`tests/app_skeleton.rs`: the rendered skeleton's own tests and checks,
+and a new repo that follows [docs/new-swarm.md](docs/new-swarm.md) to a green `cargo xtask ci`,
+without an app and then with one) need the crates registry and are `#[ignore]`d:
+`cargo test -p swarm-core --test app_skeleton -- --ignored`. They build in their own `CARGO_HOME`
+(a user-level `[patch]` doesn't reach them) against the locks in `crates/swarm-core/tests/locks/`,
+so a crate's new release doesn't change what they build; `SWARM_CORE_REFRESH_LOCKS=1` with the
+same command re-resolves and rewrites them. They fail, rather than skip, where the registry can't
+be reached.
+
+**`add-command`** is the one skill that is a template: its commands name the app's CLI and
+environment prefix, so `{{cli}}` and `{{env}}` take each repo's values, while the other skill is
+copied as it is. It walks an agent through the contract's steps for a new command, each ending in
+a check, and links to the app's `docs/architecture.md` › Adding a command for the paths. The test
+`the_add_command_skill_names_only_what_the_skeleton_has` holds it to the skeleton, so a rename
+there fails here first.
 
 **The skills are pinned copies, not a Claude Code plugin**. A copy in the
 checkout needs no install on any machine, keeps the skills' names, serves Codex as well as Claude Code (`agents/openai.yaml`), keeps the path

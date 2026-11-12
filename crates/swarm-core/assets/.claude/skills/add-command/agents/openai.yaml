@@ -1,0 +1,7 @@
+interface:
+  display_name: "Add a command"
+  short_description: "Add a command the one way every command is added"
+  default_prompt: "Use $add-command to add a {{cli}} command that ..., following its steps and running each step's check."
+
+policy:
+  allow_implicit_invocation: true
