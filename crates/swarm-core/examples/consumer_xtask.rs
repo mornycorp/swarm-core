@@ -104,8 +104,7 @@ impl Hooks for Ours {
     /// The scans of the app skeleton's files, for the workspace as it is
     /// (`swarm_core::skeleton::scans_at`): none in a repo with no app, the UI crate's too once
     /// `swarm-core init --app --ui` has written it. CHANGE: add the app's own as it grows (the
-    /// process module in `process_command`'s `except`, the state module's), each allowance with its
-    /// reason and a count.
+    /// state module's `file_writes`, say), each allowance with its reason and a count.
     fn scans(&self) -> Vec<Scan> {
         skeleton::scans_at(&root())
     }
