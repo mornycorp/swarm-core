@@ -86,11 +86,12 @@ const TEMP_REPO: &str = "swarm-test-";
 
 const USAGE_TEXT: &str =
     "usage: cargo xtask gate --sub <id> --note \"<what it gates>\" [--merge <branch>]... [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] [--agent <instance>]
+       cargo xtask gate --sub <id> --note \"<what it gates>\" --test-alone \"<binary id> <test>\"... [--wait] [--agent <instance>]
        cargo xtask gate --rerun-failed <sub> [--note \"<text>\"] [--wait] [--agent <instance>]
        cargo xtask gate --stop <sub> --note \"<what it merged>\" [--agent <instance>]";
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
-pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
+pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --sub <id> --note \"<what>\" --test-alone \"<binary id> <test>\"… | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
 
 /// How often `--wait` looks at capacity again, and for how long at most.
 const WAIT_STEP: Duration = Duration::from_secs(60);
@@ -790,6 +791,9 @@ struct Opts {
     /// `--no-rerun`: this run doesn't, where the project turns it on.
     no_rerun: bool,
     full: bool,
+    /// `--test-alone "<binary id> <test>"` (repeatable): run only these tests, each alone, on
+    /// HEAD: the gate daemon's check that they fail on `main` too (cmaughan/swarm-foundation#48).
+    alone: Vec<String>,
 }
 
 fn parse_args(args: &[&str]) -> Result<Opts, String> {
@@ -809,6 +813,7 @@ fn parse_args(args: &[&str]) -> Result<Opts, String> {
             "--rerun" => o.rerun_now = true,
             "--no-rerun" => o.no_rerun = true,
             "--full" => o.full = true,
+            "--test-alone" => o.alone.push(value()?),
             other => return Err(format!("gate: unknown argument `{other}`\n{USAGE_TEXT}")),
         }
     }
@@ -824,6 +829,9 @@ fn check_opts(o: &Opts) -> Result<(), String> {
     }
     if o.sub.is_none() && (o.retry || o.rerun_now || o.no_rerun || o.full || !o.merge.is_empty()) {
         return Err(format!("gate: --merge, --rerun, --no-rerun, --retry-transient and --full go with --sub\n{USAGE_TEXT}"));
+    }
+    if !o.alone.is_empty() && (o.sub.is_none() || o.full || !o.merge.is_empty() || o.retry || o.rerun_now) {
+        return Err(format!("gate: --test-alone goes with --sub, without --merge, --full, --rerun or --retry-transient\n{USAGE_TEXT}"));
     }
     if o.no_rerun && (o.retry || o.rerun_now) {
         return Err(format!("gate: --no-rerun contradicts --rerun and --retry-transient\n{USAGE_TEXT}"));
@@ -868,9 +876,12 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     let target = capacity::our_target(root)?;
     lock::take(project, root, &agent)?;
     let head = tested_head(project, root, &o.merge, &sub)?;
+    let alone = tests_alone(&sub, &o.alone)?;
     // The kind before the machine: a docs gate doesn't take the machine lock. A smoke of a stack
     // holding a PR readied without its `ci --changed` runs that instead ([`untested`]).
-    let (kind, why) = if o.full {
+    let (kind, why) = if let Some(a) = &alone {
+        (a.kind, format!("{} tests alone", a.tests.len()))
+    } else if o.full {
         coordinator_kind((Kind::Full, String::new()), true)
     } else {
         untested::kind(project, root, &o.merge, coordinator_kind(hooks.gate_kind(root), false))
@@ -890,7 +901,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         target: &target,
         head: &head,
         stop_tail: "",
-        rerun: None,
+        rerun: alone.as_ref(),
         program: &program,
     };
     // Held until the run ends: dropped on every way out, pass, failure or error.
@@ -899,9 +910,24 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         silent::record(&logs, &sub, &gated);
         attempt(&g, &sub, Some(&start), room.seen)?
     };
-    let policy = Policy::of(hooks, &o);
+    // Tests run alone are their own rerun: a failure there is the answer.
+    let policy = if alone.is_some() { Policy::default() } else { Policy::of(hooks, &o) };
     let (sub, rc) = if rc == 0 { (sub, rc) } else { again(&g, policy, (&sub, &note, &gated), (rc, cause))? };
     finish(&sub, rc)
+}
+
+/// `--test-alone`'s tests as a run of `sub` ([`rerun::Rerun`] with no step after them): `ci`
+/// builds the tooling scope, runs each test alone, and nothing else; its record is a pass only
+/// when every test ran and passed ([`rerun::outcome`]). `None` without `--test-alone`.
+pub fn tests_alone(sub: &str, specs: &[String]) -> Result<Option<rerun::Rerun>, String> {
+    if specs.is_empty() {
+        return Ok(None);
+    }
+    if specs.len() > rerun::MAX_TESTS {
+        return Err(format!("gate: --test-alone takes at most {} tests", rerun::MAX_TESTS));
+    }
+    let tests = specs.iter().map(|s| rerun::Test::parse(s).map_err(|e| format!("gate: --test-alone {e}"))).collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(rerun::Rerun { of: sub.to_owned(), kind: Kind::Tooling, tests, steps: Vec::new() }))
 }
 
 /// Which reruns a failed gate gets by itself: of its failed tests alone, and of the whole gate for
@@ -1245,6 +1271,13 @@ mod tests {
             Ok(Opts { sub: Some("gate-mr1".into()), note: Some("n".into()), no_rerun: true, ..Opts::default() })
         );
         assert_eq!(parse_args(&["--sub", "g", "--note", "x", "--full"]).map(|o| o.full), Ok(true));
+        let alone = parse_args(&["--sub", "g", "--note", "x", "--test-alone", "a::b t1", "--test-alone", "a t2"]).map(|o| o.alone);
+        assert_eq!(alone, Ok(vec!["a::b t1".into(), "a t2".into()]));
+        for bad in [&["--sub", "g", "--note", "x", "--test-alone", "a t", "--full"][..], &["--stop", "g", "--note", "x", "--test-alone", "a t"]] {
+            assert!(parse_args(bad).is_err_and(|e| e.contains("--test-alone goes with --sub")), "{bad:?}");
+        }
+        assert!(tests_alone("g", &["-p evil".into()]).is_err(), "a test that isn't plain is refused");
+        assert_eq!(tests_alone("g", &[]), Ok(None));
         assert_eq!(parse_args(&["--sub", "g", "--note", "x", "--merge", "1-a", "--merge", "2-b"]).map(|o| o.merge), Ok(vec!["1-a".into(), "2-b".into()]));
         assert!(parse_args(&["--stop", "gate-mr1", "--note", "merged #1"]).is_ok());
         // A rerun needs no note (it says what it reruns), and may wait.
