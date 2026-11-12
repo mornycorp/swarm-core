@@ -118,7 +118,9 @@ working on that instead." Do the work with tests. Your
 gate is `cargo xtask ci --changed` (it becomes the full `cargo xtask ci` when its plan says the
 change reaches everything). Before each run that builds, run `cargo xtask capacity`: when it
 suggests 0 more builds, iterate with `cargo test -p <crate>` or wait a few minutes and check
-again, rather than start another build. Run `cargo xtask ci --changed`, check UI changes with the
+again, rather than start another build. On a machine where the coordinator gates, cap every
+build's jobs: `CARGO_BUILD_JOBS=<n>`, `<n>` from capacity's `worker builds:` line
+(docs/swarm-protocol.md › Parallel agents). Run `cargo xtask ci --changed`, check UI changes with the
 snapshot example, fill in the PR description's Progress section, then submit with
 `cargo xtask ready <m> --agent <your instance id>`: it refuses a PR whose branch
 holds no work, with no commits beyond its base, only its claim commit or an empty diff (
@@ -411,6 +413,19 @@ section's rule holds.
   worktree, branch and target dir of its own; `cargo xtask capacity` says whether the machine
   takes another build and `--helper <name>` sets one up
   ([Helpers in worktrees](#helpers-in-worktrees)).
+- **Cap your builds' jobs where the coordinator gates** (sc#40): on a machine where the
+  coordinator gates, workers cap their builds' jobs, so a gate keeps memory for its own. A build
+  left alone takes every core and whatever memory it gets, and `gate` sizes its build from the
+  memory left: measured 2026-11-06, gates took 11 to 23 minutes with the machine mostly free and
+  28 to 44 beside two workers' full-width builds, one down to 3.3 GB free. So set
+  `CARGO_BUILD_JOBS=<n>` on every build, test and `ci` you run there, `<n>` the jobs per worker
+  build `cargo xtask capacity` suggests (its `worker builds:` line, 4 unless the machine sets
+  its own cost of a build): `CARGO_BUILD_JOBS=4 cargo test -p <crate>`. `ready` does it for its
+  own builds where the project turns it on (`Hooks::worker_build_jobs`, off by default), on a
+  machine with the `full-gate` capability ([swarm.md › Capabilities](swarm.md#capabilities)),
+  and says so; a `CARGO_BUILD_JOBS` you set always wins. Tooling can't cap a `cargo test` or
+  `cargo build` you run yourself: this rule does. The exception is a measurement window the
+  coordinator calls. `gate` keeps sizing its own build from free memory.
 - **Leave the owner's checkout alone.** On a machine the owner builds on, the primary checkout
   stays on `main` for the owner's incremental builds: never check out a branch, commit, rebase,
   reset or stash there, and never build in it with your target dir. Work in a worktree; read the
@@ -1221,6 +1236,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Parallel agents: on a machine where the coordinator gates, workers cap their builds' jobs (`CARGO_BUILD_JOBS`, `capacity`'s new `worker builds:` line, 4 unless the machine sets its own cost of a build), so a gate keeps memory for its own; a measurement window the coordinator calls is the exception. `ready` sets it on its builds where the project turns it on (`Hooks::worker_build_jobs`, off by default) on a `full-gate` machine, unless `CARGO_BUILD_JOBS` is set; `gate` sizes its own as before (sc#40) |
 | 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |
 | 2026-11-12 | minor | Standing rules, a section of their own: product first and tooling when it hurts twice, "wind down" means finish, decide don't ask, a heavy job run by hand waits for an idle gate, a quiet gate log is not a dead gate, stopping a shell on Windows leaves its children, long runs to a log rather than under a monitor (which stops them at its timeout), squash onto the merge base (lessons.md 15). Starting a worker: a different task gets a fresh context; the worker stops and names its next issue, and the coordinator clears its session or starts a fresh worker; a similar follow-on keeps its session. Picking work, step 4: a worker branches every PR from `main`, and stacks on another open PR (`ready --onto`) only when its change needs that PR's code (lessons.md 13). The periodic full gate, a real failure: a timeout repeated in the rerun alone is proof of a slowdown; time one unit against the last green commit, bisect with it, and measure the whole test once on the fix (lessons.md 14) (swarm-core#29) |
 | 2026-11-12 | minor | The architecture review's checklist: the robustness traps (lessons.md 5–12: a child process outside the process module or with no deadline, a second lock in one statement, a file read while drawing, defaults saved over unread state, memory changed before its save, a secret in a result, a discarded `Result`, a test in the real config dir); the two lessons the checklist already cited are 16 and 17 (swarm-core#28) |

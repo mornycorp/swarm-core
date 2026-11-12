@@ -76,6 +76,9 @@ have defaults:
 
 - `gate_kind`: the gate a change needs (docs, tooling or full), from the consumer's own change
   planner. The default is full, unsure, so the coordinator smokes.
+- `worker_build_jobs`: the build jobs `ready` gives its builds on a machine where gates run
+  (`CARGO_BUILD_JOBS`; `capacity` suggests the number), so a gate keeps memory for its own. None
+  by default: no cap.
 - `extra_causes`: the consumer's own causes of a failed gate (`gpu`, `python`, say), read
   before the machine's.
 - `around_ci`: wraps the gate's run of the consumer's `ci` (its Python, a GPU lease, its stack's

@@ -30,6 +30,10 @@
 //!    unless the project's planner ([`Hooks::gate_kind`]) says the change is docs: on 2026-11-03 a
 //!    `ready` and a periodic full gate tested at once and locked up a 24 GB Mac
 //!    (mornycorp/swarm-core#17).
+//!    Where the project caps its workers' builds ([`Hooks::worker_build_jobs`]), on a machine
+//!    with the `full-gate` capability, each build it starts gets `CARGO_BUILD_JOBS` (unless the
+//!    environment sets it), said aloud and on its log's first line, so a gate there keeps memory
+//!    for its own (mornycorp/swarm-core#40, [`job_cap`]).
 //! 4. **Check the base once more**: the gate takes minutes, and a PR merged
 //!    meanwhile makes the branch stale before it is pushed. So it fetches again; when the base
 //!    moved, it rebases once more. Clean, with the PR's own diff unchanged (`git patch-id` of
@@ -205,8 +209,14 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         println!("ready: --no-ci: no ci --changed here; the submit says so, and the coordinator's gate runs it for this PR instead of the smoke");
         push(root)?;
     } else {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
+        let set = std::env::var("CARGO_BUILD_JOBS").ok();
+        let jobs = job_cap(hooks, set.as_deref(), cores, || crate::fullgate::capable(project, hooks))?;
+        if let Some(n) = jobs {
+            println!("{}", capped(n));
+        }
         let logs = capacity::our_target(root)?.join(gate::LOG_DIR);
-        let ci = |args: &[String]| ci_command(project, root, &built_from, args);
+        let ci = |args: &[String]| ci_command(project, root, &built_from, jobs, args);
         let g = own_gate::OwnGate { project, hooks, agent: &o.agent, root, base: &base, logs: &logs, rerun: !o.no_rerun, ci: &ci };
         let mut log = |args: &[&str]| log_event(project, root, args);
         // Each gate is named for the HEAD it tests: a second one, after the base moved, is its own.
@@ -258,18 +268,47 @@ fn gate_with(project: &Project, dir: &Path, built_from: &str) -> Result<GateWith
 
 /// The command that runs the consumer's `ci <args>` at `root`: with this xtask, or the rebased
 /// tree's own when one of [`Project::xtask_rules`] changed since this one was built from
-/// `built_from`.
-fn ci_command(project: &Project, root: &Path, built_from: &str, args: &[String]) -> Result<Command, String> {
-    match gate_with(project, root, built_from)? {
+/// `built_from`; capped at `jobs` build jobs when set ([`job_cap`]).
+fn ci_command(project: &Project, root: &Path, built_from: &str, jobs: Option<u64>, args: &[String]) -> Result<Command, String> {
+    let mut ci = match gate_with(project, root, built_from)? {
         GateWith::ThisXtask => {
             let exe = std::env::current_exe().map_err(|e| format!("ready: this xtask's path: {e}"))?;
-            Ok(this_ci_command(project, &exe, root, args))
+            this_ci_command(project, &exe, root, args)
         }
         GateWith::Rebuilt => {
-            let mut ci = Command::new(rebuilt_xtask(root)?);
+            let mut ci = Command::new(rebuilt_xtask(root, jobs)?);
             ci.current_dir(root).env_remove("CARGO_MANIFEST_DIR").arg("ci").args(args);
-            Ok(ci)
+            ci
         }
+    };
+    with_jobs(&mut ci, jobs);
+    Ok(ci)
+}
+
+/// The build jobs `ready` caps its builds at (mornycorp/swarm-core#40): the project's
+/// [`Hooks::worker_build_jobs`] (none by default: no cap), on a machine where gates run
+/// (`gate_machine`: the `full-gate` capability, asked only for a project that caps), unless the
+/// environment sets `CARGO_BUILD_JOBS` (`set`), which wins. At least 1: cargo refuses 0.
+fn job_cap(hooks: &dyn Hooks, set: Option<&str>, cores: u64, gate_machine: impl FnOnce() -> Result<bool, String>) -> Result<Option<u64>, String> {
+    let gb = capacity::Costs::from_env(|name| std::env::var(name).ok()).gb;
+    let Some(n) = hooks.worker_build_jobs(capacity::worker_jobs(cores, gb)) else { return Ok(None) };
+    if set.is_some_and(|v| !v.trim().is_empty()) || !gate_machine()? {
+        return Ok(None);
+    }
+    Ok(Some(n.max(1)))
+}
+
+/// What `ready` says when it caps its builds at `n` jobs.
+fn capped(n: u64) -> String {
+    format!(
+        "ready: CARGO_BUILD_JOBS={n} for its builds: a worker's builds are capped on a machine where gates run (full-gate), so a gate keeps memory for its own (the project's Hooks::worker_build_jobs; set CARGO_BUILD_JOBS to choose)"
+    )
+}
+
+/// `jobs` as `CARGO_BUILD_JOBS` on a build `ready` starts; nothing when `None`.
+fn with_jobs(cmd: &mut Command, jobs: Option<u64>) {
+    if let Some(n) = jobs {
+        cmd.env("CARGO_BUILD_JOBS", n.to_string());
     }
 }
 
@@ -284,12 +323,14 @@ fn this_ci_command(project: &Project, exe: &Path, root: &Path, args: &[String]) 
     ci
 }
 
-/// The tree at `root`'s own xtask, built into `<target>/ready-xtask` (never over the running one).
-fn rebuilt_xtask(root: &Path) -> Result<PathBuf, String> {
+/// The tree at `root`'s own xtask, built into `<target>/ready-xtask` (never over the running one),
+/// with `jobs` build jobs when set.
+fn rebuilt_xtask(root: &Path, jobs: Option<u64>) -> Result<PathBuf, String> {
     println!("ready: the rebase changed xtask's own rules: gating with the rebased xtask");
     let target = capacity::target_dir(root)?.join("ready-xtask");
     let mut build = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     build.current_dir(root).env_remove("CARGO_MANIFEST_DIR").args(["build", "--quiet", "-p", "xtask", "--target-dir"]).arg(&target);
+    with_jobs(&mut build, jobs);
     run_status(build, "cargo build -p xtask (the rebased tree's)")?;
     Ok(target.join("debug").join(format!("xtask{}", std::env::consts::EXE_SUFFIX)))
 }
@@ -701,6 +742,56 @@ mod tests {
             assert_eq!(set, [Some("ok")], "{}", project.name);
             assert_eq!(ci.get_args().collect::<Vec<_>>(), ["ci", "--changed", "--base", "origin/main"]);
         }
+    }
+
+    /// A project that caps its workers' builds (#38): at `capacity`'s figure, or its own number.
+    struct Caps(Option<u64>);
+    impl Hooks for Caps {
+        fn worker_build_jobs(&self, suggested: u64) -> Option<u64> {
+            Some(self.0.unwrap_or(suggested))
+        }
+    }
+
+    /// The `CARGO_BUILD_JOBS` `ready`'s `ci` carries, capped at `jobs`.
+    fn jobs_on_ci(jobs: Option<u64>) -> Vec<Option<String>> {
+        let mut ci = this_ci_command(&P, Path::new("xtask"), Path::new("."), &own_gate::scope("origin/main"));
+        with_jobs(&mut ci, jobs);
+        ci.get_envs().filter(|(k, _)| *k == "CARGO_BUILD_JOBS").map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned())).collect()
+    }
+
+    /// #38: by default `ready` caps nothing, and doesn't even ask whether gates run here: no
+    /// variable on its `ci`, no line. Both consumers are as before.
+    #[test]
+    fn by_default_readys_builds_are_not_capped() {
+        let asked = std::cell::Cell::new(false);
+        for (set, gate_machine) in [(None, true), (None, false), (Some("8"), true)] {
+            let cap = job_cap(&crate::Defaults, set, 32, || {
+                asked.set(true);
+                Ok(gate_machine)
+            });
+            assert_eq!(cap, Ok(None), "{set:?} {gate_machine}");
+        }
+        assert!(!asked.get(), "the machine isn't asked about");
+        assert!(jobs_on_ci(None).is_empty(), "nothing set on its ci");
+    }
+
+    /// #38: a project that caps gets `capacity`'s figure (or its own) on a machine where gates
+    /// run, set on its `ci` and said; an explicit `CARGO_BUILD_JOBS` wins; elsewhere, nothing.
+    #[test]
+    fn a_project_that_caps_gets_the_cap_where_gates_run() {
+        assert_eq!(job_cap(&Caps(None), None, 32, || Ok(true)), Ok(Some(4)), "capacity's figure");
+        assert_eq!(job_cap(&Caps(Some(6)), None, 32, || Ok(true)), Ok(Some(6)), "the project's own");
+        assert_eq!(job_cap(&Caps(Some(0)), None, 32, || Ok(true)), Ok(Some(1)), "never 0, which cargo refuses");
+        assert_eq!(job_cap(&Caps(None), Some("12"), 32, || Ok(true)), Ok(None), "an explicit value wins");
+        assert_eq!(job_cap(&Caps(None), Some(" "), 32, || Ok(true)), Ok(Some(4)), "an empty one doesn't");
+        assert_eq!(job_cap(&Caps(None), None, 32, || Ok(false)), Ok(None), "not a machine where gates run");
+        assert!(job_cap(&Caps(None), None, 32, || Err("SWARM_INSPECTOR_FULLGATE=maybe: expected on or off".to_owned())).is_err());
+        assert_eq!(jobs_on_ci(Some(4)), [Some("4".to_owned())]);
+        let said = capped(4);
+        assert!(
+            said.starts_with("ready: CARGO_BUILD_JOBS=4 for its builds") && said.contains("where gates run") && said.contains("set CARGO_BUILD_JOBS"),
+            "{said}"
+        );
     }
 
     #[test]
