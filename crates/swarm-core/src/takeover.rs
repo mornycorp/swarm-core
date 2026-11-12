@@ -476,7 +476,8 @@ impl Takeover<'_> {
         let (issue, note) = (o.issue.to_string(), format!("taken over by {}: {}", o.name, self.why));
         let unreleased: BTreeSet<&str> = self.olds.iter().filter(|h| !h.logged).filter_map(|h| h.instance.as_deref()).collect();
         for of in unreleased {
-            event::run(project, self.ctx.root, &["release", "--agent", &o.agent, "--issue", &issue, "--of", of, "--reason", "stale", "--note", &note])?;
+            let args = release_event(&o.agent, &issue, of, &note);
+            event::run(project, self.ctx.root, &args.iter().map(String::as_str).collect::<Vec<_>>())?;
         }
         Ok(())
     }
@@ -514,6 +515,12 @@ impl Takeover<'_> {
         println!("took over from {from}: the branch's commits are kept ({})", self.why);
         claim::report_switch(project, self.ctx.root, &pr.head_ref, (!self.no_switch).then_some(o.agent.as_str()));
     }
+}
+
+/// The `release` event a take-over logs for an earlier holder `of`, as `agent`: `--of` the old
+/// instance, `--reason stale`, and who took it over and on what grounds (`note`).
+fn release_event(agent: &str, issue: &str, of: &str, note: &str) -> Vec<String> {
+    ["release", "--agent", agent, "--issue", issue, "--of", of, "--reason", "stale", "--note", note].iter().map(|s| (*s).to_owned()).collect()
 }
 
 #[cfg(test)]
@@ -766,6 +773,24 @@ mod tests {
         assert_eq!(steps[0], Take::Adopt, "nothing is posted for a branch that can't be had");
         assert!(at(Take::Release) < at(Take::Events) && at(Take::Released) < at(Take::Comment));
         assert_eq!(steps.last(), Some(&Take::Report));
+    }
+
+    /// The release event is one the writer takes: `--of` the old instance, `--reason stale`, and
+    /// its note whole, grounds included.
+    #[test]
+    fn the_release_event_is_a_valid_event() {
+        let args = release_event("mini-43", "92", "mini-38", "taken over by worker-43: its holder released it");
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (agent, e) = event::parse(&crate::project::fixtures::APP_SWARM, &args, None, || "pc".into()).unwrap().unwrap();
+        assert_eq!(
+            (agent.as_str(), e.of.as_deref(), e.reason.as_deref(), e.note.as_deref()),
+            ("mini-43", Some("mini-38"), Some("stale"), Some("taken over by worker-43: its holder released it"))
+        );
+        // An instance that looks like a flag is read as the value it is, never as another flag.
+        let odd = release_event("mini-43", "92", "--reason", "x");
+        let odd: Vec<&str> = odd.iter().map(String::as_str).collect();
+        let parsed = event::parse(&crate::project::fixtures::APP_SWARM, &odd, None, || "pc".into());
+        assert!(parsed.is_err() || parsed.is_ok_and(|p| p.is_some_and(|(_, e)| e.of.as_deref() == Some("--reason") && e.reason.as_deref() == Some("stale"))));
     }
 
     #[test]
