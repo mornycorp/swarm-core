@@ -14,11 +14,47 @@ pub const FILE_WRITES: &[&str] = &[
     "fs::copy",
     "fs::rename",
     "fs::set_permissions",
+    "fs::hard_link",
+    "fs::soft_link",
+    "fs::symlink",
+    "fs::symlink_file",
+    "fs::symlink_dir",
     "File::create",
     "File::create_new",
-    "File::options",
-    "OpenOptions",
+    ".set_len(",
 ];
+
+/// How a file is opened by its options: [`write_opens`] counts one that asks to write.
+const OPENS: &[&str] = &["OpenOptions", "File::options"];
+
+/// What an `OpenOptions` chain says when it opens to write.
+const WRITES: &[&str] = &[".write(true)", ".append(true)", ".create(true)", ".create_new(true)", ".truncate(true)"];
+
+/// How far a statement is read for its options: a chain is nowhere near it.
+const MAX_STATEMENT: usize = 2000;
+
+/// Files opened to write by their options: `OpenOptions` or `File::options`, in a statement (to
+/// its `;`) that turns on `write`, `append`, `create`, `create_new` or `truncate`. An import of
+/// the name, and a read-only open, are no write.
+pub fn write_opens(source: &str) -> Vec<usize> {
+    let starts = line_starts(source);
+    let mut lines: Vec<usize> = OPENS
+        .iter()
+        .flat_map(|name| words(source, name))
+        .filter(|(_, end)| {
+            let rest = source.get(*end..).unwrap_or("");
+            let rest = rest.get(..rest.char_indices().nth(MAX_STATEMENT).map_or(rest.len(), |(i, _)| i)).unwrap_or(rest);
+            let statement = rest.split(';').next().unwrap_or("");
+            // Blanks and line breaks inside the call don't hide it: `.write( true )`.
+            let squeezed: String = statement.chars().filter(|c| !c.is_whitespace()).collect();
+            WRITES.iter().any(|w| squeezed.contains(w))
+        })
+        .map(|(at, _)| line_at(&starts, at))
+        .collect();
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
 
 /// A program started other than through `std::process::Command`: opening a path or a URL with
 /// the system's handler.
@@ -98,15 +134,18 @@ pub fn text(source: &str, needles: &[&str]) -> Vec<usize> {
 }
 
 /// Mentions of `std::process::Command`: the path `process::Command` (also `tokio::process::…`),
-/// `Command` inside a `process::{…}` group (which can span lines), a `process::*` glob, and the
-/// module by another name (`use std::process as p;` then `p::Command`).
+/// `Command` inside a `process::{…}` group (which can span lines and nest), a `process::*` glob,
+/// and the module by another name (`use std::process as p;` then `p::Command`). A `process`
+/// module of the crate's own (`crate::process::Command`, `self::`, `super::`) is not the standard
+/// library's: the app's process module is what the rule sends callers to.
 pub fn process_command(source: &str) -> Vec<usize> {
     module_items(source, "process", &["Command"], true)
 }
 
 /// The `std::fs` functions that write, as a `fs::{…}` group or a `fs::*` glob can import them
 /// (`fs::write` itself is one of [`FILE_WRITES`]).
-const FS_WRITES: &[&str] = &["write", "remove_file", "remove_dir", "remove_dir_all", "create_dir", "create_dir_all", "copy", "rename", "set_permissions"];
+const FS_WRITES: &[&str] =
+    &["write", "remove_file", "remove_dir", "remove_dir_all", "create_dir", "create_dir_all", "copy", "rename", "set_permissions", "hard_link", "soft_link"];
 
 /// The file writes imported into scope, which [`FILE_WRITES`] doesn't see: a write named in a
 /// `fs::{…}` group (`use std::fs::{self, write};` then `write(…)`), a `fs::*` glob, and the module by
@@ -136,7 +175,7 @@ fn module_items(source: &str, module: &str, items: &[&str], direct: bool) -> Vec
     let mut opens = Vec::new();
     for (at, _) in source.match_indices("::") {
         let name = ident_before(source, at);
-        if !aliases.contains(name) {
+        if !aliases.contains(name) || own_module(source, at - name.len()) {
             continue;
         }
         let rest = source.get(at + 2..).unwrap_or("");
@@ -172,6 +211,13 @@ fn aliases<'a>(source: &'a str, module: &'a str) -> std::collections::BTreeSet<&
     names
 }
 
+/// Whether the path segment that starts at byte `at` is reached from the crate itself: it follows
+/// `crate::`, `self::` or `super::`.
+fn own_module(source: &str, at: usize) -> bool {
+    let Some(head) = source.get(..at).and_then(|h| h.strip_suffix("::")) else { return false };
+    matches!(ident_before(head, head.len()), "crate" | "self" | "super")
+}
+
 /// The identifier that ends at byte `at` (`""` when there is none).
 fn ident_before(source: &str, at: usize) -> &str {
     let head = source.get(..at).unwrap_or("");
@@ -179,17 +225,31 @@ fn ident_before(source: &str, at: usize) -> &str {
     head.get(start..).unwrap_or("")
 }
 
-/// Each `{` at `opens` (ascending) with its group: the text up to the first `}` after it, or to the
-/// next open when that comes first, so no text is in two groups and the whole is linear.
+/// Each `{` at `opens` (ascending) with its group: the text up to the `}` that closes it, the
+/// groups nested in it included (`process::{io::{Read}, Command}`). An open inside an earlier
+/// group is that group's already, so no text is in two groups and the whole is linear.
 fn groups<'a>(source: &'a str, opens: &[usize]) -> Vec<(usize, &'a str)> {
     let mut close = 0;
     let mut out = Vec::new();
-    for (k, open) in opens.iter().copied().enumerate() {
-        if close <= open {
-            close = source.get(open..).and_then(|rest| rest.find('}')).map_or(source.len(), |n| open + n);
+    for open in opens.iter().copied() {
+        if open < close {
+            continue;
         }
-        let end = opens.get(k + 1).map_or(close, |next| close.min(*next));
-        out.push((open, source.get(open..end).unwrap_or("")));
+        let mut depth = 0usize;
+        let rest = source.get(open..).unwrap_or("");
+        let end = rest.char_indices().find_map(|(i, c)| match c {
+            '{' => {
+                depth += 1;
+                None
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                (depth == 0).then_some(i)
+            }
+            _ => None,
+        });
+        close = end.map_or(source.len(), |n| open + n);
+        out.push((open, source.get(open..close).unwrap_or("")));
     }
     out
 }
@@ -445,6 +505,41 @@ mod tests {
     }
 
     #[test]
+    /// A file opened by its options is a write only when the options say so: a read-only open and
+    /// the import of the name are none, and one statement is one match however it is laid out.
+    fn a_file_opened_to_write_is_a_write_and_one_opened_to_read_is_not() {
+        assert!(write_opens("use std::fs::OpenOptions;\nlet f = OpenOptions::new().read(true).open(p)?;\n").is_empty());
+        assert_eq!(write_opens("use std::fs::OpenOptions;\nlet f = OpenOptions::new()\n    .create( true )\n    .append(true)\n    .open(p)?;\n"), [2]);
+        assert!(write_opens("let f = File::options().read(true).open(p)?; let g = other.write(true);").is_empty(), "the next statement's is not this one's");
+        assert_eq!(write_opens("File::options().truncate(true).open(p)?;"), [1]);
+        assert!(write_opens("MyOpenOptions::new().write(true);").is_empty());
+        // The writes a path names: links and a truncation among them.
+        for write in ["std::fs::hard_link(a, b)", "std::os::unix::fs::symlink(a, b)", "file.set_len(0)", "fs::soft_link(a, b)"] {
+            assert_eq!(text(write, FILE_WRITES), [1], "{write}");
+        }
+        assert_eq!(fs_imports("use std::fs::{hard_link};"), [1]);
+    }
+
+    /// The crate's own `process` module is not the standard library's, and a nested group is read
+    /// to its end.
+    #[test]
+    fn the_crates_own_process_module_is_not_std_and_a_nested_group_is_read() {
+        for own in ["crate::process::Command::new()", "use crate::process::{Command, run};", "self::process::Command", "super::process::*"] {
+            assert!(process_command(own).is_empty(), "{own}");
+        }
+        for std in [
+            "std::process::Command::new(\"x\")",
+            "tokio::process::Command",
+            "use std::process::{io::{Read}, Command};",
+            "use std::process::{\n    Stdio,\n    Command,\n};",
+        ] {
+            assert_eq!(process_command(std).len(), 1, "{std}");
+        }
+        assert!(process_command("use std::process::{io::{Command}, Stdio};").len() == 1, "nested, it is still named in the group");
+        assert!(process_command("use std::process::{Stdio};\nfn f() { let c = Command { x: 1 }; }").is_empty(), "a `Command` after the group is not in it");
+    }
+
+    #[test]
     fn imported_writes_and_config_dirs_are_matched_at_the_import() {
         assert_eq!(fs_imports("use std::fs::{self, write};\npub fn w() { write(\"p\", b\"x\"); }\n"), [1]);
         assert_eq!(fs_imports("use std::fs::{\n    create_dir_all,\n    write,\n};\n"), [1, 1]);
@@ -453,7 +548,7 @@ mod tests {
             fs_imports("use std::fs::{self, File, read_to_string};\nfn w() { fs::write(\"p\", b\"\"); std::fs::copy(a, b); }\n").is_empty(),
             "the paths are FILE_WRITES' own"
         );
-        assert_eq!(text("std::fs::File::options().write(true).open(\"p\");", FILE_WRITES), [1]);
+        assert_eq!(write_opens("std::fs::File::options().write(true).open(\"p\");"), [1]);
         assert_eq!(dirs_imports("#[cfg(test)]\nmod tests {\n use dirs::{config_dir};\n fn t() { config_dir(); }\n}\n"), [3]);
         assert!(dirs_imports("fn t() { dirs::config_dir(); }").is_empty(), "REAL_CONFIG_DIR's own");
     }

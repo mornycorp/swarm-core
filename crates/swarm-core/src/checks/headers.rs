@@ -96,7 +96,7 @@ pub fn check(shown: &str, text: &str, deny: &[&str], safety: Safety) -> Vec<Find
     let mut lacks = |what: String, fix: String| out.push(Finding::new(shown, Some(1), "crate-root-header", format!("the crate root lacks {what}"), fix));
     match safety {
         Safety::Forbidden if !named(&["forbid"]).contains(&"unsafe_code") => {
-            lacks("`#![forbid(unsafe_code)]`".to_owned(), "add it as the root's first attribute (crates/swarm-core/src/lib.rs is the model)".to_owned());
+            lacks("`#![forbid(unsafe_code)]`".to_owned(), "add it as the root's first attribute (crates/swarm-core/src/lib.rs is the model); every root says it itself, a binary's and the tooling's too, whatever the workspace's lints forbid, so the file shows it".to_owned());
         }
         Safety::Forbidden => {}
         Safety::Allowed => {

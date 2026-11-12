@@ -140,7 +140,7 @@ fn char_literal(chars: &[char], i: usize, out: &mut String) -> usize {
 
 /// The test modules of `stripped` (a source from [`strip`] with its strings blanked), as `[start,
 /// end)` char ranges: each item marked `#[cfg(test)]` (or by a `cfg` that names `test` other than
-/// under `not(…)`: `all(test, …)`, `any(test, …)`) that is a `mod`, from that attribute to the
+/// under `not(…)` or `any(…)`: `all(test, …)`) that is a `mod`, from that attribute to the
 /// module's end: its `;` for `mod tests;`, its closing brace for an inline one. Everything else is
 /// production code, before a test module or after it, and a `#[cfg(test)]` helper function marks
 /// no module. One pass: each char is looked at a bounded number of times, so a hostile file is
@@ -199,11 +199,12 @@ fn skip_space(chars: &[char], i: usize) -> usize {
     chars.iter().skip(i).position(|c| !c.is_whitespace()).map_or(chars.len(), |n| i + n)
 }
 
-/// Whether an attribute's body (`cfg(all(test, unix))`) is a `cfg` that names `test` other than
-/// under a `not(…)`.
+/// Whether an attribute's body (`cfg(all(test, unix))`) is a `cfg` that holds only under `test`:
+/// it names `test` other than under a `not(…)` or an `any(…)`. `any(test, feature = "x")` is
+/// compiled without `test` too, with the feature on: production code, and scanned as it.
 fn cfg_of_test(body: &str) -> bool {
     let Some(predicate) = body.trim_start().strip_prefix("cfg").map(str::trim_start).and_then(|p| p.strip_prefix('(')) else { return false };
-    // For each open paren, whether it is inside a `not(`.
+    // For each open paren, whether it is inside a `not(` or an `any(`.
     let mut negated = vec![false];
     let mut word = String::new();
     for c in predicate.chars().chain([' ']) {
@@ -213,7 +214,7 @@ fn cfg_of_test(body: &str) -> bool {
         }
         let inside_not = negated.last().copied().unwrap_or(false);
         match c {
-            '(' => negated.push(inside_not || word == "not"),
+            '(' => negated.push(inside_not || word == "not" || word == "any"),
             _ if word == "test" && !inside_not && c != '=' && !c.is_whitespace() => return true,
             ')' => drop(negated.pop()),
             _ => {}
@@ -370,10 +371,18 @@ mod tests {
 
     #[test]
     fn a_cfg_that_needs_test_marks_a_test_module_and_one_that_excludes_it_does_not() {
-        for test in ["#[cfg(all(test, unix))]", "#[cfg(any(test, feature = \"_\"))]", "#[cfg( test )]", "#[cfg(all(not(windows), test))]"] {
+        for test in ["#[cfg(all(test, unix))]", "#[cfg( test )]", "#[cfg(all(not(windows), test))]"] {
             assert_eq!(split(&format!("{test} mod m {{ a(); }}\nb();")), ("b();".to_owned(), format!("{test} mod m {{ a(); }}")), "{test}");
         }
-        for production in ["#[cfg(not(test))]", "#[cfg(any(unix, not(test)))]", "#[cfg_attr(test, allow(x))]", "#[cfg(tests)]", "#[cfg(testing)]"] {
+        for production in [
+            "#[cfg(not(test))]",
+            "#[cfg(any(test, feature = \"_\"))]",
+            "#[cfg(all(unix, any(test, debug_assertions)))]",
+            "#[cfg(any(unix, not(test)))]",
+            "#[cfg_attr(test, allow(x))]",
+            "#[cfg(tests)]",
+            "#[cfg(testing)]",
+        ] {
             assert_eq!(split(&format!("{production} mod m {{ a(); }}")).1, "", "{production}");
         }
     }

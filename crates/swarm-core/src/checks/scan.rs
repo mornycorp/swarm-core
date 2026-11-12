@@ -59,6 +59,10 @@ impl Pattern {
     }
 }
 
+/// Where a scan's own setup is: a finding about it names this, not a file of the workspace. The
+/// scans are the project's `Hooks::scans`, in its xtask.
+pub const CONFIGURED: &str = "xtask (Hooks::scans)";
+
 /// The files a scan takes as wholly test code unless it says otherwise ([`Scan::test_files`]):
 /// a `tests` directory (integration tests, a module's `tests/`), and a module's own `tests.rs`,
 /// which its parent brings in under `#[cfg(test)]`.
@@ -183,12 +187,13 @@ impl Scan {
         )
     }
 
-    /// **`file-writes`**: a file write ([`patterns::FILE_WRITES`]) outside the state module (name it
-    /// in [`Scan::except`]); the contract's State on disk.
+    /// **`file-writes`**: a file write ([`patterns::FILE_WRITES`], or a file opened to write by its
+    /// options, [`patterns::write_opens`]) outside the state module (name it in [`Scan::except`]);
+    /// the contract's State on disk. A read-only open is no match.
     pub const fn file_writes() -> Scan {
         Scan::new(
             "file-writes",
-            &[Pattern::Text(patterns::FILE_WRITES), Pattern::Custom(patterns::fs_imports)],
+            &[Pattern::Text(patterns::FILE_WRITES), Pattern::Custom(patterns::write_opens), Pattern::Custom(patterns::fs_imports)],
             "file write(s)",
             "persist state through the state module and its one atomic writer (a temporary file, flushed, renamed)",
         )
@@ -211,7 +216,10 @@ impl Scan {
     }
 
     /// **`value-reads`**: a `serde_json::Value` read by key (`v["k"]`, `.get("k")`, `.as_object()`) in
-    /// the UI, automation and the apps; the contract's The UI is a client.
+    /// the UI, automation and the apps; the contract's The UI is a client. It reads text, not
+    /// types: a map's `.get("k")`, a header's or a TOML table's matches too. Point it only at the
+    /// code that consumes command replies, and give a file that reads another kind of map by key
+    /// its count in the allow-list, with the reason.
     pub const fn value_reads() -> Scan {
         Scan::new(
             "value-reads",
@@ -236,6 +244,9 @@ impl Scan {
     /// **`ui-strings`**: a string literal with text in the UI crate's drawing code
     /// ([`patterns::string_literals`]; not `""`, not one in an attribute) rather than the string
     /// catalog's (name the catalog module in [`Scan::except`]); the contract's The UI is a client.
+    /// It counts every literal with text, a log line's and an assert's message among them: point it
+    /// at the drawing code alone, and give what is never drawn (a thread's name, a `Debug` name)
+    /// its count in the allow-list, with the reason.
     pub const fn ui_strings() -> Scan {
         Scan::new(
             "ui-strings",
@@ -280,9 +291,9 @@ impl Scan {
 
     /// The malformed parts of this scan's own setup.
     fn problems(&self) -> Vec<Finding> {
-        let here = format!("scan `{}`", self.rule);
+        let here = CONFIGURED;
         let mut found = Vec::new();
-        let mut bad = |what: String, fix: &str| found.push(Finding::new(&here, None, self.rule, what, fix));
+        let mut bad = |what: String, fix: &str| found.push(Finding::new(here, None, self.rule, format!("the `{}` scan {what}", self.rule), fix));
         if self.files.is_empty() {
             bad("names no files: it would read nothing".to_owned(), "name the files with `.files(&[…])`");
         }
@@ -400,7 +411,13 @@ fn run_one(scan: &Scan, files: &[String], cache: &mut Cache<'_>, found: &mut Vec
     // Each glob reads something: one that matches nothing (a crate renamed, a typo) is a silent hole.
     for stale in scan.files.iter().filter(|g| !selected.iter().any(|(f, _)| glob::matches(g, f))) {
         let problem = format!("its files glob {stale:?} (of {:?}) matches nothing (less the excepted ones)", scan.files);
-        found.push(Finding::new(&format!("scan `{}`", scan.rule), None, scan.rule, problem, "fix the glob: a glob that reads nothing finds nothing"));
+        found.push(Finding::new(
+            CONFIGURED,
+            None,
+            scan.rule,
+            format!("the `{}` scan: {problem}", scan.rule),
+            "fix the glob: a glob that reads nothing finds nothing",
+        ));
     }
     let mut matches: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (file, wholly_test) in selected {
@@ -678,7 +695,7 @@ mod tests {
         let dir = tree("scan-stale-glob", &[("crates/automation/src/lib.rs", "fn f() {}\n"), ("apps/cli/src/main.rs", "fn r(v: Value) { v[\"k\"]; }\n")]);
         let found = failures(&dir, &[Scan::value_reads().files(&["crates/automation/**/*.rs", "app/**/*.rs"])]);
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].starts_with("scan `value-reads`: [value-reads] its files glob \"app/**/*.rs\" (of "), "{found:?}");
+        assert!(found[0].starts_with("xtask (Hooks::scans): [value-reads] the `value-reads` scan: its files glob \"app/**/*.rs\" (of "), "{found:?}");
         // A glob whose every file is excepted, or wholly test code, reads nothing either.
         let excepted = failures(&dir, &[Scan::value_reads().files(&["crates/**/*.rs", "apps/**/*.rs"]).except(&["apps/cli/src/main.rs"])]);
         assert!(excepted.len() == 1 && excepted[0].contains("glob \"apps/**/*.rs\""), "{excepted:?}");
