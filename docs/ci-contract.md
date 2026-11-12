@@ -27,8 +27,10 @@ anything else with exit code 2.
 
 - **`--changed --base <ref>`:** run the gate's steps only for the packages that the change since
   the merge base with `<ref>` affects, plus their dependents and the packages that read a changed
-  file. When the plan reaches everything (the workspace manifest, the lock file, the lint or test
-  settings), run everything.
+  file. A `Cargo.lock` change reaches only the packages whose resolved dependencies include a
+  package whose lock entry changed (`changed::lock`, `changed::lock_for`); a lockfile that can't
+  be read plans everything. When the plan reaches everything (the workspace manifest, the lint or
+  test settings, an unreadable lockfile), run everything.
 - **`--plan`:** with `--changed`, print the plan and run nothing.
 - **`--head <ref>`:** with `--plan`, plan a pushed ref instead of the worktree.
 - **`--smoke`:** the coordinator's smoke. That is the build, fmt, clippy, layers, the generated
