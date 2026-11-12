@@ -129,7 +129,8 @@ impl OwnGate<'_> {
         let cmd = (self.ci)(args)?;
         println!("ready {sub}: ci {}; log {}", args.join(" "), log.display());
         let (started, since) = (Instant::now(), SystemTime::now());
-        let rc = run_logged(cmd, &log)?;
+        let preface = preface(&cmd);
+        let rc = run_logged(cmd, &log, &preface)?;
         if let Err(e) = gate::keep_junit(&self.root.join(gate::JUNIT), &self.logs.join(format!("{sub}.junit.xml")), since) {
             eprintln!("warning: ready: the test times: {e}");
         }
@@ -186,11 +187,24 @@ fn stop_note(ran: &Result<Ran, String>) -> String {
 /// How often [`run_logged`] copies the log to the terminal.
 const TAIL_EVERY: Duration = Duration::from_millis(250);
 
-/// Run `cmd` with its whole output in `log` and on ours as it is written: its exit code (-1:
-/// killed). The child writes the file itself, as the gate's `ci` does, and this copies what it
-/// wrote to stdout until it exits: no pipe that a process it left running could hold open.
-fn run_logged(mut cmd: Command, log: &Path) -> Result<i32, String> {
-    let file = File::create(log).map_err(|e| format!("ready: {}: {e}", log.display()))?;
+/// The log's first line, before `ci`'s output: the build jobs `ready` capped `cmd` at
+/// (mornycorp/swarm-core#40), so a reader of the log sees why its build took longer; empty
+/// when it set none (an explicit `CARGO_BUILD_JOBS` is inherited, not set here).
+fn preface(cmd: &Command) -> String {
+    cmd.get_envs()
+        .find(|(k, _)| *k == "CARGO_BUILD_JOBS")
+        .and_then(|(_, v)| v)
+        .map(|v| format!("ready: CARGO_BUILD_JOBS={}, a worker's cap on a machine where gates run\n", v.to_string_lossy()))
+        .unwrap_or_default()
+}
+
+/// Run `cmd` with its whole output in `log`, after `preface`, and on ours as it is written: its
+/// exit code (-1: killed). The child writes the file itself, as the gate's `ci` does, and this
+/// copies what it wrote to stdout until it exits: no pipe that a process it left running could
+/// hold open.
+fn run_logged(mut cmd: Command, log: &Path, preface: &str) -> Result<i32, String> {
+    let mut file = File::create(log).map_err(|e| format!("ready: {}: {e}", log.display()))?;
+    std::io::Write::write_all(&mut file, preface.as_bytes()).map_err(|e| format!("ready: {}: {e}", log.display()))?;
     let err = file.try_clone().map_err(|e| format!("ready: {}: {e}", log.display()))?;
     let mut child = cmd.stdin(Stdio::null()).stdout(file).stderr(err).spawn().map_err(|e| format!("ready: ci: {e}"))?;
     let mut reader = File::open(log).map_err(|e| format!("ready: {}: {e}", log.display()))?;
@@ -341,12 +355,31 @@ mod tests {
         let log = dir.join("ready-x.log");
         let mut cmd = Command::new("git");
         cmd.current_dir(&dir).args(["--version"]);
-        assert_eq!(run_logged(cmd, &log), Ok(0));
+        assert_eq!(run_logged(cmd, &log, ""), Ok(0));
         assert!(std::fs::read_to_string(&log).unwrap().starts_with("git version"));
         let mut cmd = Command::new("git");
         cmd.current_dir(&dir).args(["no-such-command"]);
-        assert_ne!(run_logged(cmd, &log), Ok(0));
+        assert_ne!(run_logged(cmd, &log, ""), Ok(0));
         assert!(std::fs::read_to_string(&log).unwrap().contains("no-such-command"), "stderr too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #38: a `ci` that `ready` capped says so on its log's first line, the output after it; one
+    /// it didn't cap has no such line.
+    #[test]
+    fn a_capped_builds_log_says_so_first() {
+        let dir = swarm_core_testkit::temp_dir("core-ready-capped");
+        let log = dir.join("ready-x.log");
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&dir).args(["--version"]);
+        assert_eq!(preface(&cmd), "", "not capped");
+        cmd.env("CARGO_BUILD_JOBS", "4");
+        let first = preface(&cmd);
+        assert_eq!(first, "ready: CARGO_BUILD_JOBS=4, a worker's cap on a machine where gates run\n");
+        assert_eq!(run_logged(cmd, &log, &first), Ok(0));
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.starts_with(&first) && text[first.len()..].starts_with("git version"), "{text}");
+        assert_eq!(gate::classify(&first, None), gate::Cause::Other, "the line is no failure's cause");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

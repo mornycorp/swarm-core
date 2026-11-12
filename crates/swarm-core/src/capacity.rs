@@ -148,6 +148,16 @@ pub struct Suggestion {
     pub basis: Vec<String>,
 }
 
+/// The build jobs a worker's build gets on a machine where gates run (mornycorp/swarm-core#40;
+/// docs/swarm-protocol.md › Parallel agents), so a gate there keeps memory for its own: a build's
+/// share of memory (`gb`: the machine's own cost of a build, [`Costs`], [`GB_PER_BUILD`] unless it
+/// says otherwise) over a job's ([`crate::machine_lock::BYTES_PER_JOB`], a link's peak), rounded
+/// up, so 4 by default; at most the `cores`. Memory, not cores, is what the gate ran short of (on
+/// 2026-11-06 one dropped to 3.3 GB free beside two workers' builds).
+pub fn worker_jobs(cores: u64, gb: u64) -> u64 {
+    gb.saturating_mul(GB).div_ceil(crate::machine_lock::BYTES_PER_JOB).clamp(1, cores.max(1))
+}
+
 /// `bytes` in GB, one decimal.
 fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / GB as f64)
@@ -542,6 +552,11 @@ pub fn report(m: &Machine, s: &Suggestion, target: &Path) -> String {
     for b in &s.basis {
         out.push_str(&format!("  {b}\n"));
     }
+    out.push_str(&format!(
+        "worker builds: CARGO_BUILD_JOBS={} each on a machine where gates run ({} GB a build / 1.5 GB a job, within the cores; docs/swarm-protocol.md › Parallel agents)\n",
+        worker_jobs(m.cores, m.costs.gb),
+        m.costs.gb
+    ));
     out
 }
 
@@ -1034,6 +1049,27 @@ Swapouts:                                   98279800.
         assert!(suggest(&m).basis.join("\n").contains("costs: from SWARM_CORES_PER_BUILD"));
         let one = Machine { busy_dirs: vec![PathBuf::from("t0")], ..m };
         assert_eq!(suggest(&one).more, 1);
+    }
+
+    /// #38: the report ends with the jobs a worker's build gets where gates run, a line of its
+    /// own after the suggestion, whose lines are as before.
+    #[test]
+    fn the_report_suggests_the_jobs_per_worker_build() {
+        assert_eq!(worker_jobs(32, GB_PER_BUILD), 4, "5 GB a build / 1.5 GB a job, rounded up");
+        assert_eq!((worker_jobs(2, 5), worker_jobs(0, 5), worker_jobs(u64::MAX, 5)), (2, 1, 4), "within the cores, never 0");
+        assert_eq!((worker_jobs(32, 9), worker_jobs(32, 0)), (7, 1), "a machine's own cost of a build");
+        let m = machine(32, Some(64), Some(500), 0);
+        let text = report(&m, &suggest(&m), Path::new("target/agent-a"));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.first().copied(), Some("capacity (cargo xtask capacity):"));
+        assert!(lines.contains(&"suggest: 3 more build(s)") && lines.contains(&"  more builds: min(4, 12, 3) = 3"), "{text}");
+        assert_eq!(
+            lines.last().copied(),
+            Some(
+                "worker builds: CARGO_BUILD_JOBS=4 each on a machine where gates run (5 GB a build / 1.5 GB a job, within the cores; docs/swarm-protocol.md › Parallel agents)"
+            )
+        );
+        assert_eq!(lines.iter().position(|l| l.starts_with("  more builds:")), Some(lines.len() - 2), "after the suggestion's basis");
     }
 
     #[test]

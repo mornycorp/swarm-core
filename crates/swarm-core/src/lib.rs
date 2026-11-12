@@ -75,6 +75,16 @@ pub trait Hooks {
         false
     }
 
+    /// The build jobs a worker's `ready` gives its `ci` on a machine where gates run (#38), so a
+    /// gate there keeps memory for its own build: `ready` sets `CARGO_BUILD_JOBS` to it on a
+    /// machine with the `full-gate` capability ([`fullgate::capable`]) unless the environment
+    /// sets it. `suggested` is `capacity`'s figure ([`capacity::worker_jobs`]). The default: none,
+    /// so no cap, as before.
+    fn worker_build_jobs(&self, suggested: u64) -> Option<u64> {
+        let _ = suggested;
+        None
+    }
+
     /// The project's own cause of a failed gate, read from its `log` before the machine's
     /// ([`gate::classify`]), such as `gpu` (the GPU or the desktop under load) and `python` (no
     /// Python for its oracle tests). The default: none.

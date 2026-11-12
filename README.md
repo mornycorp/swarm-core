@@ -79,6 +79,9 @@ have defaults:
 - `gate_reruns`: whether a failed gate reruns once by itself: a failure only at the tests, its
   failed tests alone; else a transient failure, the whole gate. Off by default; `gate --rerun` and
   `--no-rerun` choose for one run.
+- `worker_build_jobs`: the build jobs `ready` gives its builds on a machine where gates run
+  (`CARGO_BUILD_JOBS`; `capacity` suggests the number), so a gate keeps memory for its own. None
+  by default: no cap.
 - `extra_causes`: the consumer's own causes of a failed gate (`gpu`, `python`, say), read
   before the machine's.
 - `around_ci`: wraps the gate's run of the consumer's `ci` (its Python, a GPU lease, its stack's
