@@ -7,11 +7,13 @@
 //! - **When:** the claim is stale. The coordinator released it (`cargo xtask event release
 //!   --issue <n> --of <instance>`, or a `released: <name>` comment), or its holders' last activity
 //!   (their events on the issue, their claim comments, the branch's newest commit) is older than
-//!   [`LIVE_SECS`], the protocol's 24-hour rule. Otherwise it refuses, naming each live holder and
-//!   when it was last active ([`grounds`]).
+//!   [`LIVE_SECS`], the protocol's 24-hour rule. A holder whose own `stop` follows its newest
+//!   `claim` or `work` holds nothing. Otherwise it refuses, naming each live holder and when it
+//!   was last active ([`grounds`]).
 //! - **What it adopts:** the issue's open PR (the one the newest claim comment names, when there
 //!   are several: [`pick_pr`]) and its branch, fetched; the local branch is made at its head
-//!   ([`adopt`]), and the worktree switched to it as a claim's is: the commits are kept.
+//!   ([`adopt`]), and the worktree switched to it as a claim's is: the commits are kept. A local
+//!   branch with commits origin's lacks is refused ([`ahead`]), before anything is posted.
 //! - **What it logs and posts** ([`plan`]): `release --of <old instance> --reason stale` for each
 //!   holder the tracking branch doesn't show released; `released: <old name>, taken over by …` for
 //!   each claim comment still standing; the label; `claimed: <name>, PR #<m>`; then `claim` and
@@ -21,7 +23,8 @@
 //!   Otherwise it stays, and the takeover says why. A held issue is idle by design, so an idle
 //!   claim on one whose cause may remain is taken over only on the coordinator's say-so
 //!   ([`held_back`]).
-//! - It runs no periodic full gate: the work goes on on the PR's branch, nothing new from `main`.
+//! - It runs no periodic full gate, and a red `main` doesn't hold it: the work goes on on the PR's
+//!   branch, nothing new from `main`.
 //!
 //! The decisions are pure functions over the issue's facts (tested); the git and gh calls around
 //! them are thin.
@@ -46,8 +49,8 @@ pub struct Old {
     /// Its last activity: its newest event on the issue, or its newest claim comment (seconds since
     /// the Unix epoch).
     pub last: Option<i64>,
-    /// The tracking branch shows its newest `claim` or `work` ended: its own `release`, another's
-    /// `release --of` it, or a merge.
+    /// The tracking branch shows its newest `claim` or `work` ended: its own `release` or `stop`,
+    /// another's `release --of` it, or a merge.
     pub logged: bool,
     /// A `released: <name>` comment follows its newest claim comment.
     pub noted: bool,
@@ -88,12 +91,14 @@ fn releases(e: &Tracked, instance: &str) -> bool {
 }
 
 /// `instance`'s hold on `issue` as the tracking branch has it: its last activity on the issue, and
-/// whether its newest `claim` or `work` was ended since.
+/// whether its newest `claim` or `work` was ended since: a merge, a release of it, or its own
+/// `stop`, which [`claim::live_claims`] already reads as the issue free (mornycorp/swarm-core#34).
 fn tracked_hold(issue: u64, tracked: &[Tracked], instance: &str, name: Option<String>) -> Old {
     let on: Vec<&Tracked> = tracked.iter().filter(|e| e.issue == Some(issue)).collect();
     let own = || on.iter().filter(|e| e.instance == instance);
     let hold = own().filter(|e| e.event == "claim" || e.event == "work").map(|e| e.t).max().unwrap_or(i64::MIN);
-    let logged = on.iter().any(|e| e.t >= hold && (e.event == "merge" || (e.event == "release" && releases(e, instance))));
+    let ends = |e: &Tracked| e.event == "merge" || (e.event == "release" && releases(e, instance)) || (e.event == "stop" && e.instance == instance);
+    let logged = on.iter().any(|e| e.t >= hold && ends(e));
     Old { name, instance: Some(instance.to_owned()), last: own().map(|e| e.t).max(), logged, ..Old::default() }
 }
 
@@ -331,12 +336,12 @@ pub enum Adopted {
     Moved,
     /// It was behind, and couldn't be moved (checked out in a worktree): why.
     Behind(String),
-    /// It has commits origin's head doesn't: kept as it is.
+    /// It has commits origin's head doesn't: the take-over is refused (mornycorp/swarm-core#34).
     Ahead,
 }
 
 /// Fetch `branch` from origin and make the local branch at its head, its commits kept: made when
-/// missing, moved up when behind, left when it has commits of its own.
+/// missing, moved up when behind, [`Adopted::Ahead`] when it has commits of its own.
 pub fn adopt(root: &Path, branch: &str) -> Result<Adopted, String> {
     let remote = format!("refs/remotes/origin/{branch}");
     event::fetch(root, "origin", &format!("refs/heads/{branch}"), &remote)?;
@@ -356,6 +361,14 @@ pub fn adopt(root: &Path, branch: &str) -> Result<Adopted, String> {
         Ok(_) => Adopted::Moved,
         Err(e) => Adopted::Behind(e.lines().next().unwrap_or_default().to_owned()),
     })
+}
+
+/// The refusal of a take-over whose local `branch` has commits origin's doesn't: pushing it would
+/// push the old holder's unpushed work as the new holder's, and resetting it would lose that work.
+pub fn ahead(branch: &str) -> String {
+    format!(
+        "claim: branch {branch} here has commits origin's doesn't (the old holder's unpushed work?): taking it over would push them, or lose them. Push or drop them first (`git log origin/{branch}..{branch}`), then take over again"
+    )
 }
 
 /// When commit `tip` was committed (seconds since the Unix epoch), if git says.
@@ -452,7 +465,7 @@ impl Takeover<'_> {
             Adopted::Behind(e) => {
                 eprintln!("warning: claim: branch {branch} here is behind origin's and couldn't be moved ({e}): `git merge --ff-only origin/{branch}` on it")
             }
-            Adopted::Ahead => eprintln!("warning: claim: branch {branch} here has commits origin's head doesn't: kept as it is"),
+            Adopted::Ahead => return Err(ahead(branch)),
         }
         Ok(())
     }
@@ -546,8 +559,9 @@ mod tests {
     }
 
     /// swarmception#92 on 2026-11-03: worker-38 claimed it (PR #93), committed, said it was
-    /// blocked, and went quiet at 08:43; the coordinator says so in a comment at 09:50.
-    fn issue_92(coordinator_released: bool) -> (Vec<Tracked>, Vec<Value>) {
+    /// blocked, and went quiet at 08:43, its last event `last` (`work`: nothing ended its hold;
+    /// `stop`: it stopped); the coordinator says so in a comment at 09:50.
+    fn issue_92_with(coordinator_released: bool, last: &str) -> (Vec<Tracked>, Vec<Value>) {
         // The coordinator's own events on the issue: an earlier claim's release.
         let mut coordinator = vec![("release", None, Some("mini-11"), "2026-11-03T08:00:00Z")];
         if coordinator_released {
@@ -558,11 +572,7 @@ mod tests {
                 "mini-38",
                 "worker-38",
                 92,
-                &[
-                    ("claim", Some(93), None, "2026-11-03T08:30:00Z"),
-                    ("work", None, None, "2026-11-03T08:30:05Z"),
-                    ("stop", None, None, "2026-11-03T08:43:00Z"),
-                ],
+                &[("claim", Some(93), None, "2026-11-03T08:30:00Z"), ("work", None, None, "2026-11-03T08:30:05Z"), (last, None, None, "2026-11-03T08:43:00Z")],
             ),
             agent("desk-coord", "coordinator", 92, &coordinator),
         ]);
@@ -577,13 +587,48 @@ mod tests {
         (tracked, notes)
     }
 
+    /// [`issue_92_with`] where worker-38 went quiet with nothing logged that ends its hold.
+    fn issue_92(coordinator_released: bool) -> (Vec<Tracked>, Vec<Value>) {
+        issue_92_with(coordinator_released, "work")
+    }
+
+    /// mornycorp/swarm-core#34: a holder's own `stop` on the issue ends its hold, as
+    /// `claim::live_claims` reads it: no 24-hour wait, and no `release --of` to log for it.
+    #[test]
+    fn a_holder_that_logged_stop_holds_nothing() {
+        let (tracked, notes) = issue_92_with(false, "stop");
+        let olds = old_holders(92, &tracked, &notes, &worker_43());
+        assert!(olds[0].logged && olds[0].released(), "{olds:?}");
+        let now = t("2026-11-03T10:00:00Z");
+        assert_eq!(grounds(92, &olds, false, Some(t("2026-11-03T08:41:00Z")), now), Ok(Grounds::Released));
+        assert!(claim::live_claims(&tracked, 92, now).iter().all(|c| c.instance != "mini-38"), "the claim side agrees");
+        // A stop before a later `work` doesn't end that work.
+        let stopped_early = claim::parse_tracking(&[agent(
+            "mini-38",
+            "worker-38",
+            92,
+            &[("claim", Some(93), None, "2026-11-03T08:30:00Z"), ("stop", None, None, "2026-11-03T08:31:00Z"), ("work", None, None, "2026-11-03T08:43:00Z")],
+        )]);
+        let olds = old_holders(92, &stopped_early, &notes, &worker_43());
+        assert!(!olds[0].released(), "{olds:?}");
+    }
+
+    /// mornycorp/swarm-core#34: a local branch with commits origin's lacks is refused, before
+    /// anything is posted (the branch is the plan's first step), saying how to go on.
+    #[test]
+    fn a_local_branch_ahead_of_origins_refuses_the_take_over() {
+        assert_eq!(plan()[0], Take::Adopt, "nothing is posted before the branch is had");
+        let why = ahead("92-a11y-test");
+        assert!(why.contains("has commits origin's doesn't") && why.contains("`git log origin/92-a11y-test..92-a11y-test`"), "{why}");
+    }
+
     #[test]
     fn a_live_claim_is_refused_naming_its_holder_and_the_way_to_release_it() {
         let (tracked, notes) = issue_92(false);
         let olds = old_holders(92, &tracked, &notes, &worker_43());
         assert_eq!(olds.len(), 1, "the coordinator's release doesn't make it a holder: {olds:?}");
         assert_eq!(olds[0].who(), "worker-38 (mini-38)");
-        assert_eq!(olds[0].last, Some(t("2026-11-03T08:43:00Z")), "its last event: the stop");
+        assert_eq!(olds[0].last, Some(t("2026-11-03T08:43:00Z")), "its last event");
         assert!(!olds[0].released() && olds[0].standing);
         let now = t("2026-11-03T10:00:00Z");
         let refused = grounds(92, &olds, false, Some(t("2026-11-03T08:41:00Z")), now).unwrap_err();

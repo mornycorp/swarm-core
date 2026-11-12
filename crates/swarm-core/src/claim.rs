@@ -897,8 +897,9 @@ fn check(project: &Project, root: &Path, o: &Opts) -> Result<(), String> {
 }
 
 /// The holds a claim of `issue` waits for: a hold on the issue (`--force` takes it when its holder
-/// has said so), and a red main, which holds everyone but a `--no-mr` claim and the main-red issue
-/// itself. Main's colour unknown (GitHub can't say): a warning, and the claim goes ahead.
+/// has said so), and a red main, which holds every claim that starts from it ([`starts_from_main`])
+/// but the main-red issue itself. Main's colour unknown (GitHub can't say): a warning, and the
+/// claim goes ahead.
 fn check_holds(project: &Project, issue: u64, facts: &Facts, o: &Opts) -> Result<(), String> {
     if let Some(why) = blocked_hold(project, issue, facts) {
         if o.take_over {
@@ -914,13 +915,20 @@ Pick another issue. Only the one who held it lifts a hold: take the label off, o
     }
     match main_red(project) {
         Ok(red) => {
-            if let Some(why) = red_hold(project, &red, issue, &facts.labels, o.no_mr) {
+            if let Some(why) = red_hold(project, &red, issue, &facts.labels, !starts_from_main(o)) {
                 return Err(format!("claim: #{issue} must wait: {why}"));
             }
         }
         Err(e) => eprintln!("warning: claim: couldn't check whether main is red ({e}); going ahead"),
     }
     Ok(())
+}
+
+/// Does the claim `o` start work from `main`, so that a red `main` holds it? Not the
+/// coordinator's own (`--no-mr`: no branch), nor a take-over, whose work goes on on the branch it
+/// adopts (mornycorp/swarm-core#34).
+fn starts_from_main(o: &Opts) -> bool {
+    !o.no_mr && !o.take_over
 }
 
 /// One step of a claim once its checks have passed, in [`plan`]'s order.
@@ -2171,6 +2179,17 @@ mod tests {
     }
 
     /// `--take-over` is a claim's argument, never a check's, and keeps the claim's own branch.
+    #[test]
+    fn a_take_over_and_the_coordinators_claim_start_nothing_from_main() {
+        let claim = |args: &[&str]| parse_args(&P, args).unwrap();
+        assert!(starts_from_main(&claim(&["92"])), "a claim branches from main: a red main holds it");
+        assert!(!starts_from_main(&claim(&["92", "--take-over"])), "a take-over goes on on the branch it adopts");
+        assert!(!starts_from_main(&claim(&["92", "--no-pr"])), "the coordinator's own claim makes no branch");
+        let red = [(140, "main is red".to_owned())];
+        assert!(red_hold(&P, &red, 92, &[], !starts_from_main(&claim(&["92"]))).is_some());
+        assert_eq!(red_hold(&P, &red, 92, &[], !starts_from_main(&claim(&["92", "--take-over"]))), None);
+    }
+
     #[test]
     fn take_over_is_an_argument_of_a_claim_with_its_own_branch() {
         use crate::project::fixtures::BOTH;

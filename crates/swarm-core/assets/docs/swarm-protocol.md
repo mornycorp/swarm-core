@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (the periodic full gate reads again under the machine lock; no GitHub Actions: CI is local; gating the same stack again after a failure is its rerun; `claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (a take-over: `stop` frees a claim, a red `main` doesn't hold it, a local branch ahead is refused; the periodic full gate reads again under the machine lock; no GitHub Actions: CI is local; gating the same stack again after a failure is its rerun; `claim --take-over` takes over a stale claim and keeps its PR; `land` retargets a stacked PR onto `main` before merging its base) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -208,13 +208,20 @@ request. Always pass `--repo {{github.repo}}` to gh.
 3. **Taking over.** A claim is stale, and may be taken over, only when the coordinator says so
    or it has been idle for 24 hours. The coordinator's say-so is
    `cargo xtask event release --issue <n> --of <the holder's instance> --reason stale` (or a
-   `released: <name>, …` comment), with a comment naming who takes it over. Idle means no event of
-   its holder on the issue, no claim comment and no commit on its branch for 24 hours (step 6).
+   `released: <name>, …` comment), with a comment naming who takes it over. A holder that logged
+   `stop` on the issue after its last `claim` or `work` holds nothing: its claim is free at once.
+   Idle means no event of its holder on the issue, no claim comment and no commit on its branch
+   for 24 hours (step 6).
    - `cargo xtask claim <n> --agent <your instance id> --take-over` takes it and keeps its work:
      it adopts the issue's open PR and its branch, and checks out the branch's head in your
      worktree with the commits kept. It logs `release --of <the old instance>` (unless that holder
      is released already), comments `released: <old name>, taken over by …`, and makes the claim:
-     the label, `claimed: <your name>, PR #<m>`, `claim` and `work`. It runs no periodic full gate.
+     the label, `claimed: <your name>, PR #<m>`, `claim` and `work`. It runs no periodic full gate,
+     and a red `main` doesn't hold it: the work goes on on a branch that exists, and nothing new
+     starts from `main`.
+   - A local branch of that name with commits origin's lacks is refused, before anything is
+     posted: taking it over would push the old holder's unpushed work, or lose it. Push or drop
+     those commits, then take over again.
    - A `status::blocked` label comes off when every issue its hold waits on is closed: those the
      `Needs` line names, and the newest comment saying `Blocked on …` or `Waiting for …`.
      Otherwise it stays, and the takeover says why. A held issue is idle by design: an idle
@@ -1128,6 +1135,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |
 | 2026-11-12 | minor | The periodic full gate: holding the machine lock, it reads again: it steps aside for a `main` another gate verified while it waited, and begins again for a `main` that moved (sc#36) |
 | 2026-11-05 | minor | No GitHub Actions (owner, 2026-11-05): CI is local for the coordinator and every worker; `land` no longer cancels workflow runs, and `main` red comes from the local gates and the periodic full gate |
 | 2026-11-04 | minor | Staying awake › Test runs share the machine (new): every `ci` run that builds and tests (a gate that builds, the periodic full gate's, `ready`'s) holds one of the machine's test-run slots, `SWARM_TEST_RUNS` or one per 16 GB; the order repo lock, machine lock, slot, capacity; `capacity` suggests none while every slot is taken or wired memory is half the total (sc#17) |
