@@ -792,7 +792,7 @@ struct Opts {
     no_rerun: bool,
     full: bool,
     /// `--test-alone "<binary id> <test>"` (repeatable): run only these tests, each alone, on
-    /// HEAD: the gate daemon's check that they fail on `main` too (cmaughan/swarm-foundation#48).
+    /// HEAD: the gate daemon's check that they fail on `main` too.
     alone: Vec<String>,
 }
 
