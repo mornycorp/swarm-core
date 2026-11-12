@@ -15,6 +15,11 @@ what's left, the evidence (code paths, tests, commands, issues), measured number
 source and date, and an estimate in agent-hours (a range). Work an agent can't finish alone is
 marked **Human:** with what is needed.
 
+A gap that covers spec sections lists **every requirement line** of them (each table row and
+bullet, not only the headline features) under **Requirements**, each citing the issue or the code
+that meets it, or the owner's decision to drop it. It is marked done only when none is left bare
+([progress-docs.md](progress-docs.md) rule 7).
+
 ## Ranked
 
 | Rank | Gap | Status | Issues | Estimate |
@@ -26,6 +31,7 @@ marked **Human:** with what is needed.
 - **Missing:** <!-- what the product can't do yet, and who needs it -->
 - **Done:** nothing yet.
 - **Left:** <!-- the tasks, each small enough for one worker's session, each an issue -->
+- **Requirements:** <!-- each requirement line of the spec sections this gap covers: "§3.2 row 4: … — #12" or "— `crates/x/src/y.rs`" or "— dropped (owner, date)" -->
 - **Evidence:** <!-- code paths, tests, commands, issues -->
 - **Measured:** <!-- the number, its source (a test, a command) and its date; or "none yet" -->
 - **Estimate:** <!-- agent-hours, a range -->

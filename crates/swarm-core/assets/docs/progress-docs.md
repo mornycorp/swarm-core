@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # Progress docs standard
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-30 · **Change:** minor (names no consumer) · **Target:** M1
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-11-12 · **Change:** minor (rule 7: a gap is done only when each requirement line of its spec cites its issue, code or drop) · **Target:** M1
 
 How {{product}} records where it stands and what's next, so any agent can pick up work cold.
 Every swarm that shares swarm-core keeps it; it is a pinned copy from swarm-core.
@@ -51,7 +51,10 @@ Every swarm that shares swarm-core keeps it; it is a pinned copy from swarm-core
    headers and revision rows. The notes stay on the merged PRs; a summary that falls behind is
    caught up from them.
 7. **Never inflate.** Something is done only when it has a command or code path, tests, and (for
-   UI) a visual check.
+   UI) a visual check. A gap is done only when **each requirement line** of the spec sections it
+   covers (every table row and bullet, not only the section's headline features) cites the issue
+   or the code that meets it, or the owner's decision to drop it: a gap closed when its issues
+   merged once hid about ten requirements with no code ([lessons.md](lessons.md) 17).
 8. **One home for each fact** (the owner, 2026-10-19, after the same progress written
    in three docs had drifted 32 PRs apart in another swarm). Detail lives once, in its gap entry in
    `gaps.md` (what's done and left, numbers, issues, estimates) or in the generated
@@ -72,6 +75,7 @@ Every swarm that shares swarm-core keeps it; it is a pinned copy from swarm-core
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Rule 7: a gap is done only when each requirement line of its spec sections (every table row and bullet) cites the issue or code that meets it, or the owner's decision to drop it (lessons.md 17, swarm-core#30) |
 | 2026-10-30 | minor | Names no consumer: the consumers' names and their issue citations dropped, each rule kept |
 | 2026-10-30 | minor | GitLab to GitHub (owner, 2026-10-30): the PR's Progress section, the issues on GitHub |
 | 2026-10-30 | minor | swarm-foundation renamed swarm-core: the crate, `cargo xtask swarm-core` (was `foundation`), `docs/swarm-core-assets.md`, and `sc#n` for its issues (was `f#n`) |
