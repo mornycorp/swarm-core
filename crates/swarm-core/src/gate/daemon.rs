@@ -80,7 +80,7 @@ use policy::{Candidate, Pause, Push, Ran, Step};
 pub use real::run;
 
 /// The usage, as `gate`'s lists it.
-pub const USAGE: &str = "cargo xtask gate --daemon [--once] [--dry-run] [--interval <s>] [--fold <s>] [--agent <id>] | --daemon --status | --daemon --stop [--note <why>] | --daemon --resume";
+pub const USAGE: &str = "cargo xtask gate --daemon [--once] [--dry-run] [--interval <s>] [--fold <s>] [--agent <id>] | --daemon --status | --daemon --stop [--note <why>] | --daemon --resume | --daemon --retry <pr>";
 
 /// The most gates one round runs (a failure's regate and bisection included).
 const MAX_GATES: usize = 8;
@@ -125,6 +125,8 @@ pub trait World {
     fn set_switch(&self, why: &str) -> Result<(), String>;
     fn save(&self, state: &State) -> Result<(), String>;
     fn main_red(&self) -> Result<Vec<(u64, String)>, String>;
+    /// File a `main-red` issue (`title`, `body`): its number.
+    fn file_main_red(&self, title: &str, body: &str) -> Result<u64, String>;
     /// The project's open PRs, as GitHub lists them (and the remote fetched).
     fn open_mrs(&self) -> Result<Vec<Value>, String>;
     /// The commits `sha` adds to `main`.
@@ -181,6 +183,11 @@ pub struct State {
     pub seen: BTreeMap<u64, i64>,
     /// A bisection's suspects, until it finds the culprit.
     pub suspects: Option<Suspects>,
+    /// Gates in a row that failed for the machine, and gates in a row that didn't run: at
+    /// [`policy::MACHINE_FAILURES`] of either the off switch is set. Kept, so a restart between
+    /// them doesn't start the count again.
+    pub machine_failures: u32,
+    pub not_run: u32,
     /// The latest decisions.
     pub log: Vec<String>,
 }
@@ -246,6 +253,7 @@ impl State {
             "paused": self.paused, "noted": keyed(&self.noted), "dropped": keyed(&self.dropped), "held": held,
             "seen": self.seen.iter().map(|(m, t)| (m.to_string(), json!(t))).collect::<BTreeMap<_, _>>(),
             "suspects": self.suspects.as_ref().map(Suspects::to_json), "log": self.log,
+            "machine_failures": self.machine_failures, "not_run": self.not_run,
         })
     }
 
@@ -253,6 +261,7 @@ impl State {
     pub fn from_json(v: &Value) -> State {
         let map = |k: &str| v.get(k).and_then(Value::as_object).cloned().unwrap_or_default();
         let heads = |k: &str| map(k).iter().filter_map(|(m, s)| Some((m.parse().ok()?, s.as_str()?.to_owned()))).collect();
+        let count = |k: &str| v.get(k).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
         State {
             paused: v.get("paused").and_then(Value::as_str).map(str::to_owned),
             noted: heads("noted"),
@@ -263,6 +272,8 @@ impl State {
                 .collect(),
             seen: map("seen").iter().filter_map(|(m, t)| Some((m.parse().ok()?, t.as_i64()?))).collect(),
             suspects: v.get("suspects").and_then(Suspects::from_json),
+            machine_failures: count("machine_failures"),
+            not_run: count("not_run"),
             log: v.get("log").and_then(Value::as_array).map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
         }
     }
@@ -325,7 +336,6 @@ pub struct Daemon<'a> {
     stacked: Option<(Vec<(u64, String)>, Stack)>,
     /// When the stack began waiting for room.
     waiting_since: Option<i64>,
-    machine_failures: u32,
     land_stops: BTreeMap<(u64, String), u32>,
     /// The last line said under each key, so a state is said once per change.
     said: BTreeMap<String, String>,
@@ -335,18 +345,7 @@ pub struct Daemon<'a> {
 
 impl<'a> Daemon<'a> {
     pub fn new(project: &'a Project, w: &'a dyn World, settings: Settings, state: State) -> Self {
-        Daemon {
-            project,
-            w,
-            settings,
-            state,
-            stacked: None,
-            waiting_since: None,
-            machine_failures: 0,
-            land_stops: BTreeMap::new(),
-            said: BTreeMap::new(),
-            paused_said: 0,
-        }
+        Daemon { project, w, settings, state, stacked: None, waiting_since: None, land_stops: BTreeMap::new(), said: BTreeMap::new(), paused_said: 0 }
     }
 
     /// Say a decision and keep it for `--status`, saved now: a gate runs for minutes, and
@@ -494,6 +493,11 @@ impl<'a> Daemon<'a> {
             })
             .collect();
         self.state.seen = cands.iter().map(|c| (c.iid(), c.ready_since)).collect();
+        // A PR that merged or closed is no longer the daemon's: what it kept of it goes.
+        let open: BTreeSet<u64> = open.iter().filter_map(|v| v.get("number")?.as_u64()).collect();
+        self.state.noted.retain(|m, _| open.contains(m));
+        self.state.dropped.retain(|m, _| open.contains(m));
+        self.state.held.retain(|m, _| open.contains(m));
         cands
     }
 
@@ -502,11 +506,13 @@ impl<'a> Daemon<'a> {
     fn waiting_out(&mut self, cands: Vec<Candidate>) -> Vec<Candidate> {
         let mut todo = Vec::new();
         for c in cands {
-            if c.conflict && self.state.noted.get(&c.iid()) != Some(&c.sha) {
-                let files = self.w.main_conflict(&c.sha).unwrap_or_default();
-                self.conflicted(&c, &self.real_conflicts(files));
+            // GitHub's flag is only where to look: a conflict in the generated docs is one `stack`
+            // resolves, and it stays in. One it can't resolve is told, once per head.
+            let files = if c.conflict { self.w.main_conflict(&c.sha).map(|f| self.real_conflicts(f)).unwrap_or_default() } else { Vec::new() };
+            if !files.is_empty() {
+                self.conflicted(&c, &files);
             }
-            let why = if c.conflict { Some("GitHub says it conflicts with main".to_owned()) } else { self.state.waits(&c) };
+            let why = if files.is_empty() { self.state.waits(&c) } else { Some(format!("it conflicts with main in {}", files.join(", "))) };
             match why {
                 Some(why) => self.say_once(&format!("waits-{}", c.iid()), &format!("#{} at {} waits for its worker: {why}", c.iid(), short(&c.sha))),
                 None => todo.push(c),
@@ -531,7 +537,8 @@ impl<'a> Daemon<'a> {
             self.say(&format!("dry run: would drop #{} at {}: conflicts with main in {list}; would note it", c.iid(), short(&c.sha)));
             return;
         }
-        let after = self.w.landed_after(files);
+        // With no file named there is nothing to look a merge up by.
+        let after = if files.is_empty() { None } else { self.w.landed_after(files) };
         let note = policy::conflict_note(files, after);
         let posted = self.w.note(c.iid(), &note);
         let send = format!("cause=conflict: {list}");
@@ -595,12 +602,14 @@ impl<'a> Daemon<'a> {
         let files = self.w.main_conflict(&c.sha).map(|f| self.real_conflicts(f)).unwrap_or_default();
         if !files.is_empty() {
             self.conflicted(c, &files);
-        } else if first {
+        } else if !first && why.to_ascii_lowercase().contains("conflict") {
+            let line = format!("#{} conflicts with the PRs stacked below it, not main: it waits for them to land", c.iid());
+            self.say_once(&format!("below-{}", c.iid()), &line);
+        } else {
+            // Not a conflict (no work, a regeneration that failed, git itself): the coordinator's.
             let why = first_line(why);
             self.say(&format!("held #{} at {}: stack stopped at it: {why}", c.iid(), short(&c.sha)));
             self.state.held.insert(c.iid(), (c.sha.clone(), why));
-        } else {
-            self.say(&format!("#{} conflicts with the PRs stacked below it, not main: it waits for them to land", c.iid()));
         }
     }
 
@@ -608,13 +617,20 @@ impl<'a> Daemon<'a> {
     /// half), up to [`MAX_GATES`] gates. Each gate's note names its step and the PRs it gates
     /// ([`policy::gate_note`]).
     fn gate_loop(&mut self, plan: &Plan, mut stack: Stack, mut step: Step) {
-        for _ in 0..MAX_GATES {
+        for n in 0..MAX_GATES {
+            // Read before each gate, not only when the round starts: `--stop` set while a gate
+            // ran stops the regates and bisections after it.
+            if n > 0 && self.w.switch().is_some() {
+                self.say("the off switch is set: no further gate this round");
+                return;
+            }
             let sub = self.w.next_sub();
             let mrs = entries(&stack);
             self.say(&format!("gating {} as {sub}", policy::bangs(&mrs)));
             let run = self.w.gate(&sub, &policy::gate_note(&step, &mrs));
             let next = match run.ran {
                 Ran::Passed(standing) => {
+                    self.state.not_run = 0;
                     let landed = self.land(&stack, &standing);
                     match self.after_pass(&mrs, &sub) {
                         Some(next) if landed => next,
@@ -622,10 +638,11 @@ impl<'a> Daemon<'a> {
                     }
                 }
                 Ran::NotRun => {
-                    self.say(&format!("{sub} didn't run (refused, or stopped before its `ci`): gated again next round"));
-                    return self.w.drop_lock();
+                    self.w.drop_lock();
+                    return self.not_run(&sub);
                 }
                 Ran::Failed(cause) => {
+                    self.state.not_run = 0;
                     self.w.drop_lock();
                     match self.after_failure(plan, &stack, (&sub, &step), cause, &run.log) {
                         Some(next) => next,
@@ -650,7 +667,7 @@ impl<'a> Daemon<'a> {
             self.machine_failure(sub, cause);
             return None;
         }
-        self.machine_failures = 0;
+        self.state.machine_failures = 0;
         let failure = blame::failure(log, &self.w.root(), self.project.golden_binary);
         let at_tests = !failure.tests.is_empty() && failure.files.is_empty();
         if self.settings.verify_main && *step == Step::First && at_tests && !self.main_passes(sub, &failure) {
@@ -661,7 +678,15 @@ impl<'a> Daemon<'a> {
         let touched: Vec<Touch> = stack.entries.iter().map(|e| Touch { mr: e.mr, files: self.w.touched(e) }).collect();
         let blamed = match blame::blame(&failure, &touched, &self.w.packages()) {
             Blame::One(m, why) => Some((m, why)),
-            _ if mrs.len() == 1 => mrs.first().map(|m| (*m, "it was the only PR in the stack".to_owned())),
+            // Alone in the stack: it is its own. As a bisection's last suspect, that is the proof
+            // the bisection was for.
+            _ if mrs.len() == 1 => {
+                let why = match step {
+                    Step::Bisect(of) => format!("{of} failed with it, and it fails alone in {sub}"),
+                    _ => "it was the only PR in the stack".to_owned(),
+                };
+                mrs.first().map(|m| (*m, why))
+            }
             other => {
                 let half = policy::bisect(&mrs);
                 let who = if let Blame::Several(s) = other { format!("it points at {}", policy::bangs(&s)) } else { "it names no PR's change".to_owned() };
@@ -733,8 +758,27 @@ impl<'a> Daemon<'a> {
                     self.say(&format!("couldn't set the off switch: {e}"));
                 }
                 self.say(&format!("off switch set: {why}"));
+                self.file_main_red(&v, sub, &tests, &run.log);
                 false
             }
+        }
+    }
+
+    /// `main` fails on the gating machine (`v`, the check after gate `sub` failed at `tests`):
+    /// a `main-red` issue, the signal every worker and the coordinator read, unless one is open.
+    /// The daemon's own switch is local to this machine.
+    fn file_main_red(&mut self, v: &str, sub: &str, tests: &str, log: &str) {
+        if self.w.main_red().is_ok_and(|open| !open.is_empty()) {
+            return;
+        }
+        let title = format!("main fails on the gating machine: {}", crate::gate::one_line(tests, 120));
+        let body = format!(
+            "The gate daemon ran these tests alone on `main` as `{v}`, after `{sub}`'s stack failed at them, and they fail there too:\n\n{tests}\n\nSo no PR was sent back, and the daemon paused. Fix `main` or the machine, close this, then `cargo xtask gate --daemon --resume`.\n\n```text\n{}\n```",
+            crate::gate::summary(log)
+        );
+        match self.w.file_main_red(&title, &body) {
+            Ok(n) => self.say(&format!("filed main-red #{n}")),
+            Err(e) => self.say(&format!("couldn't file a main-red issue: {}: file it by hand", first_line(&e))),
         }
     }
 
@@ -748,11 +792,19 @@ impl<'a> Daemon<'a> {
         }
         let rest: Vec<Suspect> = s.mrs.iter().filter(|x| !gated.contains(&x.mr)).cloned().collect();
         match rest.as_slice() {
-            [] => None,
-            [one] => {
-                let why = format!("{} failed with it, and {sub} passed with the rest of {}'s suspects", s.of, s.of);
-                self.drop_failed(one, &s.of, s.cause, &why, &s.excerpt);
+            // Every suspect passed in a half of its own: the failure needed them together, or
+            // was a flake the rerun didn't clear. Nobody is blamed for it.
+            [] => {
+                self.say(&format!("{sub} passed: every suspect of {} passes apart, so its failure was theirs together, or a flake: no PR sent back", s.of));
                 None
+            }
+            // One left is gated alone before it is blamed: the others passing proves nothing of it
+            // when the failure took two of them.
+            [one] => {
+                self.say(&format!("{sub} passed: {}'s last suspect is #{}; gating it alone before sending it back", s.of, one.mr));
+                let (of, last) = (s.of.clone(), vec![one.mr]);
+                self.state.suspects = Some(Suspects { mrs: rest, ..s });
+                Some((last, Step::Bisect(of)))
             }
             _ => {
                 let iids: Vec<u64> = rest.iter().map(|x| x.mr).collect();
@@ -765,19 +817,34 @@ impl<'a> Daemon<'a> {
         }
     }
 
-    /// A failure the machine caused: no PR's; after [`policy::MACHINE_FAILURES`] in a row, the
-    /// off switch, for the coordinator.
-    fn machine_failure(&mut self, sub: &str, cause: Option<Cause>) {
-        self.machine_failures = self.machine_failures.saturating_add(1);
-        let cause = cause.map_or("?", Cause::name);
-        self.say(&format!("{sub} failed for the machine (cause {cause}): no PR dropped; gated again next round"));
-        if self.machine_failures >= policy::MACHINE_FAILURES {
-            let why = format!("{} gates in a row failed for the machine (last: {sub}, cause {cause}): check the machine", self.machine_failures);
+    /// Gate `sub` didn't run (refused, or stopped before its `ci`): gated again next round, said
+    /// once; after [`policy::MACHINE_FAILURES`] in a row, the off switch, for the coordinator.
+    fn not_run(&mut self, sub: &str) {
+        self.state.not_run = self.state.not_run.saturating_add(1);
+        self.say_once("not-run", "a gate didn't run (refused, or stopped before its `ci`): gated again next round");
+        if self.state.not_run >= policy::MACHINE_FAILURES {
+            let why = format!("{} gates in a row didn't run (last: {sub}): read its log, then `gate --daemon --resume`", self.state.not_run);
             if let Err(e) = self.w.set_switch(&why) {
                 self.say(&format!("couldn't set the off switch: {e}"));
             }
             self.say(&format!("off switch set: {why}"));
-            self.machine_failures = 0;
+            self.state.not_run = 0;
+        }
+    }
+
+    /// A failure the machine caused: no PR's; after [`policy::MACHINE_FAILURES`] in a row, the
+    /// off switch, for the coordinator.
+    fn machine_failure(&mut self, sub: &str, cause: Option<Cause>) {
+        self.state.machine_failures = self.state.machine_failures.saturating_add(1);
+        let cause = cause.map_or("?", Cause::name);
+        self.say(&format!("{sub} failed for the machine (cause {cause}): no PR dropped; gated again next round"));
+        if self.state.machine_failures >= policy::MACHINE_FAILURES {
+            let why = format!("{} gates in a row failed for the machine (last: {sub}, cause {cause}): check the machine", self.state.machine_failures);
+            if let Err(e) = self.w.set_switch(&why) {
+                self.say(&format!("couldn't set the off switch: {e}"));
+            }
+            self.say(&format!("off switch set: {why}"));
+            self.state.machine_failures = 0;
         }
     }
 
@@ -785,23 +852,31 @@ impl<'a> Daemon<'a> {
     /// excerpt, a `sendback` for each issue it closes, and not gated again at this head.
     fn drop_failed(&mut self, e: &Suspect, sub: &str, cause: Option<Cause>, why: &str, excerpt: &str) {
         let body = policy::failure_note(e.mr, sub, cause, why, excerpt);
-        let how = match self.w.redraft(e.mr, &e.sha, &body) {
+        let redrafted = self.w.redraft(e.mr, &e.sha, &body);
+        let how = match &redrafted {
             Ok(true) => "put back to draft with a note".to_owned(),
             Ok(false) => "not put back to draft: it moved since".to_owned(),
-            Err(err) => format!("couldn't put it back to draft: {err}"),
+            Err(err) => format!("couldn't put it back to draft: {}", first_line(err)),
         };
         let send = format!("cause={}: {}", cause.map_or("unknown", Cause::name), crate::gate::one_line(why, 200));
         for issue in &e.issues {
             self.w.event(&["sendback", "--issue", &issue.to_string(), "--mr", &e.mr.to_string(), "--sub", sub, "--note", &send]);
         }
-        self.state.dropped.insert(e.mr, e.sha.clone());
+        match redrafted {
+            // A draft now: not gated again at this head, should it be marked ready as it is.
+            Ok(true) => drop(self.state.dropped.insert(e.mr, e.sha.clone())),
+            // It moved: its new head is gated like any other.
+            Ok(false) => {}
+            // Still ready, and blamed: the coordinator's, so it isn't gated again and again.
+            Err(_) => drop(self.state.held.insert(e.mr, (e.sha.clone(), format!("{sub} failed and {why}, and it couldn't be put back to draft")))),
+        }
         self.say(&format!("dropped #{} at {}: {sub} failed and {why}; {how}", e.mr, short(&e.sha)));
     }
 
     /// Land the passed gate `sub`'s `stack`, but for a branch that pushed a change meanwhile and
     /// those above it; never while paused (`false`: paused, so gate nothing more).
     fn land(&mut self, stack: &Stack, sub: &str) -> bool {
-        self.machine_failures = 0;
+        self.state.machine_failures = 0;
         if let Some(p) = self.pause_now() {
             self.say(&format!("{sub} passed, but not landed: {}", p.describe()));
             self.w.close(sub, "passed; not landed: the gate daemon paused");

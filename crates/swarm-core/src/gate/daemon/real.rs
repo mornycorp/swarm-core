@@ -20,6 +20,8 @@ use crate::{Hooks, Project, capacity, claim, event, gate, github, land, lock, ma
 pub const DIR: &str = "gate-daemon";
 const STATE: &str = "state.json";
 const SWITCH: &str = "off";
+/// The running daemon's process id: one daemon a gate worktree.
+const PID: &str = "daemon.pid";
 /// What the daemon adds to git's configuration: no rerere, so a stale recorded resolution is
 /// never replayed into a stack.
 pub const RERERE_OFF: &str = "'rerere.enabled=false'";
@@ -42,6 +44,8 @@ struct Opts {
     status: bool,
     stop: bool,
     resume: bool,
+    /// `--retry <pr>`: gate this PR again at the head the daemon dropped, held or noted it at.
+    retry: Option<u64>,
     note: Option<String>,
     agent: Option<String>,
     interval: Option<u64>,
@@ -59,6 +63,10 @@ fn parse_args(args: &[&str]) -> Result<Opts, String> {
             "--status" => o.status = true,
             "--stop" => o.stop = true,
             "--resume" => o.resume = true,
+            "--retry" => {
+                let v = value()?;
+                o.retry = Some(v.trim_start_matches('#').parse().map_err(|_| format!("gate --daemon: --retry takes a PR number, not `{v}`"))?);
+            }
             "--note" => o.note = Some(value()?),
             "--agent" => o.agent = Some(value()?),
             "--interval" => o.interval = Some(seconds(&value()?, 10)?),
@@ -66,8 +74,8 @@ fn parse_args(args: &[&str]) -> Result<Opts, String> {
             other => return Err(format!("gate --daemon: unknown argument `{other}`\nusage: {}", super::USAGE)),
         }
     }
-    if [o.status, o.stop, o.resume].iter().filter(|x| **x).count() > 1 {
-        return Err(format!("gate --daemon: one of --status, --stop and --resume\nusage: {}", super::USAGE));
+    if [o.status, o.stop, o.resume, o.retry.is_some()].iter().filter(|x| **x).count() > 1 {
+        return Err(format!("gate --daemon: one of --status, --stop, --resume and --retry\nusage: {}", super::USAGE));
     }
     Ok(o)
 }
@@ -86,11 +94,14 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     if o.stop {
         let why = o.note.clone().unwrap_or_else(|| "stopped by `gate --daemon --stop`".to_owned());
         write(&dir, SWITCH, &why)?;
-        println!("gate --daemon: off switch set ({why}); the daemon pauses at its next round and finishes a gate it runs");
+        println!("gate --daemon: off switch set ({why}); a gate it runs now runs to its end, no gate starts after it, and a pass after it isn't landed");
         return Ok(());
     }
     if o.resume {
         return resume(&dir);
+    }
+    if let Some(pr) = o.retry {
+        return retry(&dir, pr);
     }
     // Rerere off for the daemon's whole process tree: only on its own path, never plain `stack`'s.
     if let Some(params) = with_rerere_off(std::env::var("GIT_CONFIG_PARAMETERS").ok().as_deref()) {
@@ -98,7 +109,10 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     }
     let agent = lock::agent(project, o.agent.clone(), "gate --daemon")?;
     super::check_worktree(root)?;
-    let w = Real::new(project, hooks, root, agent, dir)?;
+    // One daemon a gate worktree: two would share the gate lock's name and each other's state.
+    // A dry run changes nothing, so it may run beside one.
+    let _only = if o.dry_run { None } else { Some(Only::take(&dir)?) };
+    let w = Real::new(project, hooks, root, agent, dir, o.dry_run)?;
     let settings = Settings { dry_run: o.dry_run, fold: Duration::from_secs(o.fold.unwrap_or(120)), verify_main: hooks.verify_main() };
     let mut d = Daemon::new(project, &w, settings, w.load());
     let every = Duration::from_secs(o.interval.unwrap_or(60));
@@ -160,6 +174,43 @@ fn status(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The daemon's hold on its directory: its process id in [`PID`], removed when it ends.
+struct Only(PathBuf);
+
+impl Only {
+    /// Refused while the process another daemon wrote there still runs.
+    fn take(dir: &Path) -> Result<Only, String> {
+        let path = dir.join(PID);
+        let other = std::fs::read_to_string(&path).ok().and_then(|t| t.trim().parse::<u32>().ok()).filter(|pid| *pid != std::process::id());
+        if let Some(pid) = other.filter(|pid| crate::test_runs::alive(*pid)) {
+            return Err(format!("gate --daemon: another daemon runs here (process {pid}, {}): stop it first, or run `--dry-run` beside it", path.display()));
+        }
+        write(dir, PID, &std::process::id().to_string())?;
+        Ok(Only(path))
+    }
+}
+
+impl Drop for Only {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// `--retry <pr>`: what the daemon kept of `pr` (dropped, held or noted at a head) is forgotten,
+/// so it is gated again as it stands: for a PR the daemon blamed wrongly, marked ready again.
+fn retry(dir: &Path, pr: u64) -> Result<(), String> {
+    let mut s = read_state(dir);
+    let kept = [s.dropped.remove(&pr).is_some(), s.held.remove(&pr).is_some(), s.noted.remove(&pr).is_some()];
+    if !kept.contains(&true) {
+        println!("gate --daemon: #{pr} isn't dropped, held or noted: nothing to retry");
+        return Ok(());
+    }
+    let text = serde_json::to_string_pretty(&s.to_json()).map_err(|e| e.to_string())?;
+    write(dir, STATE, &text)?;
+    println!("gate --daemon: #{pr} is gated again once it is ready (a running daemon reads this at its next start: restart it)");
+    Ok(())
+}
+
 /// `--resume`: the switch off and the held PRs released.
 fn resume(dir: &Path) -> Result<(), String> {
     match std::fs::remove_file(dir.join(SWITCH)) {
@@ -187,12 +238,14 @@ struct Real<'a> {
     logs: PathBuf,
     commits: RefCell<BTreeMap<String, BTreeSet<String>>>,
     packages: RefCell<Option<Packages>>,
+    /// A dry run: nothing is pruned from the gate worktree's refs, which a live gate may be using.
+    dry_run: bool,
 }
 
 impl<'a> Real<'a> {
-    fn new(project: &'a Project, hooks: &'a dyn Hooks, root: &'a Path, agent: String, dir: PathBuf) -> Result<Self, String> {
+    fn new(project: &'a Project, hooks: &'a dyn Hooks, root: &'a Path, agent: String, dir: PathBuf, dry_run: bool) -> Result<Self, String> {
         let logs = capacity::our_target(root)?.join(gate::LOG_DIR);
-        Ok(Real { project, hooks, root, agent, dir, logs, commits: RefCell::default(), packages: RefCell::default() })
+        Ok(Real { project, hooks, root, agent, dir, logs, commits: RefCell::default(), packages: RefCell::default(), dry_run })
     }
 
     fn load(&self) -> State {
@@ -273,8 +326,15 @@ impl World for Real<'_> {
     fn main_red(&self) -> Result<Vec<(u64, String)>, String> {
         claim::main_red(self.project)
     }
+    fn file_main_red(&self, title: &str, body: &str) -> Result<u64, String> {
+        github::create_issue(self.project, title, body, &[self.project.labels.main_red, self.project.labels.bug])
+    }
     fn open_mrs(&self) -> Result<Vec<Value>, String> {
-        stack::git_slow(self.root, &["fetch", "--quiet", "--prune", self.project.branches.remote], &[])?;
+        let prune: &[&str] = if self.dry_run { &[] } else { &["--prune"] };
+        let mut fetch = vec!["fetch", "--quiet"];
+        fetch.extend(prune);
+        fetch.push(self.project.branches.remote);
+        stack::git_slow(self.root, &fetch, &[])?;
         github::open_prs(self.project, None)
     }
     fn commits(&self, sha: &str) -> Result<BTreeSet<String>, String> {
@@ -426,8 +486,20 @@ impl World for Real<'_> {
         let mut args: Vec<&str> = names.iter().map(String::as_str).collect();
         args.extend(["--sub", sub, "--agent", self.agent.as_str()]);
         let result = land::run(self.project, self.root, &args);
-        let left: Vec<u64> = stack::load_any(self.project, self.root).ok().flatten().map(|s| super::entries(&s)).unwrap_or_default();
-        let landed: Vec<u64> = mrs.iter().copied().filter(|m| !left.contains(m)).collect();
+        // What is left in the stack's record didn't land. A record that can't be read says
+        // nothing of what landed: none is claimed, and the coordinator is told.
+        let landed: Vec<u64> = match stack::load_any(self.project, self.root) {
+            Ok(left) => {
+                let left: Vec<u64> = left.map(|s| super::entries(&s)).unwrap_or_default();
+                mrs.iter().copied().filter(|m| !left.contains(m)).collect()
+            }
+            Err(e) => {
+                let why =
+                    format!("land ran, but the stack's record can't be read ({}): what landed is unknown; read `git log` on main", gate::one_line(&e, 120));
+                self.close(sub, &why);
+                return Err((why, Vec::new()));
+            }
+        };
         match result {
             Ok(()) => Ok(landed),
             Err(e) => {
@@ -471,6 +543,43 @@ mod tests {
         assert!(parse_args(&["--interval", "5"]).is_err());
         assert!(parse_args(&["--interval"]).is_err());
         assert!(parse_args(&["--bogus"]).is_err());
+        assert_eq!(parse_args(&["--retry", "#12"]).unwrap().retry, Some(12));
+        assert!(parse_args(&["--retry", "twelve"]).is_err() && parse_args(&["--retry", "12", "--resume"]).is_err());
+    }
+
+    /// #45: one daemon a gate worktree, by its process id; a dead one's file is no hold.
+    #[test]
+    fn a_second_daemon_is_refused_while_the_first_runs() {
+        let dir = swarm_core_testkit::temp_dir("core-daemon-only").join(DIR);
+        let held = Only::take(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(PID)).unwrap(), std::process::id().to_string());
+        // Our own id is ours to take again; another live process's is refused.
+        drop(Only::take(&dir).unwrap());
+        assert!(!dir.join(PID).exists(), "removed when it ends");
+        std::mem::forget(held);
+        let mut other = std::process::Command::new(std::env::current_exe().unwrap()).arg("--list").stdout(std::process::Stdio::null()).spawn().unwrap();
+        std::fs::write(dir.join(PID), other.id().to_string()).unwrap();
+        let refused = Only::take(&dir);
+        let _ = other.wait();
+        assert!(refused.is_err_and(|e| e.contains("another daemon runs here")));
+        // That process has ended: its file is no hold.
+        assert!(Only::take(&dir).is_ok());
+    }
+
+    /// #45: `--retry` forgets what the daemon kept of one PR, and only that one.
+    #[test]
+    fn retry_forgets_one_pr() {
+        let dir = swarm_core_testkit::temp_dir("core-daemon-retry").join(DIR);
+        let mut s = State::default();
+        s.dropped.insert(4, "a".repeat(40));
+        s.dropped.insert(5, "b".repeat(40));
+        s.held.insert(4, ("a".repeat(40), "why".into()));
+        write(&dir, STATE, &serde_json::to_string(&s.to_json()).unwrap()).unwrap();
+        retry(&dir, 4).unwrap();
+        let after = read_state(&dir);
+        assert!(!after.dropped.contains_key(&4) && !after.held.contains_key(&4) && after.dropped.contains_key(&5));
+        retry(&dir, 9).unwrap();
+        assert_eq!(read_state(&dir), after, "nothing to retry changes nothing");
     }
 
     #[test]

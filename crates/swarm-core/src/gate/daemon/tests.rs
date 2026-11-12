@@ -51,6 +51,12 @@ struct Fake {
     closes: RefCell<Vec<(String, String)>>,
     lock_drops: Cell<u32>,
     github_down: Cell<bool>,
+    /// The `main-red` issues it filed, by title.
+    filed: RefCell<Vec<String>>,
+    /// Whether a re-draft fails.
+    redraft_fails: Cell<bool>,
+    /// The off switch as set once a gate has run (`--stop` during it).
+    switch_after_gate: RefCell<Option<String>>,
     /// The log of each state saved.
     saved: RefCell<Vec<Vec<String>>>,
     /// The tests each check of `main` ran alone.
@@ -115,6 +121,11 @@ impl World for Fake {
         }
         Ok(self.red.borrow().clone())
     }
+    fn file_main_red(&self, title: &str, _body: &str) -> Result<u64, String> {
+        self.filed.borrow_mut().push(title.to_owned());
+        self.red.borrow_mut().push((500, title.to_owned()));
+        Ok(500)
+    }
     fn open_mrs(&self) -> Result<Vec<Value>, String> {
         Ok(self.open.borrow().clone())
     }
@@ -134,6 +145,9 @@ impl World for Fake {
         Ok(())
     }
     fn redraft(&self, mr: u64, _: &str, body: &str) -> Result<bool, String> {
+        if self.redraft_fails.get() {
+            return Err("gh: HTTP 502".into());
+        }
         self.redrafts.borrow_mut().push((mr, body.to_owned()));
         Ok(true)
     }
@@ -178,6 +192,9 @@ impl World for Fake {
         self.gates.borrow_mut().push((sub.into(), note.into(), entries(&self.current.borrow())));
         let last = self.saved.borrow().last().and_then(|l| l.last().cloned()).unwrap_or_default();
         self.saved_at_gate.borrow_mut().push(last);
+        if let Some(why) = self.switch_after_gate.borrow_mut().take() {
+            *self.switch.borrow_mut() = Some(why);
+        }
         self.gate_results.borrow_mut().pop_front().expect("a gate the test didn't script")
     }
     fn touched(&self, e: &Entry) -> Vec<String> {
@@ -389,14 +406,16 @@ fn a_failure_no_mr_matches_bisects_and_never_lands_the_failed_stack() {
     f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
     f.pass("gate-2");
     f.pass("gate-3");
+    f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
     let mut d = daemon(&f);
     d.round();
-    // gate-2 passed: the culprit is #3 or #4. gate-3 (#3) passed: it is #4.
-    assert_eq!(f.gated(), vec![vec![1, 2, 3, 4], vec![1, 2], vec![3]]);
-    assert_eq!(f.notes(), ["daemon gate: #1 #2 #3 #4", "bisect of gate-1: #1 #2", "bisect of gate-1: #3"]);
+    // gate-2 passed: the culprit is #3 or #4. gate-3 (#3) passed: #4 is the last suspect, and it
+    // is gated alone before it is sent back (#45). gate-4 (#4) fails: it is #4.
+    assert_eq!(f.gated(), vec![vec![1, 2, 3, 4], vec![1, 2], vec![3], vec![4]]);
+    assert_eq!(f.notes(), ["daemon gate: #1 #2 #3 #4", "bisect of gate-1: #1 #2", "bisect of gate-1: #3", "bisect of gate-1: #4"]);
     assert_eq!(*f.lands.borrow(), vec![(vec![1, 2], "gate-2".to_owned()), (vec![3], "gate-3".to_owned())]);
     assert_eq!(f.redrafts.borrow().iter().map(|(m, _)| *m).collect::<Vec<_>>(), [4]);
-    assert!(f.redrafts.borrow()[0].1.contains("gate-1 failed with it, and gate-3 passed"), "{:?}", f.redrafts.borrow());
+    assert!(f.redrafts.borrow()[0].1.contains("gate-1 failed with it, and it fails alone in gate-4"), "{:?}", f.redrafts.borrow());
     assert_eq!(d.state.suspects, None);
     // A stack of one that fails is that PR's.
     let g = Fake::with(&[7]);
@@ -465,18 +484,23 @@ fn a_bisection_whose_half_passes_blames_the_one_suspect_left() {
     f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
     f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
     f.pass("gate-3");
+    // The last suspect, gated alone before it is sent back (#45).
+    f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
     let mut d = daemon(&f);
     d.round();
-    assert_eq!(f.notes(), ["daemon gate: #1 #2 #3 #4", "bisect of gate-1: #1 #2", "bisect of gate-2: #1"]);
+    assert_eq!(f.notes(), ["daemon gate: #1 #2 #3 #4", "bisect of gate-1: #1 #2", "bisect of gate-2: #1", "bisect of gate-2: #2"]);
     assert_eq!(*f.lands.borrow(), [(vec![1], "gate-3".to_owned())]);
     assert_eq!(f.redrafts.borrow().iter().map(|(m, _)| *m).collect::<Vec<_>>(), [2]);
     let events = f.events.borrow().clone();
     assert_eq!(events.len(), 1);
-    assert!(events[0].starts_with("sendback --issue 102 --mr 2 --sub gate-2 --note cause=test: gate-2 failed with it"), "{events:?}");
+    assert!(
+        events[0].starts_with("sendback --issue 102 --mr 2 --sub gate-4 --note cause=test: gate-2 failed with it, and it fails alone in gate-4"),
+        "{events:?}"
+    );
     assert!(f.said_has("dropped #2 at"));
     // Next round: #2 is a draft; #3 and #4 are gated as a stack of their own.
     *f.open.borrow_mut() = vec![ready(3), ready(4)];
-    f.pass("gate-4");
+    f.pass("gate-5");
     d.round();
     assert_eq!(f.notes().last().map(String::as_str), Some("daemon gate: #3 #4"));
     assert_eq!(f.events.borrow().len(), 1, "only #2 was sent back");
@@ -706,8 +730,9 @@ fn only_a_first_failure_at_the_tests_is_verified() {
     g.pass("gate-2");
     g.fail(Some(Cause::Test), D3D12_FAIL);
     g.pass("gate-4");
+    g.fail(Some(Cause::Test), D3D12_FAIL);
     Daemon::new(&P, &g, VERIFY, State::default()).round();
-    assert_eq!(g.notes(), ["daemon gate: #1 #2 #3 #4", "verify main for gate-1", "bisect of gate-1: #1 #2", "bisect of gate-3: #1"]);
+    assert_eq!(g.notes(), ["daemon gate: #1 #2 #3 #4", "verify main for gate-1", "bisect of gate-1: #1 #2", "bisect of gate-3: #1", "bisect of gate-3: #2"]);
     assert_eq!(g.redrafts.borrow().iter().map(|(m, _)| *m).collect::<Vec<_>>(), [2]);
 }
 
@@ -757,8 +782,97 @@ fn a_failed_test_main_lacks_is_the_stacks() {
     );
     g.pass("gate-2");
     g.pass("gate-3");
+    g.fail(Some(Cause::Test), D3D12_FAIL);
     Daemon::new(&P, &g, VERIFY, State::default()).round();
     assert_eq!(*g.verified.borrow(), [vec!["my-engine::it scrubber::a_tooltip".to_owned()]]);
+}
+
+/// #45: a bisection's last suspect is gated alone before it is sent back. When it passes too,
+/// every suspect passes apart: the failure took them together, or was a flake, and nobody is
+/// sent back for it.
+#[test]
+fn a_last_suspect_that_passes_alone_is_not_sent_back() {
+    let f = Fake::with(&[1, 2]);
+    f.fail(Some(Cause::Test), "        FAIL [   1.2s] other-pkg::it some::test\n");
+    f.pass("gate-2");
+    f.pass("gate-3");
+    let mut d = daemon(&f);
+    d.round();
+    assert_eq!(f.gated(), vec![vec![1, 2], vec![1], vec![2]]);
+    assert_eq!(*f.lands.borrow(), vec![(vec![1], "gate-2".to_owned()), (vec![2], "gate-3".to_owned())]);
+    assert!(f.redrafts.borrow().is_empty() && f.events.borrow().is_empty(), "nobody is sent back");
+    assert!(f.said_has("every suspect of gate-1 passes apart"), "{:?}", f.said.borrow());
+    assert_eq!(d.state.suspects, None);
+}
+
+/// #45: `--stop` set while a gate runs stops the regates after it, not only the next round.
+#[test]
+fn the_switch_set_during_a_gate_stops_the_gates_after_it() {
+    let f = Fake::with(&[1, 2]);
+    f.touched.borrow_mut().insert(2, vec!["crates/engine/src/cmd.rs".into()]);
+    f.fail(Some(Cause::Build), CMD_RS_ERROR);
+    *f.switch_after_gate.borrow_mut() = Some("owner asked".into());
+    daemon(&f).round();
+    assert_eq!(f.notes(), ["daemon gate: #1 #2"], "no regate once the switch is set");
+    assert!(f.said_has("the off switch is set: no further gate this round"));
+}
+
+/// #45: GitHub's conflict flag is only where to look. A conflict in a generated doc is one
+/// `stack` resolves, so the PR is gated; nothing is noted, and nobody is sent back.
+#[test]
+fn a_conflict_stack_can_resolve_is_no_reason_to_wait() {
+    let f = Fake::with(&[1]);
+    f.open.borrow_mut()[0]["merge_state"] = json!("dirty");
+    f.main_conflicts.borrow_mut().insert(sha(1), vec!["docs/scorecard.md".into()]);
+    f.pass("gate-1");
+    daemon(&f).round();
+    assert_eq!(f.gated(), vec![vec![1]]);
+    assert!(f.notes.borrow().is_empty() && f.events.borrow().is_empty());
+}
+
+/// #45: a PR that can't be put back to draft is still ready, so it is held for the coordinator
+/// rather than gated again each round; and what the daemon kept of a PR goes when it closes.
+#[test]
+fn a_failed_redraft_holds_the_pr_and_a_closed_pr_is_forgotten() {
+    let f = Fake::with(&[7]);
+    f.redraft_fails.set(true);
+    f.fail(Some(Cause::Other), "something\n");
+    let mut d = daemon(&f);
+    d.round();
+    assert!(d.state.dropped.is_empty() && d.state.held.contains_key(&7), "{:?}", d.state);
+    assert!(f.said_has("couldn't put it back to draft"));
+    d.round();
+    assert_eq!(f.gated().len(), 1, "not gated again at that head");
+    // It closes: the daemon keeps nothing of it.
+    f.open.borrow_mut().clear();
+    d.round();
+    assert!(d.state.held.is_empty());
+}
+
+/// #45: `main` failing on the gating machine files a `main-red` issue, the signal every agent
+/// reads, as well as setting the daemon's own switch.
+#[test]
+fn main_failing_here_files_a_main_red_issue_once() {
+    let f = Fake::with(&[1, 2]);
+    f.fail(Some(Cause::Test), D3D12_FAIL);
+    f.fail(Some(Cause::Test), D3D12_FAIL);
+    Daemon::new(&P, &f, VERIFY, State::default()).round();
+    assert_eq!(f.filed.borrow().len(), 1);
+    assert!(f.filed.borrow()[0].starts_with("main fails on the gating machine: my-engine::replay d3d12::replays_a_frame"), "{:?}", f.filed.borrow());
+    assert!(f.switch.borrow().is_some() && f.redrafts.borrow().is_empty());
+}
+
+/// #45: a gate that doesn't run is said once, and three in a row set the switch.
+#[test]
+fn gates_that_dont_run_set_the_switch_after_three() {
+    let f = Fake::with(&[1]);
+    let mut d = daemon(&f);
+    for _ in 0..3 {
+        f.gate_results.borrow_mut().push_back(GateRun { ran: Ran::NotRun, log: String::new() });
+        d.round();
+    }
+    assert_eq!(f.said.borrow().iter().filter(|l| l.starts_with("a gate didn't run")).count(), 1, "said once");
+    assert!(f.switch.borrow().as_deref().is_some_and(|w| w.contains("3 gates in a row didn't run")), "{:?}", f.switch.borrow());
 }
 
 #[test]

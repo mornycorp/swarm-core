@@ -66,6 +66,19 @@ rerere replays.
   against `main`, the generated docs left out since `stack` regenerates them). A PR that
   conflicts only with the PRs below it waits for them to land, with no note; it is told if it
   still conflicts once they have.
+- **A bisection's last suspect is gated alone** before it is sent back (#45). The others passing
+  proves nothing of it when the failure took two of them together, or was a flake the rerun didn't
+  clear: when it passes alone too, nobody is sent back.
+- **The off switch is read** when a round starts, before each gate, and before a pass lands. A
+  gate is never interrupted.
+- **GitHub's conflict flag is only where to look.** The daemon asks git which files conflict with
+  `main`, and leaves out the generated docs, which `stack` regenerates: a PR that conflicts only
+  there is gated.
+- **A PR it can't put back to draft is held**, not dropped: it is still ready, and would be gated
+  again each round. One that moved since is a new head, gated like any other. What the daemon
+  keeps of a PR goes when the PR merges or closes.
+- **One daemon a worktree** (`daemon.pid`, checked against the running processes): two would share
+  the gate lock's name and overwrite each other's state. A dry run may run beside one.
 - **State** (`<target>/gate-daemon/state.json`): the heads noted, dropped and held, when each PR was
   first seen ready, its pause and its latest decisions; the off switch is the file `off` beside it.
   A head dropped or noted is not gated again; a push is a new head.
@@ -115,4 +128,5 @@ went red.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | The last suspect gated alone; the switch read before each gate; `--retry <pr>`; one daemon a worktree; the conflict flag only where to look; a `main-red` issue when `main` fails here; a failed re-draft held; counters kept across a restart; gates that don't run set the switch (mornycorp/swarm-core#45) |
 | 2026-11-12 | new | The gate daemon, from swarm-foundation's, over GitHub: no pipeline pause, a send-back by converting to a draft, `prwatch` reading its gates' failures as sending back only what a `sendback` names (mornycorp/swarm-core#44) |
