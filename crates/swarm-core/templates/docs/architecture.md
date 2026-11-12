@@ -80,7 +80,10 @@ Every surface is a thin adapter over one dispatch:
 | The UI's state (`ui.inspect`, `ui.set`) | the session; `--ui-state <file>` when the window closes | the window's `ui_state` module | `schema_version` in the file |
 | <!-- projects, caches, journals --> | | | |
 
-The config directory comes from one function a test points at a temp dir; nothing else names it.
+Every file is written by the engine's one atomic writer (`state::write_atomic`) and read with its
+capped read, by the module that owns it; shared state in memory sits behind the engine's lock
+(`lock::Lock`). The config directory comes from one function a test points at a temp dir; nothing
+else names it.
 
 ## Adding a command
 

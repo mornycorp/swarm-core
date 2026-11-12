@@ -61,15 +61,20 @@ pub const TEST_FILES: &[&str] = crate::checks::TEST_FILES;
 /// The source files of the app's crates and binaries, in the skeleton's layout.
 pub const SOURCES: &[&str] = &["crates/**/*.rs", "apps/**/*.rs"];
 
+/// The skeleton's state module: the one atomic writer, which the `file-writes` scan leaves out.
+pub const STATE_MODULE: &str = "crates/engine/src/state.rs";
+
+/// The app's own sources: its crates but the testkit (whose temp dirs are its job), and its binaries.
+pub const APP_SOURCES: &[&str] = &["crates/model/**/*.rs", "crates/engine/**/*.rs", "crates/automation/**/*.rs", "apps/**/*.rs"];
+
 /// The skeleton's process module: the one place it starts another program, which the
 /// `process-module` scan leaves out.
 pub const PROCESS_MODULE: &str = "crates/engine/src/process.rs";
 
 /// The scans of docs/app-architecture.md ([`crate::checks::scan`]) pointed at the skeleton's files:
-/// a consumer's [`Hooks::scans`] returns them (`SCANS.to_vec()`) and changes what its app does
-/// differently: it adds
-/// the UI crate's scans (`Scan::ui_file_writes`, `Scan::ui_process_starts`, `Scan::value_reads`)
-/// and the state module's (`Scan::file_writes`). Every allowance gives its reason and a count.
+/// a consumer's [`Hooks::scans`] returns them (`skeleton::scans_at(root)`) and adds what its app
+/// does of its own: a module that owns another file, in `file_writes`'s allow-list with its
+/// reason and a count. Every allowance gives both.
 pub const SCANS: &[Scan] = &[
     Scan::process_command().files(SOURCES).except(&[PROCESS_MODULE]).test_files(TEST_FILES),
     Scan::value_reads().files(&["crates/automation/**/*.rs", "apps/**/*.rs"]).test_files(TEST_FILES),
@@ -79,6 +84,11 @@ pub const SCANS: &[Scan] = &[
         reason: "the typed adapter: `Registry::register` is the one place a command's spec is built",
     }]),
     Scan::real_config_dir().files(SOURCES).test_files(TEST_FILES),
+    Scan::file_writes().files(APP_SOURCES).except(&[STATE_MODULE]).test_files(TEST_FILES).allowing(&[Allowed {
+        file: "crates/automation/src/token.rs",
+        count: 3,
+        reason: "the control socket's token file: a secret, not state; made by an exclusive create with its mode, then renamed into place",
+    }]),
 ];
 
 /// The UI shell's theme module: its colour tokens, the one place a colour is made.
@@ -176,11 +186,13 @@ pub const FILES: &[Asset] = &[
     Asset { path: "crates/engine/src/commands.rs", text: include_str!("../templates/app/crates/engine/src/commands.rs") },
     Asset { path: "crates/engine/src/error.rs", text: include_str!("../templates/app/crates/engine/src/error.rs") },
     Asset { path: "crates/engine/src/lib.rs", text: include_str!("../templates/app/crates/engine/src/lib.rs") },
+    Asset { path: "crates/engine/src/lock.rs", text: include_str!("../templates/app/crates/engine/src/lock.rs") },
     Asset { path: "crates/engine/src/menu.rs", text: include_str!("../templates/app/crates/engine/src/menu.rs") },
     Asset { path: "crates/engine/src/process.rs", text: include_str!("../templates/app/crates/engine/src/process.rs") },
     Asset { path: "crates/engine/src/registry.rs", text: include_str!("../templates/app/crates/engine/src/registry.rs") },
     Asset { path: "crates/engine/src/session.rs", text: include_str!("../templates/app/crates/engine/src/session.rs") },
     Asset { path: "crates/engine/src/spec.rs", text: include_str!("../templates/app/crates/engine/src/spec.rs") },
+    Asset { path: "crates/engine/src/state.rs", text: include_str!("../templates/app/crates/engine/src/state.rs") },
     Asset { path: "crates/engine/src/theme.rs", text: include_str!("../templates/app/crates/engine/src/theme.rs") },
     Asset { path: "crates/engine/src/theme/tests.rs", text: include_str!("../templates/app/crates/engine/src/theme/tests.rs") },
     Asset { path: "crates/engine/src/ui.rs", text: include_str!("../templates/app/crates/engine/src/ui.rs") },

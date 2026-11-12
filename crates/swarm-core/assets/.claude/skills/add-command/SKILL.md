@@ -86,8 +86,9 @@ the contract doesn't have is not this skill's job: stop and say so.
    - slow work is cancellable: poll `cx.check_cancelled()?` between steps.
    - another program starts **only** through the app's process module
      (`crates/engine/src/process.rs`: `process::run`, with its deadlines and its cap), and a file
-     is written **only** through its atomic writer. If the app has no writer yet, adding one is
-     its own change, not part of this command.
+     is written **only** through its atomic writer (`crates/engine/src/state.rs`:
+     `state::write_atomic`), by the one module that owns that file. Shared state sits behind the
+     app's lock (`crates/engine/src/lock.rs`), never `std::sync::Mutex`.
 
    *Check:* `cargo clippy -p <crate> --all-targets -- -D warnings` (the crate roots deny the
    panicking forms) is clean.
