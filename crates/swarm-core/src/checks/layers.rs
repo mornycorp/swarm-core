@@ -97,6 +97,10 @@ impl fmt::Display for LayersReport {
     }
 }
 
+/// Where the layers' own setup is: a finding about it names this, not a file of the workspace.
+/// It is the project's `Hooks::architecture` and `Hooks::unsafe_crates`, in its xtask.
+pub const CONFIGURED: &str = "xtask (Hooks::architecture)";
+
 /// Where a member sits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Place {
@@ -138,7 +142,7 @@ fn config_problems(config: &Layers) -> Vec<Finding> {
         .filter(|(_, name)| !config.stack.contains(name))
         .map(|(what, name)| {
             Finding::new(
-                "Cargo.toml",
+                CONFIGURED,
                 None,
                 "layers-config",
                 format!("the {what} layer `{name}` is not one of the stack {:?}", config.stack),
@@ -153,7 +157,7 @@ fn config_problems(config: &Layers) -> Vec<Finding> {
 fn unknown_unsafe(config: &Layers, members: &[Member], files: &[String]) -> Vec<Finding> {
     let problem = |u: &Unsafe, what: &str| {
         let fix = "fix the app's `Layers::unsafe_crates`: it names a library member, by its package name";
-        Finding::new("Cargo.toml", None, "unsafe-crates", format!("`unsafe_crates` lists {}, {what}", u.package), fix)
+        Finding::new(CONFIGURED, None, "unsafe-crates", format!("`unsafe_crates` lists {}, {what}", u.package), fix)
     };
     config
         .unsafe_crates
@@ -289,7 +293,10 @@ impl Workspace<'_> {
         match (place, target) {
             _ if dep.kind == Kind::Dev => None,
             (_, Place::Testkit) => None,
-            (_, Place::Tooling) => up("tooling is nobody's dependency"),
+            // A repo's tooling may be several crates (an xtask and a library it shares): they may
+            // use each other. No crate of the stack, nor the testkit, uses tooling.
+            (Place::Tooling, Place::Tooling) => None,
+            (_, Place::Tooling) => up("tooling is nobody's dependency but tooling's"),
             (Place::Stack(mine), Place::Stack(theirs)) if theirs >= mine => up("only strictly lower layers"),
             _ => None,
         }
@@ -331,6 +338,16 @@ fn lints_and_headers(member: &Member, place: Option<Place>, config: &Layers, fil
     found
 }
 
+/// Whether `line` names `word` whole: `swarm-core` is not named by `swarm-core-testkit`.
+fn names(line: &str, word: &str) -> bool {
+    let part = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    line.match_indices(word).any(|(at, m)| {
+        let before = line.get(..at).and_then(|h| h.chars().next_back());
+        let after = line.get(at + m.len()..).and_then(|r| r.chars().next());
+        !before.is_some_and(part) && !after.is_some_and(part)
+    })
+}
+
 /// The committed overrides of Swarm Core's pin ([`crate::pin`]): in the root manifest (`top`,
 /// its dependencies, `[workspace.dependencies]`, `[patch]`, `[replace]`, the testkit's rev), each
 /// member's dependencies, and the cargo configs (`.cargo/config.toml`, the legacy `.cargo/config`).
@@ -355,7 +372,7 @@ pub(crate) fn swarm_core_pin(root: &Path, top: &toml::Table, members: &[Member])
     }
     for (text, list) in overrides {
         for o in list {
-            let line = text.lines().position(|l| l.contains(o.near)).map(|n| n + 1);
+            let line = text.lines().position(|l| names(l, o.near)).map(|n| n + 1);
             found.push(Finding::new(&o.file, line, o.rule, format!("{} {}", o.file, o.problem), o.fix));
         }
     }
@@ -391,6 +408,20 @@ mod tests {
 
     fn rules(root: &Path) -> Vec<(&'static str, String)> {
         layers(root, &Layers::STANDARD).err().map(|f| f.0.into_iter().map(|f| (f.rule, f.to_string())).collect()).unwrap_or_default()
+    }
+
+    /// #63: a repo's tooling may be several crates that use each other; no crate of the stack
+    /// uses one. And a finding about the configuration names the xtask, not a manifest.
+    #[test]
+    fn tooling_may_use_tooling_and_the_stack_may_not() {
+        let mut crates = well_formed();
+        crates.push(("tools/shared", manifest("app-tools", "tooling", "", "")));
+        crates.push(("tools/extra", manifest("app-extra", "tooling", "app-tools = { path = \"../shared\" }", "")));
+        assert!(rules(&workspace("layers-tooling", &crates)).is_empty(), "{:?}", rules(&workspace("layers-tooling", &crates)));
+        crates.push(("crates/low", manifest("app-low", "model", "app-tools = { path = \"../../tools/shared\" }", "")));
+        let found = rules(&workspace("layers-tooling-up", &crates));
+        assert!(found.iter().any(|(r, m)| *r == "layer-order" && m.contains("tooling is nobody's dependency but tooling's")), "{found:?}");
+        assert!(names("swarm-core = { path = \"x\" }", "swarm-core") && !names("swarm-core-testkit = { path = \"x\" }", "swarm-core"));
     }
 
     fn well_formed() -> Vec<(&'static str, String)> {
@@ -754,7 +785,7 @@ mod tests {
         assert_eq!(with(&Layers::STANDARD).len(), 4);
         // A listed package that is no member, or has no library, is a config finding.
         let ghost = Layers { unsafe_crates: &[Unsafe { package: "app-ghost", reason: "x" }], ..Layers::STANDARD };
-        assert!(with(&ghost).contains(&("unsafe-crates", "Cargo.toml".to_owned())));
+        assert!(with(&ghost).contains(&("unsafe-crates", CONFIGURED.to_owned())));
         std::fs::remove_file(root.join("crates/domain/src/lib.rs")).unwrap();
         let found = layers(&root, &ffi).err().unwrap();
         assert!(found.0.iter().any(|f| f.rule == "unsafe-crates" && f.problem.contains("has no library")), "{found}");
