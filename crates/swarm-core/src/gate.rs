@@ -98,7 +98,7 @@ const USAGE_TEXT: &str =
        cargo xtask gate --sub <id> --note \"<what it gates>\" --test-alone \"<binary id> <test>\"... [--wait] [--agent <instance>]
        cargo xtask gate --rerun-failed <sub> [--note \"<text>\"] [--wait] [--agent <instance>]
        cargo xtask gate --stop <sub> --note \"<what it merged>\" [--agent <instance>]
-       cargo xtask gate --daemon [--once] [--dry-run] [--interval <s>] [--fold <s>] [--agent <id>] | --daemon --status | --daemon --stop [--note <why>] | --daemon --resume";
+       cargo xtask gate --daemon [--once] [--dry-run] [--interval <s>] [--fold <s>] [--agent <id>] | --daemon --status | --daemon --stop [--note <why>] | --daemon --resume | --daemon --retry <pr>";
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
 pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --sub <id> --note \"<what>\" --test-alone \"<binary id> <test>\"… | --rerun-failed <sub> | --stop <sub> --note \"<what>\" | --daemon [--once] [--dry-run] | --daemon --status | --stop | --resume";
