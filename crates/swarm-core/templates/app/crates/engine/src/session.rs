@@ -86,22 +86,23 @@ impl Session {
     /// The wire form: params and result are JSON. Only transports call it. It looks the command up
     /// (`unknown_command`), checks the params against its type (`bad_params`, with the key), that
     /// it is enabled (`unavailable`, with why not) and the consent its effects need
-    /// (`consent_required`), then runs it. Absent params (JSON `null`) are `{}`; any other params
+    /// (`consent_required`), then runs it; a panic in the run is an `internal` error, never the
+    /// caller's crash ([`guarded`]). Absent params (JSON `null`) are `{}`; any other params
     /// that aren't an object are `bad_params`.
     pub fn call(&self, id: &str, params: Value, opts: &CallOpts) -> Result<Value, CommandError> {
         let entry = self.registry.lookup(id).ok_or_else(|| CommandError::unknown_command(id))?;
         let run = entry.call.prepare(object(params)?)?;
         let cx = self.admit(&entry, opts)?;
-        run(self, &cx)
+        guarded(id, || run(self, &cx))
     }
 
     /// The typed form: the UI and the app's own code call it, and read the typed result. The same
-    /// checks as [`Session::call`], with the params already typed.
+    /// checks as [`Session::call`], with the params already typed, and the same guard on its run.
     pub fn call_typed<C: Command>(&self, params: C::Params, opts: &CallOpts) -> Result<C::Output, CommandError> {
         let entry = self.registry.lookup(C::ID).ok_or_else(|| CommandError::unknown_command(C::ID))?;
         let command = entry.call.command().downcast_ref::<C>().ok_or_else(|| CommandError::unknown_command(C::ID))?;
         let cx = self.admit(&entry, opts)?;
-        command.run(self, params, &cx)
+        guarded(C::ID, || command.run(self, params, &cx))
     }
 
     /// **The one check of "can it run now"**: its requirements, then its own `enabled`. The
@@ -134,6 +135,18 @@ fn object(params: Value) -> Result<Value, CommandError> {
         Value::Object(_) => Ok(params),
         _ => Err(CommandError::bad_params("the params must be a JSON object", "")),
     }
+}
+
+/// Run `run`, a command's own code: a panic in it is the app's fault, returned as an `internal`
+/// error naming the command, so a bug in one command never takes down the surface that called it
+/// (docs/app-architecture.md › Never crash). The lints forbid a panic in production code; a
+/// dependency, an arithmetic overflow or a slice index can still raise one. The panic's own text
+/// goes to stderr with the default hook, not into the error: it may hold a param's value. State
+/// the command changed before it panicked stays as it left it, which is why a command saves
+/// before it changes memory (› State on disk).
+fn guarded<T>(id: &str, run: impl FnOnce() -> Result<T, CommandError>) -> Result<T, CommandError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+        .unwrap_or_else(|_| Err(CommandError::internal(format!("{id} failed with a bug (a panic): it is on the app's stderr"))))
 }
 
 #[cfg(test)]
@@ -185,6 +198,19 @@ mod tests {
     }
 
     /// A slow command: it polls its cancel token.
+    /// A command with a bug: its `run` panics.
+    struct Panics;
+    impl Command for Panics {
+        type Params = EchoParams;
+        type Output = EchoOutput;
+        const ID: &'static str = "test.panics";
+        const TITLE: &'static str = "Panics";
+        const SUMMARY: &'static str = "Has a bug";
+        fn run(&self, _: &Session, params: EchoParams, _: &CallContext) -> Result<EchoOutput, CommandError> {
+            panic!("a bug in the command, with {}", params.text)
+        }
+    }
+
     struct Slow;
     impl Command for Slow {
         type Params = EchoParams;
@@ -325,6 +351,23 @@ mod tests {
         let opts = CallOpts::new(Caller::Test);
         opts.cancel.cancel();
         assert_eq!(s.call("test.echo", json!({"text": "a"}), &opts).unwrap_err().code, ErrorCode::Cancelled);
+    }
+
+    /// A panic in a command's `run` is the app's fault, said as `internal` on both forms of the
+    /// call; the session goes on serving the next call, and the panic's own text (which may hold a
+    /// param) is not in the error.
+    #[test]
+    fn a_panic_in_a_command_is_an_internal_error_and_the_session_goes_on() {
+        let mut registry = Registry::new();
+        registry.register(Echo).unwrap();
+        registry.register(Panics).unwrap();
+        let s = Session::with_registry(AppInfo { name: "test".into(), version: "1.2.3".into() }, registry);
+        let wire = call(&s, "test.panics", json!({"text": "secret-not-real"})).unwrap_err();
+        assert_eq!(wire.code, ErrorCode::Internal);
+        assert!(wire.message.contains("test.panics") && !wire.message.contains("secret-not-real") && !wire.remediation.is_empty(), "{wire}");
+        let typed = s.call_typed::<Panics>(EchoParams { text: "x".into() }, &CallOpts::new(Caller::Test)).unwrap_err();
+        assert_eq!(typed.code, ErrorCode::Internal);
+        assert_eq!(call(&s, "test.echo", json!({"text": "after"})).unwrap()["text"], "after");
     }
 
     #[test]
