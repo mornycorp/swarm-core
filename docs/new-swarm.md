@@ -14,7 +14,7 @@ which the repo pins as `docs/swarm-protocol.md`: read it before starting the fir
 | What | Whose | How it gets there |
 |---|---|---|
 | `xtask/`: the `Project`, the `Hooks`, the dispatch, `ci` | the repo's | step 2, from [`examples/consumer_xtask.rs`](../crates/swarm-core/examples/consumer_xtask.rs) |
-| The pinned copies: the protocol, `lessons.md`, `progress-docs.md`, the GitHub templates, `scripts/`, the skills | **Swarm Core's**: `sync-assets --check` fails on an edit | step 4, `cargo xtask swarm-core sync-assets` |
+| The pinned copies: the protocol, `app-architecture.md`, `lessons.md`, `progress-docs.md`, the GitHub templates, `scripts/`, the skills | **Swarm Core's**: `sync-assets --check` fails on an edit | step 4, `cargo xtask swarm-core sync-assets` |
 | The starting points: `AGENTS.md`, `docs/swarm.md`, `docs/development.md`, the progress docs, the owner's directions, the merge check's prompt, nextest's `ci` profile | **the repo's**, once copied: edit freely, nothing checks them | step 5, `cargo xtask swarm-core init` |
 
 Why the two kinds: the pinned copies are the process every swarm shares, so a change to them is a

@@ -109,7 +109,9 @@ The files both swarms keep the same live in `crates/swarm-core/assets/`, at the 
 a consumer, and are built into the crate (`assets::ASSETS`):
 
 - `docs/swarm-protocol.md` (the roles, the claim, tracking, the gates, the coordinator's loop, the
-  periodic full gate), `docs/lessons.md`, `docs/progress-docs.md`;
+  periodic full gate), `docs/app-architecture.md` (the contract every app keeps: the layers, one
+  typed command registry behind every surface, the UI as a client, the robustness rules, and the
+  check that holds each), `docs/lessons.md`, `docs/progress-docs.md`;
 - `.github/` (the issue and PR templates), `scripts/hooks/pre-push`, `scripts/github-labels.sh`;
 - `.claude/skills/` (`complexity-analyzer`; the `refactoring` skill was dropped on 2026-10-31).
 
@@ -119,8 +121,8 @@ a consumer, and are built into the crate (`assets::ASSETS`):
 differs. Change an asset here, then bump each consumer.
 
 **Templates** are the other kind: starting points a new consumer copies once and then owns
-(`AGENTS.md`, its `docs/swarm.md` and `docs/development.md`, the progress docs, the owner's
-directions, the scheduled merge check's prompt, nextest's `ci` profile). They live in
+(`AGENTS.md`, its `docs/swarm.md` and `docs/development.md`, `clippy.toml`, the progress docs, the
+owner's directions, the scheduled merge check's prompt, nextest's `ci` profile). They live in
 `crates/swarm-core/templates/` (`templates::TEMPLATES`). `cargo xtask swarm-core init` writes each
 one the consumer doesn't have yet, with the same placeholders and `{{today}}`, and never
 overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swarm.md)).
