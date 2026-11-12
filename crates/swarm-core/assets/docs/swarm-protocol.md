@@ -577,8 +577,14 @@ On each finished pull request:
       tree with the stacked commit's. The same tree, on a base with nothing of `main` the gate
       didn't test, lands: `!N moved since stack (old → new) but its tree is the one gated
       (<how>): landing`, where `<how>` says whether it was restacked or the worker's own commit
-      is that tree already, and the stacked commit is pushed over the worker's. A move onto a newer `main`, or
-      to another tree (a new commit, a conflict), stops as before. An older record names
+      is that tree already, and the stacked commit is pushed over the worker's. A branch a worker
+      rebased onto a **newer `main`** lands without a re-gate when three things hold: its own
+      commits' patch-id is the stacked commit's, applied onto what the gate tested they are the
+      gated tree, and the newer `main` changes none of the PR's files. The stacked commit is then
+      pushed over it (`#N moved onto a newer main (old → new) but its patch is the one gated:
+      landing the gated commit`), and step 5's check holds what merges to the gated change. A
+      changed patch, a conflict, a newer `main` that touches the PR's files, or another tree (a
+      new commit) stops, saying which. An older record names
       no base to restack onto, so a moved branch in it stops. And the PR must be open: GitHub
       closes a PR whose base branch is deleted, so one stacked on the PR below it (its base that
       PR's head branch) was closed when that one merged, before `land` retargeted (on 2026-11-03
@@ -1128,6 +1134,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | The coordinator's loop, `land`'s step 1: a branch a worker rebased onto a newer `main` since `stack` lands without a re-gate when its own commits' patch-id is the stacked commit's, applied onto what the gate tested they are the gated tree, and the newer `main` changes none of the PR's files; the stacked commit is pushed over it. A changed patch, a conflict or a newer `main` touching the PR's files stops, saying which (sc#37) |
 | 2026-11-12 | minor | The periodic full gate: holding the machine lock, it reads again: it steps aside for a `main` another gate verified while it waited, and begins again for a `main` that moved (sc#36) |
 | 2026-11-05 | minor | No GitHub Actions (owner, 2026-11-05): CI is local for the coordinator and every worker; `land` no longer cancels workflow runs, and `main` red comes from the local gates and the periodic full gate |
 | 2026-11-04 | minor | Staying awake › Test runs share the machine (new): every `ci` run that builds and tests (a gate that builds, the periodic full gate's, `ready`'s) holds one of the machine's test-run slots, `SWARM_TEST_RUNS` or one per 16 GB; the order repo lock, machine lock, slot, capacity; `capacity` suggests none while every slot is taken or wired memory is half the total (sc#17) |
