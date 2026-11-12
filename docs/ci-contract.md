@@ -45,6 +45,22 @@ anything else with exit code 2.
 - **`--only <step>,<step>…`:** then only these steps of the gate the other arguments name. The step
   names are the ones the consumer's `CI summary` prints.
 
+## The steps
+
+A consumer's `ci` has steps of its own (fmt, clippy, the tests, `layers`, …), prints their names in
+the `CI summary`, and takes them as `--only`'s values. The contract names one, because the app
+architecture rests on it:
+
+- **`conformance`**, in an app (one whose commands sit behind one dispatch and several surfaces):
+  the conformance run, Swarm Core's `swarm_core_testkit::conformance`, run by a test of the app's
+  CLI crate: every command through the session, the CLI, `serve`, the socket and MCP, and the
+  surfaces compared. **The full run (no arguments) keeps it as a step of its own**, so a command
+  that breaks a surface fails the gate by name, and `--only conformance` reruns it. `--changed` and
+  `--smoke` need not have it: the `test` step runs the same test whenever the change reaches the
+  app. **The step fails unless the test ran**: it names it exactly, so a renamed test fails the
+  step rather than matching nothing and passing. A repo with no app has no such step.
+  `crates/swarm-core/fake/xtask.rs` keeps it in the full run's steps.
+
 ## What it leaves
 
 - **Its exit code:** 0 when every step passed. Anything else is a failure, and the gate reads why

@@ -127,10 +127,10 @@ fn a_failed_test_is_rerun_alone_through_the_contract() {
     assert_eq!(gate::failed_tests(&log), [failing]);
     assert_eq!(gate::rerun::failed_names(&log), [failing]);
     let plan = gate::plan_from_records(&FAKE, &logs, "g-9", "g-9-rerun", &w.head).unwrap();
-    assert_eq!((plan.tests.len(), plan.steps.clone()), (1, vec!["layers".to_owned(), "wasm".to_owned()]));
+    assert_eq!((plan.tests.len(), plan.steps.clone()), (1, vec!["layers".to_owned(), "wasm".to_owned(), "conformance".to_owned()]));
     let rerun = gate_of(&w, &hooks, Kind::Full, &field, Some(&plan));
     assert_eq!(gate::attempt(&rerun, "g-9-rerun", Some("rerun of g-9"), (1, None)), Ok((0, None)));
-    assert_eq!(recorded(&w).last().map(String::as_str), Some(format!("ci|--test-alone|{failing}|--doctests|--only|layers,wasm").as_str()));
+    assert_eq!(recorded(&w).last().map(String::as_str), Some(format!("ci|--test-alone|{failing}|--doctests|--only|layers,wasm,conformance").as_str()));
     let rc = std::fs::read_to_string(logs.join("g-9-rerun.rc")).unwrap();
     assert_eq!(gate::passed_head(&rc), Ok(w.head.as_str()));
     assert!(gate::rerun_evidence(&logs, &rc).unwrap().contains("fake::flaky::under_load"), "{rc}");
@@ -213,6 +213,29 @@ fn readys_failed_test_is_rerun_alone_through_the_contract() {
 
 /// The fake is the contract's executable form: every command line the doc lists is taken, and
 /// nothing else.
+/// docs/ci-contract.md › The steps (#48): the full run keeps the app's `conformance` step, and the doc
+/// and the fake agree on it. `--changed` and `--smoke` need not run it, and `--only` can name it.
+#[test]
+fn the_full_run_keeps_the_conformance_step() {
+    let dir = swarm_core_testkit::temp_dir("core-ci-contract-conformance");
+    let summary = |args: &[&str]| {
+        let out = Command::new(FAKE_XTASK).current_dir(&dir).args(args).env_remove("FAKE_CI_FAIL").output().unwrap();
+        String::from_utf8(out.stdout).unwrap().lines().find(|l| l.starts_with("CI summary")).unwrap_or_default().to_owned()
+    };
+    assert!(summary(&["ci"]).contains("conformance"), "the full run: {}", summary(&["ci"]));
+    for narrower in [&["ci", "--smoke"][..], &["ci", "--changed", "--base", "origin/main"]] {
+        assert!(!summary(narrower).contains("conformance"), "{narrower:?}");
+    }
+    assert!(summary(&["ci", "--test-alone", "a::b c", "--only", "conformance"]).ends_with("(alone a::b c, conformance) in 0.0 min"));
+    let doc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ci-contract.md")).unwrap().replace("\r\n", "\n");
+    let steps = doc.split("## The steps").nth(1).and_then(|s| s.split("\n## ").next()).unwrap_or_default();
+    assert!(
+        steps.contains("**`conformance`**") && steps.contains("The full run (no arguments) keeps it"),
+        "the doc lists the step the full run keeps: {steps}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_fake_consumer_takes_the_contract_and_nothing_else() {
     let dir = swarm_core_testkit::temp_dir("swarm-core-ci-contract-fake");

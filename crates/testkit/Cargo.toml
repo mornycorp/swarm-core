@@ -1,10 +1,14 @@
 [package]
 name = "swarm-core-testkit"
-description = "Test helpers for swarm-core: temp dirs and git repositories (a dev-dependency only)"
+description = "Test helpers for swarm-core and the apps built on it: temp dirs, git repositories and the conformance run (a dev-dependency only)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[dependencies]
+# The conformance run speaks JSON: params, results and schemas are `serde_json::Value`s. Nothing heavier.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
