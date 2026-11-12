@@ -651,8 +651,14 @@ On each finished pull request:
       tree with the stacked commit's. The same tree, on a base with nothing of `main` the gate
       didn't test, lands: `!N moved since stack (old → new) but its tree is the one gated
       (<how>): landing`, where `<how>` says whether it was restacked or the worker's own commit
-      is that tree already, and the stacked commit is pushed over the worker's. A move onto a newer `main`, or
-      to another tree (a new commit, a conflict), stops as before. An older record names
+      is that tree already, and the stacked commit is pushed over the worker's. A branch a worker
+      rebased onto a **newer `main`** lands without a re-gate when three things hold: its own
+      commits' patch-id is the stacked commit's, applied onto what the gate tested they are the
+      gated tree, and the newer `main` changes none of the PR's files. The stacked commit is then
+      pushed over it (`#N moved onto a newer main (old → new) but its patch is the one gated:
+      landing the gated commit`), and step 5's check holds what merges to the gated change. A
+      changed patch, a conflict, a newer `main` that touches the PR's files, or another tree (a
+      new commit) stops, saying which. An older record names
       no base to restack onto, so a moved branch in it stops. And the PR must be open: GitHub
       closes a PR whose base branch is deleted, so one stacked on the PR below it (its base that
       PR's head branch) was closed when that one merged, before `land` retargeted (on 2026-11-03
@@ -1221,6 +1227,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | The coordinator's loop, `land`'s step 1: a branch a worker rebased onto a newer `main` since `stack` lands without a re-gate when its own commits' patch-id is the stacked commit's, applied onto what the gate tested they are the gated tree, and the newer `main` changes none of the PR's files; the stacked commit is pushed over it. A changed patch, a conflict or a newer `main` touching the PR's files stops, saying which (sc#37) |
 | 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |
 | 2026-11-12 | minor | Standing rules, a section of their own: product first and tooling when it hurts twice, "wind down" means finish, decide don't ask, a heavy job run by hand waits for an idle gate, a quiet gate log is not a dead gate, stopping a shell on Windows leaves its children, long runs to a log rather than under a monitor (which stops them at its timeout), squash onto the merge base (lessons.md 15). Starting a worker: a different task gets a fresh context; the worker stops and names its next issue, and the coordinator clears its session or starts a fresh worker; a similar follow-on keeps its session. Picking work, step 4: a worker branches every PR from `main`, and stacks on another open PR (`ready --onto`) only when its change needs that PR's code (lessons.md 13). The periodic full gate, a real failure: a timeout repeated in the rerun alone is proof of a slowdown; time one unit against the last green commit, bisect with it, and measure the whole test once on the fix (lessons.md 14) (swarm-core#29) |
 | 2026-11-12 | minor | The architecture review's checklist: the robustness traps (lessons.md 5–12: a child process outside the process module or with no deadline, a second lock in one statement, a file read while drawing, defaults saved over unread state, memory changed before its save, a secret in a result, a discarded `Result`, a test in the real config dir); the two lessons the checklist already cited are 16 and 17 (swarm-core#28) |
