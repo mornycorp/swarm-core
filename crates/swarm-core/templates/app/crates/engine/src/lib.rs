@@ -22,6 +22,10 @@
 //! - **Another program is started in one place** ([`process`]): with a wall-clock and an idle
 //!   deadline, a capped output, its own process group, and without the control socket's token
 //!   (docs/app-architecture.md › Never hang on another program).
+//! - **Its own lock** ([`lock::Lock`]): a caller that can't take it within its deadline gets an
+//!   error that names it, never a wait for ever (› Never hang on a lock).
+//! - **The one atomic writer** ([`state::write_atomic`]) and its capped read: every file the app
+//!   persists goes through them (› State on disk).
 //! - **The example** is `app.info` ([`commands::InfoCommand`]). It stays until the first real
 //!   command replaces it.
 //!
@@ -35,11 +39,13 @@
 mod call;
 pub mod commands;
 mod error;
+pub mod lock;
 pub mod menu;
 pub mod process;
 mod registry;
 mod session;
 mod spec;
+pub mod state;
 pub mod theme;
 mod ui;
 

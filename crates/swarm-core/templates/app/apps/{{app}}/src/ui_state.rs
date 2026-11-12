@@ -6,18 +6,17 @@
 //!   newer app is refused (`UiState::parse`), never overwritten.
 //! - **Never defaults over what it couldn't read:** a file that can't be read or parsed is left as it
 //!   is, and the window doesn't write it when it closes ([`restore`] says so with an `Err`).
-//! - **Atomic:** [`save`] writes a temporary file beside it, flushes it and renames it over, so a
-//!   crash leaves the old file or the new, never half of one.
+//! - **Atomic:** [`save`] writes through the engine's one atomic writer (`state::write_atomic`: a
+//!   temporary file beside it, flushed, renamed over), so a crash leaves the old file or the new,
+//!   never half of one.
 //!
 //! The state is saved whole when the window closes, not at each change: it changes with each click,
 //! and a crash then costs the person a layout. A setting is different: it is saved before memory
 //! changes, so a failed save never leaves the screen saying what the file doesn't.
 
-use std::fs::File;
-use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 
-use {{crate_prefix_ident}}engine::{Session, UiState};
+use {{crate_prefix_ident}}engine::{Session, UiState, state};
 
 /// The largest file read back: a UI state is a few lines.
 const MAX_BYTES: u64 = 1024 * 1024;
@@ -26,42 +25,16 @@ const MAX_BYTES: u64 = 1024 * 1024;
 /// (it was read, or there is no file yet). `Err` says why it wasn't read: the window starts from the
 /// default and leaves the file alone.
 pub fn restore(session: &Session, path: &Path) -> Result<(), String> {
-    let Some(text) = read(path)? else { return Ok(()) };
+    let Some(text) = state::read_capped(path, MAX_BYTES).map_err(|e| e.message)? else { return Ok(()) };
     let saved = UiState::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     session.restore_ui(saved).map(drop).map_err(|e| e.message)
-}
-
-/// The file's text, `None` when there is none yet.
-fn read(path: &Path) -> Result<Option<String>, String> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
-    };
-    let mut text = String::new();
-    file.take(MAX_BYTES + 1).read_to_string(&mut text).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    if u64::try_from(text.len()).unwrap_or(u64::MAX) > MAX_BYTES {
-        return Err(format!("{} is over {MAX_BYTES} bytes, more than a UI state is", path.display()));
-    }
-    Ok(Some(text))
 }
 
 /// Writes `session`'s UI state to `path`, atomically: a temporary file beside it, flushed, then
 /// renamed over it.
 pub fn save(session: &Session, path: &Path) -> Result<(), String> {
     let text = session.ui().map_err(|e| e.message)?.to_json().map_err(|e| e.to_string())?;
-    let name = path.file_name().ok_or_else(|| format!("{} names no file", path.display()))?;
-    let temp = path.with_file_name(format!(".{}.tmp", name.to_string_lossy()));
-    let write = || -> std::io::Result<()> {
-        let mut file = File::create(&temp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temp, path)
-    };
-    write().map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
-        format!("cannot save the UI state to {}: {e}", path.display())
-    })
+    state::write_atomic(path, text.as_bytes()).map_err(|e| e.message)
 }
 
 #[cfg(test)]

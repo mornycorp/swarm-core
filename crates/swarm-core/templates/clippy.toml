@@ -9,11 +9,11 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 
 # Never hang on a lock: std's mutex waits for ever on a deadlock. Use the app's own, which errors
-# out and names the lock instead. Say which it is in each `reason` once it exists (its path, and
-# its guard's).
+# out and names the lock instead: the engine's `lock::Lock` in an app made from the skeleton
+# (`crates/engine/src/lock.rs`), which is held only inside `Lock::with`, so it has no guard to keep.
 disallowed-types = [
-    { path = "std::sync::Mutex", reason = "use the app's own lock, which errors out on a deadlock instead of hanging (docs/app-architecture.md#never-hang-on-a-lock)" },
-    { path = "std::sync::MutexGuard", reason = "use the app's own lock's guard (docs/app-architecture.md#never-hang-on-a-lock)" },
+    { path = "std::sync::Mutex", reason = "use the app's own lock (the engine's `lock::Lock`), which errors out on a deadlock instead of hanging (docs/app-architecture.md#never-hang-on-a-lock)" },
+    { path = "std::sync::MutexGuard", reason = "use the app's own lock (the engine's `lock::Lock::with`), which hands out no guard (docs/app-architecture.md#never-hang-on-a-lock)" },
 ]
 
 # Code-health limits for production code: every crate root warns on these and allows them under

@@ -9,14 +9,14 @@
 //! refuses a newer file), and the window saves it when it closes and restores it when it starts.
 
 use std::fmt;
-use std::sync::{Arc, RwLock, TryLockError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use {{crate_prefix_ident}}model::SCHEMA_VERSION;
 
 use crate::error::CommandError;
+use crate::lock::Lock;
 
 /// The UI's state. An app adds what its views keep (the open panes, a scroll offset, a column's
 /// width, a filter), each a plain value, and `ui.set` a param for each.
@@ -88,20 +88,18 @@ impl UiState {
 /// What runs when the UI state changes: the window repaints, so a change made over the socket shows.
 pub type OnChange = Arc<dyn Fn() + Send + Sync>;
 
-/// How long a caller waits for the UI state's lock before it calls it a deadlock.
-const LOCK_DEADLINE: Duration = Duration::from_secs(2);
-
 /// The state, and what to call when it changes.
 struct Held {
     state: UiState,
     on_change: Option<OnChange>,
 }
 
-/// The session's UI state behind its lock (docs/app-architecture.md › Never hang on a lock): it is
-/// held only to copy or change the state, never across a call, and a caller that can't take it
-/// within [`LOCK_DEADLINE`] gets an `internal` error that names it, never a wait for ever.
+/// The session's UI state behind the app's lock ([`Lock`]; docs/app-architecture.md › Never hang on
+/// a lock): it is held only to copy or change the state, never across a call, and a caller that
+/// can't take it within the lock's deadline gets an `internal` error that names it, never a wait
+/// for ever.
 pub(crate) struct UiCell {
-    held: RwLock<Held>,
+    held: Lock<Held>,
 }
 
 impl fmt::Debug for UiCell {
@@ -112,18 +110,18 @@ impl fmt::Debug for UiCell {
 
 impl UiCell {
     pub(crate) fn new() -> UiCell {
-        UiCell { held: RwLock::new(Held { state: UiState::default(), on_change: None }) }
+        UiCell { held: Lock::new("the UI state", Held { state: UiState::default(), on_change: None }) }
     }
 
     /// A copy of the state now.
     pub(crate) fn get(&self) -> Result<UiState, CommandError> {
-        self.with(|held| held.state.clone())
+        self.held.with(|held| held.state.clone())
     }
 
     /// Changes the state with `change`, and calls what watches it once the lock is let go: the new
     /// state.
     pub(crate) fn update(&self, change: impl FnOnce(&mut UiState)) -> Result<UiState, CommandError> {
-        let (state, on_change) = self.with(|held| {
+        let (state, on_change) = self.held.with(|held| {
             change(&mut held.state);
             (held.state.clone(), held.on_change.clone())
         })?;
@@ -135,23 +133,7 @@ impl UiCell {
 
     /// Calls `on_change` after each change from now on (the window's repaint).
     pub(crate) fn watch(&self, on_change: OnChange) -> Result<(), CommandError> {
-        self.with(|held| held.on_change = Some(on_change))
-    }
-
-    /// `f` with the lock held. A poisoned lock is taken all the same: the state is plain data, and
-    /// every change writes whole fields, so a panic can't leave it half-made.
-    fn with<R>(&self, f: impl FnOnce(&mut Held) -> R) -> Result<R, CommandError> {
-        let start = Instant::now();
-        loop {
-            match self.held.try_write() {
-                Ok(mut held) => return Ok(f(&mut held)),
-                Err(TryLockError::Poisoned(poisoned)) => return Ok(f(&mut poisoned.into_inner())),
-                Err(TryLockError::WouldBlock) if start.elapsed() < LOCK_DEADLINE => std::thread::sleep(Duration::from_millis(1)),
-                Err(TryLockError::WouldBlock) => {
-                    return Err(CommandError::internal(format!("the UI state's lock was held for over {} s: a deadlock", LOCK_DEADLINE.as_secs())));
-                }
-            }
-        }
+        self.held.with(|held| held.on_change = Some(on_change))
     }
 }
 
@@ -190,10 +172,9 @@ mod tests {
     #[test]
     fn a_lock_held_too_long_is_an_internal_error_not_a_hang() {
         let cell = Arc::new(UiCell::new());
-        let held = cell.held.write().unwrap();
         let other = Arc::clone(&cell);
-        let error = std::thread::spawn(move || other.get().unwrap_err()).join().unwrap();
-        drop(held);
+        // Asked for while this thread holds it: the other gives up at the lock's deadline.
+        let error = cell.held.with(|_| std::thread::spawn(move || other.get().unwrap_err()).join().unwrap()).unwrap();
         assert!(error.code == crate::ErrorCode::Internal && error.message.contains("UI state's lock"), "{error}");
         assert!(cell.get().is_ok(), "free again");
     }
