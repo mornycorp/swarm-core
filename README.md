@@ -79,6 +79,9 @@ have defaults:
 - `gate_reruns`: whether a failed gate reruns once by itself: a failure only at the tests, its
   failed tests alone; else a transient failure, the whole gate. Off by default; `gate --rerun` and
   `--no-rerun` choose for one run.
+- `gate_priority`: whether a gate has priority over workers' builds: with `--wait` it goes ahead
+  of the running builds after 2 minutes, `capacity` reserves a build for it while it holds the
+  machine lock, and `ready` yields to it before each `ci`. Off by default.
 - `worker_build_jobs`: the build jobs `ready` gives its builds on a machine where gates run
   (`CARGO_BUILD_JOBS`; `capacity` suggests the number), so a gate keeps memory for its own. None
   by default: no cap.

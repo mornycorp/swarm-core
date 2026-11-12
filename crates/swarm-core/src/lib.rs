@@ -85,6 +85,16 @@ pub trait Hooks {
         None
     }
 
+    /// Whether a gate has priority over workers' builds (#40): `gate --wait` waits for room at
+    /// most [`gate::PATIENCE`]'s grace, then goes ahead of the running builds (a disk under the
+    /// floor still waits); while a gate holds the machine-wide gate lock, `capacity` reserves a
+    /// build for it for every other caller ([`capacity::read_with`]); and `ready` yields to it
+    /// before each `ci` ([`capacity::yield_to_gate`]). The default: no, as before (the gate queues
+    /// for room up to two hours, `capacity` counts no gate, `ready` never waits).
+    fn gate_priority(&self) -> bool {
+        false
+    }
+
     /// The project's own cause of a failed gate, read from its `log` before the machine's
     /// ([`gate::classify`]), such as `gpu` (the GPU or the desktop under load) and `python` (no
     /// Python for its oracle tests). The default: none.
@@ -243,7 +253,7 @@ pub fn serves(command: &str) -> bool {
 /// Run `command` with `args` for `project`, in the consumer's workspace `root`.
 pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, command: &str, args: &[&str]) -> Result<(), String> {
     match command {
-        "capacity" => capacity::run(project, root, args, &capacity::EventTimeline(project)),
+        "capacity" => capacity::run(project, root, args, &capacity::EventTimeline(project), hooks.gate_priority()),
         "claim" => claim::run(project, hooks, root, args),
         "event" => {
             event::run(project, root, args)?;
