@@ -1,0 +1,12 @@
+[package]
+name = "{{crate_prefix}}model"
+description = "{{product}}: the types and parsers of everything read from outside (hostile input, no I/O)"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "model"
+
+[lints]
+workspace = true

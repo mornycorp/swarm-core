@@ -10,7 +10,11 @@
 //! - **`sync-assets [--check]`** writes the pinned copies of the shared docs, templates, scripts
 //!   and skills ([`crate::assets`]), or checks them.
 //! - **`init`** writes the starting points a new consumer owns once copied ([`crate::templates`]):
-//!   the ones it doesn't have yet, never overwriting.
+//!   the ones it doesn't have yet, never overwriting. **`init --app`** writes them and the app
+//!   skeleton ([`crate::skeleton`]): a small workspace in which the example command already runs
+//!   through every surface, and the loopback control socket. **`init --app --ui`** adds the UI shell
+//!   (`crates/ui`, egui) and the windowed app that hosts it; `--ui` alone is refused, as the shell is
+//!   part of the app skeleton.
 //! - **No committed override:** a consumer's `cargo xtask layers` refuses a `path` or `branch` form
 //!   of the dependency (or one without a `rev`), a `[patch]` of its source and a `[replace]`, in
 //!   the workspace's manifest, a member's or a cargo config, read as TOML however it is spelt, and a
@@ -32,7 +36,7 @@ pub const TESTKIT: &str = "swarm-core-testkit";
 /// What a consumer pins: Swarm Core, and for an app its testkit.
 const PINNED: [&str; 2] = [PACKAGE, TESTKIT];
 
-pub const USAGE: &str = "cargo xtask swarm-core --version | bump [--rev <sha>] | sync-assets [--check] | init";
+pub const USAGE: &str = "cargo xtask swarm-core --version | bump [--rev <sha>] | sync-assets [--check] | init [--app [--ui]]";
 
 /// `cargo xtask swarm-core <args>` for `project`, in the consumer's workspace `root`.
 pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> Result<(), String> {
@@ -47,12 +51,25 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         ["bump", "--rev", rev] => bump(root, Some(rev)),
         ["sync-assets"] => crate::assets::sync(project, hooks, root),
         ["sync-assets", "--check"] => crate::assets::check(project, hooks, root),
+        ["init", "--app"] => init_app(project, hooks, root, false),
+        ["init", "--app", "--ui"] | ["init", "--ui", "--app"] => init_app(project, hooks, root, true),
+        ["init", flags @ ..] if flags.contains(&"--ui") => Err(UI_NEEDS_APP.to_owned()),
         ["init"] => {
             let today = crate::time::now_iso();
             crate::templates::init(project, hooks, root, today.get(..10).unwrap_or(&today)).map(drop)
         }
         _ => Err(format!("usage: {USAGE}")),
     }
+}
+
+/// What `init --ui` says without `--app`: the UI shell is a part of the app skeleton, so the flag
+/// alone is refused rather than ignored, and an agent doesn't think it got one.
+const UI_NEEDS_APP: &str = "`init --ui` goes with `--app`: run `init --app --ui` for the skeleton with the UI shell and the windowed app, or `init --app` for the headless one (docs/new-swarm.md › The app's skeleton)";
+
+/// `init --app`, with the UI shell when `ui`.
+fn init_app(project: &Project, hooks: &dyn Hooks, root: &Path, ui: bool) -> Result<(), String> {
+    let today = crate::time::now_iso();
+    crate::skeleton::init(project, hooks, root, today.get(..10).unwrap_or(&today), ui).map(drop)
 }
 
 /// Move the pin to `rev` (default: Swarm Core's `main`), and the lock with it.

@@ -178,6 +178,94 @@ fn placeholders_are_names_in_double_braces() {
     assert_eq!(render(&APP_SWARM, &crate::Defaults, &skill).unwrap(), "{{kept}}");
 }
 
+/// What the `add-command` skill names is in the skeleton: a path it points at is one of the
+/// skeleton's files, and a name it uses (a function, a type, an argument) is in their text, so a
+/// rename in the skeleton fails here instead of leaving the skill wrong.
+#[test]
+fn the_add_command_skill_names_only_what_the_skeleton_has() {
+    let skill = asset(".claude/skills/add-command/SKILL.md").text;
+    let files = crate::skeleton::FILES;
+    let paths: Vec<&str> = skill
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|t| (t.starts_with("crates/") || t.starts_with("apps/")) && t.ends_with(".rs") && !t.contains('<'))
+        .collect();
+    assert!(paths.len() >= 2, "the skill points at the skeleton's registry and its conformance test: {paths:?}");
+    for path in paths {
+        assert!(files.iter().any(|f| f.path == path), "the skill names `{path}`, which the skeleton has no file for");
+    }
+    let engine = |name: &str| files.iter().filter(|f| f.path.starts_with("crates/engine/")).any(|f| f.text.contains(name));
+    for name in [
+        "pub fn registry()",
+        "registry.register(",
+        "fn check_cancelled",
+        "fn with_key",
+        "fn bad_params",
+        "fn not_found",
+        "fn too_large",
+        "fn unavailable",
+        "fn internal",
+        "fn consent_required",
+        "fn consenting",
+        "fn call_typed",
+        "const EFFECTS",
+        "const REQUIRES",
+        "const MENU",
+        "const SHORTCUT",
+        "fn enabled(&self, session: &Session) -> Result<(), Why>",
+        "Why::new",
+        "pub fn states(&self)",
+        "deny_unknown_fields",
+        "BadParams",
+        "Caller::Test",
+        "ConsentRequired",
+        "pub fn check(self",
+    ] {
+        assert!(engine(name), "the skill names `{name}`, which the skeleton's engine doesn't have");
+    }
+    let everywhere = |name: &str| files.iter().any(|f| f.text.contains(name));
+    for name in [
+        "adversarial_params",
+        "pub fn temp_dir",
+        "every_command_gives_the_same_answer_on_every_surface",
+        "\"commands\"",
+        "\"--json\"",
+        "\"--yes\"",
+        "param: ",
+        "fix: ",
+        "tools/list",
+        "error [",
+    ] {
+        assert!(everywhere(name), "the skill names `{name}`, which the skeleton doesn't have");
+    }
+}
+
+/// The skills are copied as they are but for the README and `add-command`, whose commands name the
+/// app's CLI and its environment prefix: each consumer's copy carries its own.
+#[test]
+fn only_the_readme_and_add_command_are_templated_skills() {
+    let templated: Vec<&str> = ASSETS.iter().filter(|a| a.path.starts_with(VERBATIM) && a.is_template()).map(|a| a.path).collect();
+    assert_eq!(templated, [".claude/skills/README.md", ".claude/skills/add-command/SKILL.md", ".claude/skills/add-command/agents/openai.yaml"]);
+    let skill = asset(".claude/skills/add-command/SKILL.md");
+    let mut used = placeholders(skill.text);
+    used.sort_unstable();
+    used.dedup();
+    assert_eq!(used, ["cli", "env"], "the skill's placeholders: the app's CLI and its environment prefix");
+    for (project, hooks, cli, env, other) in
+        [(&APP_SWARM, &App as &dyn Hooks, "swarm-cli", "APP_SWARM", "gpu-cli"), (&GPU_SWARM, &Gpu, "gpu-cli", "GPU_SWARM", "swarm-cli")]
+    {
+        let text = render(project, hooks, skill).unwrap();
+        assert!(text.contains(&format!("`{cli} run <id> '<json params>'`")) && text.contains(&format!("`{env}_CONTROL_TOKEN`")), "{}", project.name);
+        assert!(placeholders(&text).is_empty() && !text.contains(other), "{}", project.name);
+        let yaml = render(project, hooks, asset(".claude/skills/add-command/agents/openai.yaml")).unwrap();
+        assert!(yaml.contains(&format!("add a {cli} command")), "{yaml}");
+    }
+    // A consumer that gives no `cli` is told which placeholder, as for any template.
+    let err = render(&APP_SWARM, &crate::Defaults, skill).unwrap_err();
+    assert!(err.starts_with(".claude/skills/add-command/SKILL.md: the project gives no value for `{{cli}}`"), "{err}");
+}
+
 /// `sync-assets` writes every copy and the manifest; `--check` passes on it, also with CRLF line
 /// endings, and fails on an edit, a deletion or a stale manifest until the next sync.
 #[test]

@@ -13,45 +13,87 @@ protocol and commands. Read this file first, then [docs/swarm-protocol.md](docs/
 | Read | Why |
 |---|---|
 | `docs/owner-directions.md` | **The owner's standing directions and decisions:** read it with this file |
-| `docs/architecture.md` | **The layers, how a command flows, typed contracts, the UI and automation:** read it before your first change |
 | `ROADMAP.md` | One page: the stage, the headline numbers, what's next |
 | `docs/gaps.md` | Every known shortfall, ranked: **the work list to pick from** |
 | `docs/roadmap.md` | Milestones, gates, **Current focus** |
 | `docs/scorecard.md` | Per area, what is done, partial and missing |
 | `docs/swarm-protocol.md` | The swarm protocol: roles, claims, tracking, gates, the coordinator's loop (a pinned copy) |
 | `docs/swarm.md` | This repo's part: machine setup, capabilities, its gate's kinds, each batch, CI |
+| `docs/app-architecture.md` | The contract every app keeps: layers, commands, one dispatch, the robustness rules (a pinned copy) |
+| `docs/architecture.md` | This repo's long form: its crates, how a command flows, where state lives, **Adding a command** |
 | `docs/development.md` | Build, test, run; how many builds a machine takes |
 | `docs/progress-docs.md` | How the progress docs are kept honest (a pinned copy) |
 | `docs/lessons.md` | The early mistakes swarms made and the guardrails now in place (a pinned copy) |
 
 ## 2. Workspace map
 
-The crates and their layers, generated from the layers table in `xtask/` (`Hooks::layers`;
-`cargo xtask layers` fails when this is stale, `--write` rewrites it):
+<!-- The layer map below is the default for a headless-first app, from the contract
+     (docs/app-architecture.md › Layers). It is this repo's to change: name the real crates, cut a
+     layer it has no use for, add the binaries. Keep it in step with each crate's
+     `[package.metadata.swarm] layer`, which `cargo xtask ci`'s `layers` check reads. -->
+
+Dependencies point down: a crate uses only strictly lower layers
+([docs/app-architecture.md](docs/app-architecture.md#layers)). The long form, with each crate and
+command, is [docs/architecture.md](docs/architecture.md). **Layering is enforced** by `cargo xtask
+layers`, a step of `ci`, from each manifest's layer (`Hooks::architecture`) or from the table in
+`xtask/` (`Hooks::layers`).
+
+| Layer | Path | What |
+|---|---|---|
+| 0 `model` | `crates/model/` | The types and parsers of everything read from outside (files, wire frames, user text). Hostile input, no I/O |
+| 1 `domain` | `crates/<area>/` | The libraries that do {{product}}'s work, one crate per area. No I/O |
+| 2 `sources` (optional) | `crates/<source>/` | Where data comes from: files, git, the network, a device. Each call with a deadline and a capped result. Cut it if {{product}} reads nothing from outside |
+| 3 `engine` | `crates/engine/` | The session, the command registry and the one dispatch |
+| 4 `automation` | `crates/automation/` | The transports: `serve`, the loopback socket, MCP. Thin adapters over the dispatch |
+| 5 `ui` | `crates/ui/` | The UI shell: toolkit code, drawing, input. A client of the engine, never a writer |
+| 6 `apps` | `apps/{{cli}}/`, `apps/<app>/` | The binaries: the CLI (`{{cli}}`) and the windowed app (`<app>`, with `init --app --ui`) |
+| outside | `crates/testkit/` | Temp dirs, fakes and hostile inputs (the package `<prefix>testkit`): a `[dev-dependencies]` entry only. The conformance run is swarm-core's (`swarm_core_testkit`, pinned beside it) |
+| outside | `xtask/` | `cargo xtask`: this repo's own commands (`ci`, …) and the swarm's, from swarm-core |
+
+The crates as they are, generated (`cargo xtask layers` fails when this is stale, `--write`
+rewrites it):
 
 <!-- crate-map:start (cargo xtask layers --write) -->
 <!-- crate-map:end -->
 
-**Layering is enforced** by `cargo xtask layers`, a step of `ci` ([docs/architecture.md](docs/architecture.md#layers)): a
-crate depends only on strictly lower layers, nothing below the UI layer uses a UI crate, and a
-new crate is registered in the table at the lowest layer it fits.
-
 ## 3. Golden rules
 
-1. **Never crash.** A bad file, input or parameter is an error the user or agent can act on, never
-   a panic. Non-test code doesn't `unwrap`, `expect` or `panic!`.
-2. **Typed contracts from the first commit.** Every boundary another tool or agent crosses
-   (commands' params and results, protocol messages, persisted state, errors) is a type, and
-   persisted state carries a version.
-3. **Tests are the gate.** Every change comes with tests; prefer ones that cross a real boundary.
-4. **Dependencies are deliberate.** Prefer the standard library and what `Cargo.lock` already has.
-5. **Everything is a command.** New behaviour is a typed engine command first; the UI, the CLI
-   (`{{cli}}`), the control channel and MCP call it by id, and consumers read its typed result,
-   never a `Value` by field ([docs/architecture.md](docs/architecture.md#how-a-command-flows)).
-6. **The UI is thin and data-driven.** Its state is plain data the control channel reads and sets;
-   what a pane draws is what a command returns, and a test checks they are equal.
-7. **Verify UI changes visually**: an offscreen snapshot or the app driven over its control
-   channel; attach the images to the PR.
+<!-- The ten below are the contract's headings, the same in every app; each one's text and the
+     check that holds it are in docs/app-architecture.md. Add this repo's own rules after them. -->
+
+The contract is [docs/app-architecture.md](docs/app-architecture.md): read it before your first
+change. Each rule names where it is written down.
+
+1. **[Layers](docs/app-architecture.md#layers).** A crate depends only on strictly lower layers,
+   and says its own in its manifest.
+2. **[Every action is a command](docs/app-architecture.md#every-action-is-a-command).** One entry
+   in one registry, with typed params and result, error codes, effects and requirements. No
+   surface-specific action.
+3. **[One dispatch](docs/app-architecture.md#one-dispatch).** The CLI, `serve`, the socket and MCP
+   are thin adapters over `Session::call`; adding a command edits no transport.
+4. **[The UI is a client](docs/app-architecture.md#the-ui-is-a-client).** It draws memory and calls
+   commands on workers; it never writes a file, starts a program or reads a `serde_json::Value`.
+   Its state is data `ui.inspect` and `ui.set` read and set, it draws what a command returns, its
+   colours come from the theme (an identifier's from a range's `pick`) and its words from the
+   catalog, and a change to it ships pictures.
+5. **[Never crash](docs/app-architecture.md#never-crash).** A bad file, input or parameter is an
+   error the user or agent can act on, never a panic. A crash's fix ships its regression test.
+6. **[Never hang on another program](docs/app-architecture.md#never-hang-on-another-program).**
+   Every child process starts in the process module, with deadlines, a capped output and its own
+   process group.
+7. **[Never hang on a lock](docs/app-architecture.md#never-hang-on-a-lock).** The app's own lock,
+   never `std::sync::Mutex`; one lock read per statement.
+8. **[State on disk](docs/app-architecture.md#state-on-disk).** Versioned, owned by one module,
+   written atomically, saved before memory changes.
+9. **[No secrets out](docs/app-architecture.md#no-secrets-out).** No result, log line or error
+   carries a secret value.
+10. **[Tests touch nothing real](docs/app-architecture.md#tests-touch-nothing-real).** Temp dirs, no
+    network, no installers, no tool the machine may lack.
+
+This repo's own, beyond the contract:
+
+11. **Tests are the gate.** Every change comes with tests; prefer ones that cross a real boundary.
+12. **Dependencies are deliberate.** Prefer the standard library and what `Cargo.lock` already has.
 
 ## 4. Picking work
 
@@ -75,6 +117,10 @@ Log your session and your work with `cargo xtask event` (the protocol's
 set `{{env}}_AGENT`.
 
 ## 5. Before you finish a task
+
+**A task that adds a command** follows the `add-command` skill (`.claude/skills/add-command`):
+the same steps every time, each ending in a check, with this repo's paths in
+[docs/architecture.md › Adding a command](docs/architecture.md#adding-a-command).
 
 ```sh
 cargo fmt --all
