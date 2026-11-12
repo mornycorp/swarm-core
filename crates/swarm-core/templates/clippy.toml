@@ -1,0 +1,24 @@
+# A starting point from swarm-core's templates (`cargo xtask swarm-core init`): this repo's
+# own now. The lint rules of docs/app-architecture.md: the test allowances (the deny headers in
+# every crate root cover production code only), the lock rule (Never hang on a lock) and the
+# code-health limits.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Never hang on a lock: std's mutex waits for ever on a deadlock. Use the app's own, which errors
+# out and names the lock instead. Say which it is in each `reason` once it exists (its path, and
+# its guard's).
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "use the app's own lock, which errors out on a deadlock instead of hanging (docs/app-architecture.md#never-hang-on-a-lock)" },
+    { path = "std::sync::MutexGuard", reason = "use the app's own lock's guard (docs/app-architecture.md#never-hang-on-a-lock)" },
+]
+
+# Code-health limits for production code: every crate root warns on these and allows them under
+# cfg(test); the gate's -D warnings makes them errors. A unit over a limit carries
+# `#[expect(clippy::…, reason = "…")]`.
+cognitive-complexity-threshold = 10
+too-many-lines-threshold = 60
+too-many-arguments-threshold = 6

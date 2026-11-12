@@ -290,6 +290,7 @@ pub const ASSETS: &[Asset] = &[
     Asset { path: ".github/ISSUE_TEMPLATE/bug.md", text: include_str!("../../assets/.github/ISSUE_TEMPLATE/bug.md") },
     Asset { path: ".github/ISSUE_TEMPLATE/task.md", text: include_str!("../../assets/.github/ISSUE_TEMPLATE/task.md") },
     Asset { path: ".github/pull_request_template.md", text: include_str!("../../assets/.github/pull_request_template.md") },
+    Asset { path: "docs/app-architecture.md", text: include_str!("../../assets/docs/app-architecture.md") },
     Asset { path: "docs/lessons.md", text: include_str!("../../assets/docs/lessons.md") },
     Asset { path: "docs/progress-docs.md", text: include_str!("../../assets/docs/progress-docs.md") },
     Asset { path: "docs/swarm-protocol.md", text: include_str!("../../assets/docs/swarm-protocol.md") },
