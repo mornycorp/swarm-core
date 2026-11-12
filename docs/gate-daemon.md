@@ -79,6 +79,9 @@ rerere replays.
   keeps of a PR goes when the PR merges or closes.
 - **One daemon a worktree** (`daemon.pid`, checked against the running processes): two would share
   the gate lock's name and overwrite each other's state. A dry run may run beside one.
+- **Gates are numbered on from the gate logs and the tracking branch**, whichever is higher: the
+  logs go when the target dir is cleaned, and numbering from them alone gave the timeline two
+  gates of one name.
 - **State** (`<target>/gate-daemon/state.json`): the heads noted, dropped and held, when each PR was
   first seen ready, its pause and its latest decisions; the off switch is the file `off` beside it.
   A head dropped or noted is not gated again; a push is a new head.
@@ -128,5 +131,6 @@ went red.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Gates are numbered on from the tracking branch's subs as well as the gate logs (mornycorp/swarm-core#45) |
 | 2026-11-12 | minor | The last suspect gated alone; the switch read before each gate; `--retry <pr>`; one daemon a worktree; the conflict flag only where to look; a `main-red` issue when `main` fails here; a failed re-draft held; counters kept across a restart; gates that don't run set the switch (mornycorp/swarm-core#45) |
 | 2026-11-12 | new | The gate daemon, from swarm-foundation's, over GitHub: no pipeline pause, a send-back by converting to a draft, `prwatch` reading its gates' failures as sending back only what a `sendback` names (mornycorp/swarm-core#44) |

@@ -169,20 +169,32 @@ pub fn merge_request_number(message: &str) -> Option<u64> {
     rest.split_whitespace().next()?.parse().ok()
 }
 
-/// The next gate's sub: `gate-<n>`, one past the highest `gate-<n>` a gate log in `names` (file
-/// names in the gate-logs directory) has, its reruns' included (`gate-12-rerun.log`); the periodic
-/// full gate's (`gate-full-…`) aren't numbered.
-pub fn next_sub(names: &[String]) -> String {
-    let n = names.iter().filter_map(|f| gate_number(f)).max().map_or(1, |n| n.saturating_add(1));
+/// The next gate's sub: `gate-<n>`, one past the highest `gate-<n>` among `names` (the file names
+/// in the gate-logs directory: `gate-12.log`, `gate-12-rerun.rc`) and `logged` (the subs the
+/// tracking branch holds: `gate-12`, `gate-12-rerun`); the periodic full gate's (`gate-full-…`)
+/// aren't numbered. The logs alone start again at `gate-1` when the target dir is cleaned, and
+/// the timeline would then hold two gates of one name: what was logged doesn't go with it.
+pub fn next_sub(names: &[String], logged: &[String]) -> String {
+    let n = names.iter().chain(logged).filter_map(|f| gate_number(f)).max().map_or(1, |n| n.saturating_add(1));
     format!("gate-{n}")
 }
 
-fn gate_number(file: &str) -> Option<u64> {
-    let rest = file.strip_prefix("gate-")?;
+/// The number of a numbered gate's log file or sub: `gate-12`, `gate-12.log`, `gate-12-rerun`.
+fn gate_number(name: &str) -> Option<u64> {
+    let rest = name.strip_prefix("gate-")?;
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     let after = rest.get(digits.len()..)?;
-    (after.starts_with('.') || after.starts_with('-')).then_some(())?;
+    (after.is_empty() || after.starts_with('.') || after.starts_with('-')).then_some(())?;
     digits.parse().ok()
+}
+
+/// The subs the tracking branch's `files` (each an instance's lines) name: every event's `sub`.
+pub fn logged_subs(files: &[(String, String)]) -> Vec<String> {
+    let sub = |line: &str| serde_json::from_str::<Value>(line).ok()?.get("sub")?.as_str().map(str::to_owned);
+    let mut subs: Vec<String> = files.iter().flat_map(|(_, text)| text.lines()).filter(|l| l.contains("\"sub\"")).filter_map(sub).collect();
+    subs.sort_unstable();
+    subs.dedup();
+    subs
 }
 
 /// What a gate run left in its records: its `<sub>.rc` and `<sub>-rerun.rc` (each `None` when it
@@ -411,8 +423,19 @@ mod tests {
     fn gates_are_numbered_on_from_the_logs() {
         let names: Vec<String> =
             ["gate-490.log", "gate-491-rerun.rc", "gate-full-0e2492f.log", "gate-x.log", "ready-1.log", "gate-12.rc"].map(String::from).into();
-        assert_eq!(next_sub(&names), "gate-492");
-        assert_eq!(next_sub(&[]), "gate-1");
+        assert_eq!(next_sub(&names, &[]), "gate-492");
+        assert_eq!(next_sub(&[], &[]), "gate-1");
+        // #45: a cleaned target dir has no logs; the gates the tracking branch holds still count,
+        // their reruns among them, and a full gate's or another helper's sub doesn't.
+        let files = vec![
+            ("pc-c00rd1".to_owned(), "{\"event\":\"sub.start\",\"sub\":\"gate-507\",\"t\":\"x\"}\n{\"event\":\"sub.stop\",\"sub\":\"gate-507\"}\nnot json \"sub\"\n".to_owned()),
+            ("mini-2".to_owned(), "{\"event\":\"sub.start\",\"sub\":\"gate-509-rerun\"}\n{\"event\":\"sub.start\",\"sub\":\"gate-full-abc1234\"}\n{\"event\":\"work\",\"issue\":7}\n".to_owned()),
+        ];
+        let logged = logged_subs(&files);
+        assert_eq!(logged, ["gate-507", "gate-509-rerun", "gate-full-abc1234"]);
+        assert_eq!(next_sub(&[], &logged), "gate-510");
+        assert_eq!(next_sub(&names, &logged), "gate-510", "the higher of the two");
+        assert_eq!(next_sub(&["gate-600.log".to_owned()], &logged), "gate-601");
     }
 
     #[test]
