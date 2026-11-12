@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (standing rules; a fresh context for a different task; every PR branched from `main`; a timeout repeated alone is proof; the review's checklist gains the robustness traps; the periodic full gate reads again under the machine lock) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (a take-over: `stop` frees a claim, a red `main` doesn't hold it, a local branch ahead is refused; standing rules; a fresh context for a different task; every PR branched from `main`; a timeout repeated alone is proof; the review's checklist gains the robustness traps; the periodic full gate reads again under the machine lock) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -267,13 +267,20 @@ request. Always pass `--repo {{github.repo}}` to gh.
 3. **Taking over.** A claim is stale, and may be taken over, only when the coordinator says so
    or it has been idle for 24 hours. The coordinator's say-so is
    `cargo xtask event release --issue <n> --of <the holder's instance> --reason stale` (or a
-   `released: <name>, …` comment), with a comment naming who takes it over. Idle means no event of
-   its holder on the issue, no claim comment and no commit on its branch for 24 hours (step 6).
+   `released: <name>, …` comment), with a comment naming who takes it over. A holder that logged
+   `stop` on the issue after its last `claim` or `work` holds nothing: its claim is free at once.
+   Idle means no event of its holder on the issue, no claim comment and no commit on its branch
+   for 24 hours (step 6).
    - `cargo xtask claim <n> --agent <your instance id> --take-over` takes it and keeps its work:
      it adopts the issue's open PR and its branch, and checks out the branch's head in your
      worktree with the commits kept. It logs `release --of <the old instance>` (unless that holder
      is released already), comments `released: <old name>, taken over by …`, and makes the claim:
-     the label, `claimed: <your name>, PR #<m>`, `claim` and `work`. It runs no periodic full gate.
+     the label, `claimed: <your name>, PR #<m>`, `claim` and `work`. It runs no periodic full gate,
+     and a red `main` doesn't hold it: the work goes on on a branch that exists, and nothing new
+     starts from `main`.
+   - A local branch of that name with commits origin's lacks is refused, before anything is
+     posted: taking it over would push the old holder's unpushed work, or lose it. Push or drop
+     those commits, then take over again.
    - A `status::blocked` label comes off when every issue its hold waits on is closed: those the
      `Needs` line names, and the newest comment saying `Blocked on …` or `Waiting for …`.
      Otherwise it stays, and the takeover says why. A held issue is idle by design: an idle
@@ -1214,6 +1221,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |
 | 2026-11-12 | minor | Standing rules, a section of their own: product first and tooling when it hurts twice, "wind down" means finish, decide don't ask, a heavy job run by hand waits for an idle gate, a quiet gate log is not a dead gate, stopping a shell on Windows leaves its children, long runs to a log rather than under a monitor (which stops them at its timeout), squash onto the merge base (lessons.md 15). Starting a worker: a different task gets a fresh context; the worker stops and names its next issue, and the coordinator clears its session or starts a fresh worker; a similar follow-on keeps its session. Picking work, step 4: a worker branches every PR from `main`, and stacks on another open PR (`ready --onto`) only when its change needs that PR's code (lessons.md 13). The periodic full gate, a real failure: a timeout repeated in the rerun alone is proof of a slowdown; time one unit against the last green commit, bisect with it, and measure the whole test once on the fix (lessons.md 14) (swarm-core#29) |
 | 2026-11-12 | minor | The architecture review's checklist: the robustness traps (lessons.md 5–12: a child process outside the process module or with no deadline, a second lock in one statement, a file read while drawing, defaults saved over unread state, memory changed before its save, a secret in a result, a discarded `Result`, a test in the real config dir); the two lessons the checklist already cited are 16 and 17 (swarm-core#28) |
 | 2026-11-12 | minor | The periodic full gate: holding the machine lock, it reads again: it steps aside for a `main` another gate verified while it waited, and begins again for a `main` that moved (sc#36) |
