@@ -666,8 +666,14 @@ On each finished pull request:
       tree with the stacked commit's. The same tree, on a base with nothing of `main` the gate
       didn't test, lands: `!N moved since stack (old → new) but its tree is the one gated
       (<how>): landing`, where `<how>` says whether it was restacked or the worker's own commit
-      is that tree already, and the stacked commit is pushed over the worker's. A move onto a newer `main`, or
-      to another tree (a new commit, a conflict), stops as before. An older record names
+      is that tree already, and the stacked commit is pushed over the worker's. A branch a worker
+      rebased onto a **newer `main`** lands without a re-gate when three things hold: its own
+      commits' patch-id is the stacked commit's, applied onto what the gate tested they are the
+      gated tree, and the newer `main` changes none of the PR's files. The stacked commit is then
+      pushed over it (`#N moved onto a newer main (old → new) but its patch is the one gated:
+      landing the gated commit`), and step 5's check holds what merges to the gated change. A
+      changed patch, a conflict, a newer `main` that touches the PR's files, or another tree (a
+      new commit) stops, saying which. An older record names
       no base to restack onto, so a moved branch in it stops. And the PR must be open: GitHub
       closes a PR whose base branch is deleted, so one stacked on the PR below it (its base that
       PR's head branch) was closed when that one merged, before `land` retargeted (on 2026-11-03
@@ -703,13 +709,18 @@ On each finished pull request:
    Then it closes the gate (`gate --stop`, which drops the lock). A rerun after a failure goes on
    from the PR that stopped (an already pushed branch isn't pushed again). Nothing runs on
    GitHub after a merge: CI is local (owner, 2026-11-05).
-   - **A red gate**. Read the failure's cause (the gate prints it, and its `.rc`
+   - **A red gate**. **Where the project turns it on** (`Hooks::gate_reruns`, sc#39; `--rerun`
+     for one run elsewhere), **the gate reruns once by itself**: in the same invocation, as
+     `gate-<n>-rerun`, a failure only at the tests that names its failed tests (each alone, as
+     `--rerun-failed` below does), else a transient failure (below) whole, both results printed;
+     a pass lands as `gate-<n>-rerun`, and `--no-rerun` turns it off for a run. When it still
+     fails, or the project doesn't turn it on, read the failure's cause (the gate prints it, and its `.rc`
      and `sub.stop` name it). A project's own causes (`Hooks::extra_causes`, read from the log
      before the shared ones) are `gpu`, the GPU or the desktop under load, and `python`, no Python
      for its oracle tests; a project without them never sees them.
      - **transient** (`memory`, `link`, `toolchain`, `git-temp`, and a project's `gpu`):
-       `--retry-transient` reruns the
-       whole gate once, as `gate-<n>-rerun`. `git-temp` includes git's `fatal:` about one of the
+       `--retry-transient` reruns the whole gate once, as `gate-<n>-rerun` (where the project
+       turns reruns on, the gate has done that itself). `git-temp` includes git's `fatal:` about one of the
        testkit's temporary repositories (`swarm-test-*`) inside a test: a fixture, not the
        change;
      - **the gate machine's setup** (a project's `python`): a rerun fails the same way, so none is
@@ -851,9 +862,12 @@ On each finished pull request:
      with, then `rc=<n>; cause=<cause>` (`memory`, `link`, `toolchain`, `git-temp` and a
      project's `gpu`: transient, a rerun may pass; a project's `python`: the machine's setup;
      `test`, `build`, `other`). A failed gate keeps the lock, as the coordinator
-     still owns the worktree; `--retry-transient` reruns a transient failure once, as
-     `gate-<n>-rerun`, and `--rerun-failed gate-<n>` reruns only its failed tests, alone, and
-     the steps they skipped, as `gate-<n>-rerun` too (step 3, a red gate).
+     still owns the worktree. Where the project turns reruns on (`Hooks::gate_reruns`; `--rerun`
+     for one run), it reruns once by itself: a failure only at the tests, its failed tests alone
+     and the steps they skipped; else a transient failure, the whole gate; as `gate-<n>-rerun`
+     either way (`--no-rerun` turns it off for a run). Elsewhere `--retry-transient` reruns a
+     transient failure once, as `gate-<n>-rerun`, and `--rerun-failed gate-<n>` reruns only its
+     failed tests, alone, and the steps they skipped, as `gate-<n>-rerun` too (step 3, a red gate).
      A gate needn't log `work` on the issue it checks; if it does, the issue stays awaiting merge
      on the Board: a helper's claim, work or stop never moves an issue.
      **A gate stays open through the merges it allows:**
@@ -1237,6 +1251,8 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-12 | minor | Parallel agents: on a machine where the coordinator gates, workers cap their builds' jobs (`CARGO_BUILD_JOBS`, `capacity`'s new `worker builds:` line, 4 unless the machine sets its own cost of a build), so a gate keeps memory for its own; a measurement window the coordinator calls is the exception. `ready` sets it on its builds where the project turns it on (`Hooks::worker_build_jobs`, off by default) on a `full-gate` machine, unless `CARGO_BUILD_JOBS` is set; `gate` sizes its own as before (sc#40) |
+| 2026-11-12 | minor | Gate reruns, a project's choice (`Hooks::gate_reruns`, off by default; `--rerun`, `--no-rerun` for one run): where on, a failed gate reruns once by itself, a failure only at the tests its failed tests alone and the steps they skipped, else a transient failure the whole gate; as `gate-<n>-rerun`, both results printed (sc#39) |
+| 2026-11-12 | minor | The coordinator's loop, `land`'s step 1: a branch a worker rebased onto a newer `main` since `stack` lands without a re-gate when its own commits' patch-id is the stacked commit's, applied onto what the gate tested they are the gated tree, and the newer `main` changes none of the PR's files; the stacked commit is pushed over it. A changed patch, a conflict or a newer `main` touching the PR's files stops, saying which (sc#37) |
 | 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |
 | 2026-11-12 | minor | Standing rules, a section of their own: product first and tooling when it hurts twice, "wind down" means finish, decide don't ask, a heavy job run by hand waits for an idle gate, a quiet gate log is not a dead gate, stopping a shell on Windows leaves its children, long runs to a log rather than under a monitor (which stops them at its timeout), squash onto the merge base (lessons.md 15). Starting a worker: a different task gets a fresh context; the worker stops and names its next issue, and the coordinator clears its session or starts a fresh worker; a similar follow-on keeps its session. Picking work, step 4: a worker branches every PR from `main`, and stacks on another open PR (`ready --onto`) only when its change needs that PR's code (lessons.md 13). The periodic full gate, a real failure: a timeout repeated in the rerun alone is proof of a slowdown; time one unit against the last green commit, bisect with it, and measure the whole test once on the fix (lessons.md 14) (swarm-core#29) |
 | 2026-11-12 | minor | The architecture review's checklist: the robustness traps (lessons.md 5–12: a child process outside the process module or with no deadline, a second lock in one statement, a file read while drawing, defaults saved over unread state, memory changed before its save, a secret in a result, a discarded `Result`, a test in the real config dir); the two lessons the checklist already cited are 16 and 17 (swarm-core#28) |

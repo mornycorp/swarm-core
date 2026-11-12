@@ -68,6 +68,13 @@ pub trait Hooks {
         (gate::Kind::Full, "the project plans no gate kind: unsure".to_owned())
     }
 
+    /// Whether a failed gate reruns once by itself (mornycorp/swarm-core#39): a failure only at the tests, its failed
+    /// tests alone, else a transient failure, the whole gate ([`gate`]'s `--rerun`, `--no-rerun`).
+    /// The default: no, as before (a rerun by `--retry-transient` or `gate --rerun-failed`).
+    fn gate_reruns(&self) -> bool {
+        false
+    }
+
     /// The build jobs a worker's `ready` gives its `ci` on a machine where gates run (#38), so a
     /// gate there keeps memory for its own build: `ready` sets `CARGO_BUILD_JOBS` to it on a
     /// machine with the `full-gate` capability ([`fullgate::capable`]) unless the environment

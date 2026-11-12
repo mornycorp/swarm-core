@@ -76,6 +76,9 @@ have defaults:
 
 - `gate_kind`: the gate a change needs (docs, tooling or full), from the consumer's own change
   planner. The default is full, unsure, so the coordinator smokes.
+- `gate_reruns`: whether a failed gate reruns once by itself: a failure only at the tests, its
+  failed tests alone; else a transient failure, the whole gate. Off by default; `gate --rerun` and
+  `--no-rerun` choose for one run.
 - `worker_build_jobs`: the build jobs `ready` gives its builds on a machine where gates run
   (`CARGO_BUILD_JOBS`; `capacity` suggests the number), so a gate keeps memory for its own. None
   by default: no cap.

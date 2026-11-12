@@ -149,8 +149,9 @@ gate analytics can read them:
   `commit`: a reader that colours `main`'s health may take `main=` as a pass of that commit.
 - **The merges** a gate allows are logged with its `sub`, between its `sub.start` and its
   `sub.stop`.
-- **A rerun** (`--retry-transient`, or `--rerun-failed <sub>`: the failed tests alone and the
-  steps they skipped) is a gate of its own, `<sub>-rerun`, its start note `rerun of <sub>: …`.
+- **A rerun** (`--retry-transient`; `--rerun-failed <sub>`: the failed tests alone and the
+  steps they skipped; or, where a project turns gate reruns on, the gate's own,
+  mornycorp/swarm-core#39) is a gate of its own, `<sub>-rerun`, its start note `rerun of <sub>: …`.
   **A gate of the same stack straight after a failure** is one too, whatever its `sub`
   (mornycorp/swarm-core#20): when the last gate in the coordinator's gate worktree failed (its
   `rc` not 0) and this gate tests the same PRs, in the same order, at the same heads (no new push
