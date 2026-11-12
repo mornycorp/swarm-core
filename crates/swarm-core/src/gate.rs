@@ -433,9 +433,8 @@ pub fn tree_refusal(root: &Path) -> Option<String> {
 
 /// Tracked files with a conflict marker at the start of a line (`git grep`: exit 1 is none).
 fn conflict_markers(root: &Path) -> Vec<String> {
-    let out = Command::new("git").current_dir(root).args(["grep", "-lE", "^(<<<<<<<|>>>>>>>) ", "--", "."]).stdin(Stdio::null()).output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).take(10).collect(),
+    match crate::process::git_status_output(root, &["grep", "-lE", "^(<<<<<<<|>>>>>>>) ", "--", "."], crate::process::GIT_DEADLINE) {
+        Ok((0, out)) => out.lines().map(str::to_owned).take(10).collect(),
         _ => Vec::new(),
     }
 }
