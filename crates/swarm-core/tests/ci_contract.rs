@@ -158,6 +158,28 @@ fn a_gate_of_the_same_tree_after_a_failure_is_its_rerun() {
     assert_eq!(gate::silent::rerun_in(&logs, &gated, "g-20-3"), None, "the last gate passed");
 }
 
+/// mornycorp/swarm-core#43: `gate --test-alone` runs only the named tests, each alone, with the
+/// tooling scope and no step after them, and its record is a pass only when every one ran: a
+/// docs gate of an empty diff would pass vacuously.
+#[test]
+fn tests_alone_run_only_those_tests_through_the_contract() {
+    let w = world("core-ci-contract-alone");
+    let hooks = FakeCi { record: w.record.clone(), fail: None, seen: Default::default() };
+    let tests = ["fake::replay d3d12_frame".to_owned(), "fake::golden overview".to_owned()];
+    let plan = gate::tests_alone("g-12", &tests).unwrap().unwrap();
+    assert_eq!(plan.kind, Kind::Tooling, "it builds, so it takes the machine lock");
+    let field = gate::kind_field(plan.kind, "2 tests alone");
+    let g = gate_of(&w, &hooks, plan.kind, &field, Some(&plan));
+    assert_eq!(gate::attempt(&g, "g-12", Some("verify main for g-11"), (1, None)), Ok((0, None)));
+    assert_eq!(
+        recorded(&w).last().map(String::as_str),
+        Some("ci|--changed|--base|origin/main|--test-alone|fake::replay d3d12_frame|--test-alone|fake::golden overview|--only|")
+    );
+    let rc = std::fs::read_to_string(w.target.join(gate::LOG_DIR).join("g-12.rc")).unwrap();
+    assert_eq!(gate::passed_head(&rc), Ok(w.head.as_str()), "{rc}");
+    assert!(rc.contains("rerun=fake::replay::d3d12_frame,fake::golden::overview"), "{rc}");
+}
+
 /// mornycorp/swarm-core#14: `ready`'s gate keeps its log, `.rc` and junit file as
 /// `ready-<head>.*`, and a test that failed under load is rerun once, alone, then the doctests and
 /// the steps it skipped, with `ready`'s own scope, as `ready-<head>-rerun`. Once a HEAD; a test

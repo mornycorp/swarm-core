@@ -1,6 +1,6 @@
 # The `ci` contract
 
-> **Last updated:** 2026-11-12 · **Change:** minor (a lock-file change tests what it reaches, #31)
+> **Last updated:** 2026-11-12 · **Change:** minor (`gate --test-alone`'s command line, #43; a lock-file change tests what it reaches, #31)
 
 Swarm Core's gate never builds or tests a consumer itself. It runs the consumer's own
 `cargo xtask ci`, as that consumer's xtask executable, and reads what it leaves behind. This page
@@ -18,6 +18,7 @@ anything else with exit code 2.
 | `gate`, docs and tooling kinds | `ci --changed --base origin/main` | the coordinator's worktree |
 | `gate`, smoke kind | `ci --smoke` | the coordinator's worktree |
 | `gate --full`, the periodic full gate | `ci` | the coordinator's worktree; the full gate's checkout |
+| `gate --test-alone`, named tests alone on the checkout as it is | `ci --changed --base origin/main --test-alone "<binary id> <test>"… --only ""` (the named tests alone, no other step) | the coordinator's worktree |
 | `gate --rerun-failed`, the full gate's rerun | the kind's arguments, then `--test-alone "<binary id> <test>"`… `[--doctests]` `--only <step>,<step>…` | as the run it reruns |
 | `ready` | `ci --changed --base <base>` | the PR's worktree |
 | `ready`'s rerun of failed tests (sc#14) | `ci --changed --base <base> --test-alone "<binary id> <test>"… --doctests --only <step>,<step>…` | the PR's worktree |
