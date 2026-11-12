@@ -83,7 +83,7 @@ fn steps(c: &Ci) -> Vec<String> {
     } else if c.changed.is_some() {
         &["fmt", "clippy", "test", "layers"]
     } else {
-        &["fmt", "clippy", "test", "layers", "wasm"]
+        &["fmt", "clippy", "test", "layers", "wasm", "conformance"]
     };
     match &c.only {
         None => gate.iter().map(|s| (*s).to_owned()).collect(),

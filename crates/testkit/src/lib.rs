@@ -1,9 +1,19 @@
-//! Test helpers for swarm-core: temp dirs and git repositories. A dev-dependency only.
+//! Test helpers for swarm-core and the apps built on it. A dev-dependency only.
+//!
+//! - [`temp_dir`] and [`git`]: temp dirs and git repositories.
+//! - [`conformance`]: the app architecture's conformance run (docs/app-architecture.md › Every
+//!   action is a command): an app implements [`conformance::App`], and one call proves every
+//!   command behaves the same on every surface. An app gets the run's improvements by bumping
+//!   its pin of this crate.
+//! - [`process`]: a program run to a deadline, for an app's CLI surface.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![warn(clippy::cognitive_complexity, clippy::too_many_lines)]
+#![cfg_attr(test, allow(clippy::cognitive_complexity, clippy::too_many_lines))]
 
+pub mod conformance;
 pub mod git;
+pub mod process;
 
 use std::path::PathBuf;
 
