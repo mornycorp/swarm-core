@@ -61,6 +61,9 @@
 //! - **The periodic full gate's runs** ([`full_attempt`]) are this gate's too, kind full, in the
 //!   full gate's checkout.
 //!
+//! - **The gate daemon** (`gate --daemon`, [`daemon`], mornycorp/swarm-core#44) runs the
+//!   coordinator's merge loop around this gate: stack, gate, land, and a failure's send-back.
+//!
 //! A `<sub>.rc` line is `rc=<n> … head=<sha> …`: `key=value` tokens split at whitespace and at
 //! `;`, and a rerun's adds `of=<sub> rerun=<test>,<test>`. The notes are a convention within
 //! tracking format v3, so a timeline viewer's gate analytics read them with no format change.
@@ -73,6 +76,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::stack::{self, Stack, short};
 use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock, test_runs};
 
+pub mod daemon;
 pub mod rerun;
 pub mod silent;
 pub mod untested;
@@ -93,10 +97,11 @@ const USAGE_TEXT: &str =
     "usage: cargo xtask gate --sub <id> --note \"<what it gates>\" [--merge <branch>]... [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] [--agent <instance>]
        cargo xtask gate --sub <id> --note \"<what it gates>\" --test-alone \"<binary id> <test>\"... [--wait] [--agent <instance>]
        cargo xtask gate --rerun-failed <sub> [--note \"<text>\"] [--wait] [--agent <instance>]
-       cargo xtask gate --stop <sub> --note \"<what it merged>\" [--agent <instance>]";
+       cargo xtask gate --stop <sub> --note \"<what it merged>\" [--agent <instance>]
+       cargo xtask gate --daemon [--once] [--dry-run] [--interval <s>] [--fold <s>] [--agent <id>] | --daemon --status | --daemon --stop [--note <why>] | --daemon --resume";
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
-pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --sub <id> --note \"<what>\" --test-alone \"<binary id> <test>\"… | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
+pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --sub <id> --note \"<what>\" --test-alone \"<binary id> <test>\"… | --rerun-failed <sub> | --stop <sub> --note \"<what>\" | --daemon [--once] [--dry-run] | --daemon --status | --stop | --resume";
 
 /// How long `--wait` waits for a disk under the floor at most ([`PATIENCE`]).
 const WAIT_MAX: Duration = Duration::from_secs(2 * 3600);
@@ -957,6 +962,10 @@ fn this_xtask() -> Result<PathBuf, String> {
 
 /// `cargo xtask gate …` ([`USAGE`]) for `project`.
 pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> Result<(), String> {
+    // The daemon (#44) is its own path: plain `gate` is unchanged.
+    if args.contains(&"--daemon") {
+        return daemon::run(project, hooks, root, args);
+    }
     let o = parse_args(args)?;
     let agent = lock::agent(project, o.agent.clone(), "gate")?;
     let note = o.note.clone().unwrap_or_default();

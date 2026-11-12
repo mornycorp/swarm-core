@@ -9,6 +9,11 @@
 //!   <sub>:`, whose result counts instead; `gate` writes it for a gate of the same unchanged stack
 //!   too, mornycorp/swarm-core#20); or a `sendback` event naming the PR. A `sendback`
 //!   after a gate's failure of the PR, before its next gate, is that same send-back.
+//! - **The gate daemon's gates** (`gate --daemon`, mornycorp/swarm-core#44: a start note that
+//!   begins `daemon gate:`, `regate of`, `bisect of` or `verify main for`, and their reruns) send
+//!   back only what their `sendback` events name: the daemon gates a stack of several PRs, blames
+//!   one for a failure (or none: it bisects, or `main` itself fails), and gates the rest again, so
+//!   a failed stack is no send-back of every PR in it.
 //! - **Once:** a send-back is due only when the agent's own file holds no `claim`, `work` or
 //!   `submit` of the issue since it (the worker logged its own `work`, or already resubmitted),
 //!   and `prwatch`'s record doesn't hold it (a `work` still queued, or a clock behind the
@@ -76,12 +81,23 @@ struct Gate {
     start: Option<String>,
     prs: Vec<u64>,
     rerun_of: Option<String>,
+    /// The gate daemon's (or a rerun of one): its failure sends back only what a `sendback` names.
+    daemon: bool,
     /// Its `sub.stop`: when, and its note.
     stop: Option<(String, String)>,
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
+}
+
+/// How the gate daemon starts a gate's note ([`crate::gate::daemon`]'s `gate_note`).
+const DAEMON_NOTES: [&str; 4] = ["daemon gate:", "regate of ", "bisect of ", "verify main for "];
+
+/// Whether a gate's start note is the gate daemon's, after any `rerun of <sub>:`.
+fn daemons(note: &str) -> bool {
+    let what = note.strip_prefix("rerun of ").and_then(|r| r.split_once(':')).map_or(note, |(_, rest)| rest).trim_start();
+    DAEMON_NOTES.iter().any(|start| what.starts_with(start))
 }
 
 /// Every PR `#<m>` a gate's own text names, each once: the start note before its first `;`,
@@ -114,6 +130,7 @@ fn gates(lines: &[Value]) -> BTreeMap<String, Gate> {
         match text(v, "event") {
             Some("sub.start") => {
                 (g.rerun_of, g.prs) = gated(note);
+                g.daemon = daemons(note);
                 g.start = Some(t);
             }
             Some("sub.stop") => {
@@ -129,6 +146,18 @@ fn gates(lines: &[Value]) -> BTreeMap<String, Gate> {
         for (sub, prs) in inherited {
             if let Some(g) = gates.get_mut(&sub) {
                 g.prs = prs;
+            }
+        }
+        // A rerun of a daemon's gate is the daemon's.
+        let daemons: Vec<String> = gates
+            .iter()
+            .filter(|(_, g)| !g.daemon)
+            .filter(|(_, g)| g.rerun_of.as_deref().and_then(|of| gates.get(of)).is_some_and(|of| of.daemon))
+            .map(|(sub, _)| sub.clone())
+            .collect();
+        for sub in daemons {
+            if let Some(g) = gates.get_mut(&sub) {
+                g.daemon = true;
             }
         }
     }
@@ -157,7 +186,8 @@ fn steps(lines: &[Value], mrs: &BTreeSet<u64>) -> Vec<(String, u64, Step)> {
             if let Some(t) = &g.start {
                 out.push((t.clone(), mr, Step::Gated));
             }
-            let failure = g.stop.as_ref().filter(|_| !rerun.contains(sub.as_str())).and_then(|(t, note)| Some((t, failed(note)?)));
+            // A daemon's failed stack sends back only what its `sendback` events name (#44).
+            let failure = g.stop.as_ref().filter(|_| !g.daemon && !rerun.contains(sub.as_str())).and_then(|(t, note)| Some((t, failed(note)?)));
             if let Some((t, why)) = failure {
                 out.push((t.clone(), mr, Step::Failed(format!("gate {sub} failed ({why})"))));
             }
@@ -317,6 +347,29 @@ mod tests {
         // A failure with no sendback is one too, its why the gate's result.
         let alone = coordinator.lines().take(2).collect::<Vec<_>>().join("\n");
         assert_eq!(send_backs(&files(&[("pc-c", &alone)]), &set(&[9]))[&9].why, "gate gate-mr9 failed (rc=101; cause=test)");
+    }
+
+    /// #44: the gate daemon gates three PRs, the stack fails, and it blames one: only that one
+    /// is sent back, by its `sendback`. The others are gated again, and their failed first gate,
+    /// or its own rerun, is no send-back; nor is a bisection's failed half, or a check of `main`.
+    #[test]
+    fn a_daemons_failed_stack_sends_back_only_the_pr_it_blames() {
+        let coordinator = r#"{"event":"sub.start","name":"gate","note":"daemon gate: #9 #10 #11; capacity=1 free=9.8; kind=smoke","sub":"gate-1","t":"2026-10-17T12:00:00Z"}
+{"event":"sub.stop","note":"rc=101; cause=test; kind=smoke","sub":"gate-1","t":"2026-10-17T12:10:00Z"}
+{"event":"sub.start","name":"gate","note":"rerun of gate-1: its failed tests alone (1), then the steps it skipped; kind=smoke","sub":"gate-1-rerun","t":"2026-10-17T12:10:30Z"}
+{"event":"sub.stop","note":"rc=101; cause=test; kind=smoke","sub":"gate-1-rerun","t":"2026-10-17T12:12:00Z"}
+{"event":"sendback","issue":8,"mr":10,"note":"cause=test: its test fails","sub":"gate-1","t":"2026-10-17T12:12:30Z"}
+{"event":"sub.start","name":"gate","note":"regate of gate-1: #9 #11; capacity=1 free=9.8; kind=smoke","sub":"gate-2","t":"2026-10-17T12:13:00Z"}
+{"event":"sub.stop","note":"rc=101; cause=build; kind=smoke","sub":"gate-2","t":"2026-10-17T12:20:00Z"}
+{"event":"sub.start","name":"gate","note":"bisect of gate-2: #9; kind=smoke","sub":"gate-3","t":"2026-10-17T12:21:00Z"}
+{"event":"sub.stop","note":"rc=0; kind=smoke","sub":"gate-3","t":"2026-10-17T12:30:00Z"}"#;
+        let backs = send_backs(&files(&[("pc-c", coordinator)]), &set(&[9, 10, 11]));
+        assert_eq!(backs.keys().copied().collect::<Vec<_>>(), [10], "{backs:?}");
+        assert_eq!((backs[&10].t.as_str(), backs[&10].why.as_str(), backs[&10].issue), ("2026-10-17T12:12:30Z", "cause=test: its test fails", Some(8)));
+        // The same stack gated by hand is a send-back of each, as before.
+        let by_hand = coordinator.lines().take(2).collect::<Vec<_>>().join("\n").replace("daemon gate: ", "local gate: ");
+        assert_eq!(send_backs(&files(&[("pc-c", &by_hand)]), &set(&[9, 10, 11])).len(), 3);
+        assert!(daemons("rerun of gate-4: daemon gate: #1 #2") && daemons("verify main for gate-1") && !daemons("local gate: #9 (regate of the last)"));
     }
 
     #[test]

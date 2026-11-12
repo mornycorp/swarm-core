@@ -193,6 +193,12 @@ instead of merging it in two ways, and a reader may count both as a **send-back*
   gates those of the gate it reruns. A coordinator that just gates the same unchanged stack
   again is rerunning it, and `gate` says so ([Gates](#gates), a rerun), so the rule stays the
   reader's one: older files hold silent reruns with no note, which read as send-backs.
+  **The gate daemon's gates are the exception** (mornycorp/swarm-core#44): a gate whose start
+  note begins `daemon gate:`, `regate of <sub>:`, `bisect of <sub>:` or `verify main for <sub>`
+  (after any `rerun of <sub>:`), and a rerun of one, sends back only the PRs its `sendback`
+  events name. The daemon gates a stack of several PRs, blames one for a failure (or none: it
+  bisects, or `main` itself fails) and gates the rest again; its note names only the PRs that
+  gate gates, so a regate never names the PR it dropped.
 - **A `sendback` event** (`sendback --issue <n> --mr <m> --note "<why>"`, [the swarm protocol ›
   The coordinator's loop](../crates/swarm-core/assets/docs/swarm-protocol.md#the-coordinators-loop)).
   A conflict at `stack`, before any gate ran, is one: its note starts `cause=conflict`. Its cause
@@ -252,6 +258,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Send-backs: a gate daemon's gate (a start note beginning `daemon gate:`, `regate of`, `bisect of` or `verify main for`) that fails sends back only the PRs its `sendback` events name; no format change (mornycorp/swarm-core#44) |
 | 2026-11-12 | minor | The periodic full gate: a `superseded:` stop also says `main` was verified, or moved, while it waited for the machine lock (mornycorp/swarm-core#36); no format change |
 | 2026-11-04 | minor | Gates and Send-backs: a gate of the same PRs at the same heads onto the same `main` straight after the last gate failed begins its start note `rerun of <sub>:` itself, so a silent rerun of a flake is no send-back; no format change (mornycorp/swarm-core#20) |
 | 2026-11-04 | minor | Gates: a `submit` whose note begins `no-ci` was readied without its author's `ci --changed` (`ready --no-ci`), and the gate kind `changed` gates a stack holding one; no format change (mornycorp/swarm-core#18) |

@@ -95,6 +95,15 @@ pub trait Hooks {
         false
     }
 
+    /// Whether the gate daemon checks `main` before sending a PR back for a stack's first failure
+    /// at its tests (mornycorp/swarm-core#44): it runs the failed tests alone on `main`, and when
+    /// they fail there too (a GPU driver update, a machine's own fault) it sets its off switch and
+    /// sends no PR back. It costs a run of those tests per failed stack. The default: no (the
+    /// failure is blamed on the stack's PRs).
+    fn verify_main(&self) -> bool {
+        false
+    }
+
     /// The project's own cause of a failed gate, read from its `log` before the machine's
     /// ([`gate::classify`]), such as `gpu` (the GPU or the desktop under load) and `python` (no
     /// Python for its oracle tests). The default: none.
