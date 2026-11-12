@@ -322,6 +322,12 @@ pub fn mark_ready(project: &Project, n: u64) -> Result<(), String> {
     with_retries(RETRY_PAUSE, || gh_once(project, &["pr", "ready", &n, "--repo", repo])).map(drop)
 }
 
+/// Convert pull request `node_id` to a draft (GitHub has no REST call for it).
+pub fn convert_to_draft(project: &Project, node_id: &str) -> Result<(), String> {
+    const TO_DRAFT: &str = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { number isDraft } } }";
+    graphql(project, TO_DRAFT, &[("id", node_id)]).map(drop)
+}
+
 /// Rebase pull request `node_id`'s branch onto its base on the server, only while its head is
 /// still `head`: `Ok(Some(why))` when GitHub refuses the rebase (a conflict, merge commits).
 pub fn rebase_pr(project: &Project, node_id: &str, head: &str) -> Result<Option<String>, String> {

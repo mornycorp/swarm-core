@@ -34,7 +34,8 @@
 //!   Progress filled in and its branch not `progress-*` ([`ready_line`]); its line carries its head
 //!   commit, so a push is news too. A PR whose branch holds no work against its base
 //!   ([`crate::empty`]: no commits of its own, only claim commits, or an empty
-//!   diff) is `ready but empty`, not `ready`. One GitHub call a poll, every `--interval` seconds
+//!   diff) is `ready but empty`, not `ready`, and is put back to draft with a comment, once per
+//!   head (`redrafted: …`; [`redraft`], mornycorp/swarm-core#42), unless `--no-redraft`. One GitHub call a poll, every `--interval` seconds
 //!   (default 120), and each PR's head checked once. How it reports is the project's
 //!   ([`ReadyWatch`]): a line per PR as it becomes ready or is pushed (`Stream`), or it **exits**
 //!   as soon as one does, printing them, against the record of what it last reported (`Exit`); then
@@ -51,6 +52,7 @@ use crate::needs::{self, Need, Ref};
 use crate::project::ReadyWatch;
 use crate::{Project, event, github};
 
+pub mod redraft;
 pub mod sendback;
 
 /// Shortest poll interval, in seconds.
@@ -398,9 +400,32 @@ fn emptiness(root: &Path, v: &Value, verdicts: &mut BTreeMap<String, Option<Stri
     Ok(why)
 }
 
-/// The repository's open PRs ready to gate, one line each ([`ready_says`]).
-fn ready_mrs(project: &Project, root: &Path, verdicts: &mut BTreeMap<String, Option<String>>) -> Result<Vec<String>, String> {
-    let mut lines = Vec::new();
+/// What `--ready` says of a PR it put back to draft: no longer ready, so no `ready:` line.
+pub fn redrafted_says(line: &str, why: &str, extra: &str) -> String {
+    format!("redrafted: {line}: {why}; put back to draft, with a note{extra}")
+}
+
+/// What one ready PR's line is, given whether it holds work (`empty`: why not) and, for an empty
+/// one, what re-drafting it came to (`outcome`; `None` with `--no-redraft`): the line, and
+/// whether it is still ready.
+fn assess(line: &str, empty: Option<&str>, outcome: Option<redraft::Outcome>) -> (String, bool) {
+    match (empty, outcome) {
+        (Some(why), Some(redraft::Outcome::Redrafted(extra))) => (redrafted_says(line, why, &extra), false),
+        (Some(why), Some(redraft::Outcome::Left(left))) => (ready_says(line, Some(&format!("{why} ({left})"))), true),
+        (empty, _) => (ready_says(line, empty), true),
+    }
+}
+
+/// The repository's open PRs ready to gate, one line each ([`ready_says`]), and the lines of
+/// those `redrafts` put back to draft for holding no work ([`redraft`]; none with `None`, which
+/// only reports).
+fn ready_mrs(
+    project: &Project,
+    root: &Path,
+    verdicts: &mut BTreeMap<String, Option<String>>,
+    mut redrafts: Option<&mut redraft::Redrafts>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let (mut ready, mut redrafted) = (Vec::new(), Vec::new());
     for v in github::open_prs(project, None)? {
         let Some(line) = ready_line(&v) else { continue };
         // A check that fails says so and reads as ready: the gate still sees the PR.
@@ -408,15 +433,27 @@ fn ready_mrs(project: &Project, root: &Path, verdicts: &mut BTreeMap<String, Opt
             eprintln!("prwatch: couldn't check whether {line} holds work: {e}");
             None
         });
-        lines.push(ready_says(&line, empty.as_deref()));
+        let outcome = match (&empty, redrafts.as_deref_mut()) {
+            (Some(why), Some(redrafts)) => Some(redraft::redraft(redrafts, &v, why, &mut redraft::Live(project))),
+            _ => None,
+        };
+        let (says, still_ready) = assess(&line, empty.as_deref(), outcome);
+        if still_ready { ready.push(says) } else { redrafted.push(says) }
     }
-    Ok(lines)
+    Ok((ready, redrafted))
+}
+
+/// The record of the heads `--ready` re-drafted, unless it only reports (`--no-redraft`).
+fn redrafts(root: &Path, every: Every) -> Option<redraft::Redrafts> {
+    every.redraft.then(|| redraft::Redrafts::load(event::common_dir(root).join(redraft::RECORD)))
 }
 
 /// How `--ready` polls: every `interval`, for at most `max` when given (`Exit` defaults it).
 #[derive(Clone, Copy, Debug)]
 struct Every {
     once: bool,
+    /// Put a ready PR that holds no work back to draft (not with `--no-redraft`).
+    redraft: bool,
     interval: Duration,
     max: Option<Duration>,
 }
@@ -432,10 +469,13 @@ fn watch_ready(project: &Project, root: &Path, every: Every) -> Result<(), Strin
 /// `Stream`: say each PR that becomes ready (or ready but empty), or is pushed, once.
 fn stream_ready(project: &Project, root: &Path, every: Every) -> Result<(), String> {
     let (mut seen, mut verdicts) = (BTreeSet::new(), BTreeMap::new());
+    let mut redrafts = redrafts(root, every);
     let started = std::time::Instant::now();
     loop {
-        match ready_mrs(project, root, &mut verdicts) {
-            Ok(now) => {
+        match ready_mrs(project, root, &mut verdicts, redrafts.as_mut()) {
+            Ok((now, redrafted)) => {
+                // Each is said once: its head is in the record, and it is a draft now.
+                redrafted.iter().for_each(|l| println!("{l}"));
                 for l in newly_ready(&seen, &now) {
                     println!("{l}");
                 }
@@ -461,10 +501,16 @@ fn load_ready(path: &Path) -> BTreeSet<String> {
 fn exit_on_ready(project: &Project, root: &Path, record: &Path, every: Every) -> Result<(), String> {
     let max = every.max.unwrap_or(Duration::from_secs(240 * 60));
     let mut verdicts = BTreeMap::new();
+    let mut redrafts = redrafts(root, every);
     let started = std::time::Instant::now();
     loop {
         let seen = load_ready(record);
-        match ready_mrs(project, root, &mut verdicts) {
+        // A PR put back to draft is said, and is no reason to exit: nothing is ready to gate.
+        let polled = ready_mrs(project, root, &mut verdicts, redrafts.as_mut()).map(|(now, redrafted)| {
+            redrafted.iter().for_each(|l| println!("{l}"));
+            now
+        });
+        match polled {
             Ok(now) if every.once => {
                 let new = newly_ready(&seen, &now);
                 for l in &now {
@@ -508,7 +554,8 @@ fn which_agent(project: &Project, flag: Option<String>, env_agent: Option<String
 }
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
-pub const USAGE: &str = "cargo xtask prwatch [--agent <id>] [--once] [--interval <seconds>] | --ready [--once] [--interval <seconds>] [--max <minutes>]";
+pub const USAGE: &str =
+    "cargo xtask prwatch [--agent <id>] [--once] [--interval <seconds>] | --ready [--once] [--interval <seconds>] [--max <minutes>] [--no-redraft]";
 
 /// What `prwatch` was asked: one agent's PRs, or every ready one; once, or every `interval`
 /// seconds (for at most `max` minutes, with `--ready`).
@@ -519,6 +566,8 @@ struct Args {
     ready: bool,
     interval: Option<u64>,
     max: Option<u64>,
+    /// `--no-redraft`: `--ready` only reports a ready PR that holds no work.
+    no_redraft: bool,
 }
 
 fn parse_args(args: &[&str]) -> Result<Args, String> {
@@ -529,6 +578,7 @@ fn parse_args(args: &[&str]) -> Result<Args, String> {
             "--agent" => out.agent = it.next().map(|s| (*s).to_owned()),
             "--once" => out.once = true,
             "--ready" => out.ready = true,
+            "--no-redraft" => out.no_redraft = true,
             "--interval" => {
                 out.interval = Some(it.next().and_then(|s| s.parse::<u64>().ok()).ok_or("--interval takes seconds")?);
             }
@@ -541,16 +591,19 @@ fn parse_args(args: &[&str]) -> Result<Args, String> {
 
 /// `cargo xtask prwatch …` ([`USAGE`]) for `project`.
 pub fn run(project: &Project, root: &Path, args: &[&str]) -> Result<(), String> {
-    let Args { agent, once, ready, interval, max } = parse_args(args)?;
+    let Args { agent, once, ready, interval, max, no_redraft } = parse_args(args)?;
     if ready {
         if agent.is_some() {
             return Err("prwatch: --ready watches every open PR, not one agent's: drop --agent".to_owned());
         }
         let interval = Duration::from_secs(interval.unwrap_or(120).max(MIN_INTERVAL));
-        return watch_ready(project, root, Every { once, interval, max: max.map(|m| Duration::from_secs(m.saturating_mul(60))) });
+        return watch_ready(project, root, Every { once, redraft: !no_redraft, interval, max: max.map(|m| Duration::from_secs(m.saturating_mul(60))) });
     }
     if max.is_some() {
         return Err("prwatch: --max goes with --ready".to_owned());
+    }
+    if no_redraft {
+        return Err("prwatch: --no-redraft goes with --ready".to_owned());
     }
     let agent = which_agent(project, agent, project.env("AGENT"))?;
     watch_agent(project, root, &agent, once, Duration::from_secs(interval.unwrap_or(150).max(MIN_INTERVAL)))
@@ -606,10 +659,11 @@ mod tests {
     fn arguments_parse_as_they_did() {
         assert_eq!(parse_args(&[]).unwrap(), Args::default());
         let a = parse_args(&["--agent", "m-1", "--once", "--interval", "60"]).unwrap();
-        assert_eq!(a, Args { agent: Some("m-1".into()), once: true, ready: false, interval: Some(60), max: None });
+        assert_eq!(a, Args { agent: Some("m-1".into()), once: true, ready: false, interval: Some(60), max: None, no_redraft: false });
         assert_eq!(parse_args(&["--ready", "--max", "30"]).unwrap().max, Some(30));
         assert_eq!(parse_args(&["--max", "x"]).unwrap_err(), "--max takes minutes");
         assert!(parse_args(&["--ready"]).unwrap().ready);
+        assert!(parse_args(&["--ready", "--no-redraft"]).unwrap().no_redraft && !parse_args(&["--ready"]).unwrap().no_redraft);
         assert_eq!(parse_args(&["--agent"]).unwrap().agent, None, "no value: asked for later");
         assert_eq!(parse_args(&["--interval", "x"]).unwrap_err(), "--interval takes seconds");
         assert!(parse_args(&["--bogus"]).unwrap_err().contains("unknown argument `--bogus`"));
@@ -787,6 +841,17 @@ not json
         assert_eq!(ready_says("#10 PR (10-real)", None), "ready: #10 PR (10-real)");
         let says = ready_says("#9 PR (9-empty)", Some(&why));
         assert!(says.starts_with("ready but empty: #9 PR (9-empty): it holds only its claim commit") && says.ends_with("close the PR"), "{says}");
+        // What becomes of it: re-drafted, it is no longer ready; left (once a head), it still is,
+        // with why; and with `--no-redraft`, or work in it, the line is as it was.
+        let line = "#9 PR (9-empty)";
+        assert_eq!(
+            assess(line, Some("empty"), Some(redraft::Outcome::Redrafted(String::new()))),
+            ("redrafted: #9 PR (9-empty): empty; put back to draft, with a note".to_owned(), false)
+        );
+        let (left, still) = assess(line, Some("empty"), Some(redraft::Outcome::Left(redraft::AGAIN.to_owned())));
+        assert!(still && left.starts_with("ready but empty: #9 PR (9-empty): empty (re-drafted once at this head already: not again); "), "{left}");
+        assert_eq!(assess(line, Some("empty"), None), (ready_says(line, Some("empty")), true));
+        assert_eq!(assess(line, None, None), ("ready: #9 PR (9-empty)".to_owned(), true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -823,6 +888,7 @@ not json
         assert!(run(&P, root, &["--agent", "../x", "--once"]).is_err());
         assert!(run(&P, root, &["--ready", "--max", "soon"]).unwrap_err().contains("--max"));
         assert!(run(&P, root, &["--agent", "pc-1", "--max", "5"]).unwrap_err().contains("--max goes with --ready"));
+        assert!(run(&P, root, &["--agent", "pc-1", "--no-redraft"]).unwrap_err().contains("--no-redraft goes with --ready"));
     }
 
     /// `--agent`, else the project's `{prefix}_AGENT`, as `cargo xtask event` takes it.

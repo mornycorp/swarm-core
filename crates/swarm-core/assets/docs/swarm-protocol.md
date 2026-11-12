@@ -132,6 +132,7 @@ when it moved during the gate, it rebases again and pushes without a second gate
 diff is unchanged, gates again if it changed, and stops before pushing on a conflict, naming the
 files (resolve them and run ready again). Then it pushes, marks the PR ready for review (its
 checks start) and logs `submit`. Do not merge.
+Keep your PR a draft until then: `ready` is what marks it ready, never `gh pr ready` or the button.
 From your first submit on, watch your PRs with `cargo xtask prwatch --agent <your instance id>`
 (under your harness's monitor, so each line it prints reaches you; else as a background
 process), and run it with `--once` whenever you wake. Act on what it says at once: a merged base
@@ -949,8 +950,14 @@ overnight on 2026-10-18 for that reason. So (owner, 2026-10-19):
 
   A PR whose
   branch holds no work (no commits of its own, only its claim commit or an empty diff) is
-  `ready but empty: #<m> …`, not `ready:`: `stack` and `land` refuse it, so close it or send it
-  back rather than gate it. Each line names the PR's head commit (`ready: #<m> <sha> <branch> ·
+  `ready but empty: #<m> …`, not `ready:`: `stack` and `land` refuse it. **The watch puts it
+  back to draft itself**, with a comment saying why and what to do, and says `redrafted: #<m> …`
+  (sc#42): a PR is ready only by `cargo xtask ready`, and one marked ready by hand (`gh pr
+  ready`, the button) with nothing in it would otherwise reach a gate. It does this once per
+  head: a PR marked ready again at the same head stays `ready but empty` and is the
+  coordinator's to close or send back; a push is a new head. A PR from a fork is only
+  reported, and `--no-redraft` only reports any. A re-drafted PR is no reason for `Exit` to
+  exit. Each line names the PR's head commit (`ready: #<m> <sha> <branch> ·
   <title>`), so a PR pushed again is a new line. Re-arm it after
   every merge and after a restart; `--once` lists the ready PRs and exits (with `Exit`, marking
   the new or pushed ones and leaving the record alone).
@@ -1235,6 +1242,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Staying awake and Starting a worker: `prwatch --ready` puts a PR that is ready but holds no work back to draft with a comment, once per head, and says `redrafted:`; `--no-redraft` only reports; a PR from a fork is only reported; a worker keeps its PR a draft until `ready` (sc#42) |
 | 2026-11-12 | minor | Gate reruns, a project's choice (`Hooks::gate_reruns`, off by default; `--rerun`, `--no-rerun` for one run): where on, a failed gate reruns once by itself, a failure only at the tests its failed tests alone and the steps they skipped, else a transient failure the whole gate; as `gate-<n>-rerun`, both results printed (sc#39) |
 | 2026-11-12 | minor | The coordinator's loop, `land`'s step 1: a branch a worker rebased onto a newer `main` since `stack` lands without a re-gate when its own commits' patch-id is the stacked commit's, applied onto what the gate tested they are the gated tree, and the newer `main` changes none of the PR's files; the stacked commit is pushed over it. A changed patch, a conflict or a newer `main` touching the PR's files stops, saying which (sc#37) |
 | 2026-11-12 | minor | Picking work › Taking over: a holder's own `stop` after its last `claim` or `work` frees its claim at once; a red `main` doesn't hold a take-over, whose work goes on on its branch; a local branch with commits origin's lacks is refused, not kept with a warning (sc#34) |

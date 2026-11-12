@@ -33,8 +33,10 @@ Rules you must keep (AGENTS.md, docs/swarm-protocol.md):
   each xtask command unfiltered, or start the shell with `set -o pipefail`.
 
 Step 1: is anything ready? `cargo xtask prwatch --ready --once`. If it lists no `ready:` PR, say
-"nothing ready" in one line, log nothing, and stop. A PR it calls `ready but empty` is never
-stacked: note on it "ready but empty: finish the work or close it", and leave it.
+"nothing ready" in one line, log nothing, and stop. A PR it calls `redrafted` needs nothing: the
+watch put it back to draft and commented. One it still calls `ready but empty` (re-drafted once at
+that head already, or from a fork) is never stacked: note on it "ready but empty: finish the work
+or close it", and leave it.
 
 Step 2: is another coordinator at it? `cargo xtask lock show`. If someone holds the gate lock,
 say so in one line and stop.
