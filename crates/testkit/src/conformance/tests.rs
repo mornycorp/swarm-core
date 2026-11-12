@@ -29,6 +29,7 @@ enum Fault {
     McpConsents,
     StatesDifferOnServe,
     LockedRunsOnCli,
+    RunsThoughCancelled,
     LockedOtherReasonOnSocket,
     NoStateOnCli,
     DisabledNotUnavailable,
@@ -47,12 +48,14 @@ struct Fake {
     names_type_key: bool,
     /// Whether the app opts out of the run requiring that key ([`App::names_key_for_wrong_type`]).
     opts_out_of_type_key: bool,
+    /// Whether the app can make a call that is cancelled before it runs ([`App::cancelled`]).
+    cancels: bool,
     surfaces: Vec<Surface>,
 }
 
 impl Fake {
     fn good() -> Fake {
-        Fake { fault: None, names_type_key: true, opts_out_of_type_key: false, surfaces: Surface::ALL.to_vec() }
+        Fake { fault: None, names_type_key: true, opts_out_of_type_key: false, cancels: false, surfaces: Surface::ALL.to_vec() }
     }
 
     fn with(fault: Fault) -> Fake {
@@ -212,6 +215,31 @@ impl App for Fake {
     fn enabled(&self, surface: Surface) -> Option<Result<Vec<Enabled>, String>> {
         (surface != Surface::Mcp && self.surfaces.contains(&surface)).then(|| Ok(self.states(surface)))
     }
+
+    /// Only the session's own call can be cancelled from the start.
+    fn cancelled(&self, call: Call<'_>) -> Option<Outcome> {
+        if !self.cancels || call.surface != Surface::InProcess {
+            return None;
+        }
+        Some(if self.is(Fault::RunsThoughCancelled) && call.id == "demo.echo" { self.call(call) } else { Fake::failure("cancelled", None) })
+    }
+}
+
+/// A cancelled call fails `cancelled` on the surfaces that can make one; an app that makes none
+/// (the default) has nothing checked, and one whose command runs all the same fails the rule.
+#[test]
+fn a_cancelled_call_is_cancelled_where_the_app_can_cancel_one() {
+    let cancels = Fake { cancels: true, ..Fake::good() };
+    let with = run(&cancels).unwrap_or_else(|v| panic!("{v}"));
+    let without = run(&Fake::good()).unwrap_or_else(|v| panic!("{v}"));
+    // `demo.echo`, `demo.ping` and `demo.write` in process; `demo.locked` is disabled.
+    assert_eq!(with.calls, without.calls + 3);
+    let broken = run(&Fake { cancels: true, ..Fake::with(Fault::RunsThoughCancelled) }).unwrap_err();
+    let lines: Vec<String> = broken.0.iter().map(ToString::to_string).collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("[cancelled] demo.echo on in-process: a call cancelled before it ran: it succeeded with "), "{lines:?}");
+    assert!(lines[0].ends_with("but should fail `cancelled`"), "{lines:?}");
+    assert_eq!(Rule::Cancelled.to_string(), "cancelled");
 }
 
 #[test]

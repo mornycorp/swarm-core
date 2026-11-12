@@ -233,6 +233,33 @@ pub(super) fn over_cap(app: &dyn App, commands: &[CommandInfo], found: &mut Foun
     }
 }
 
+/// `cancelled`: each enabled command, called with valid params and consent but cancelled before
+/// it runs, fails `cancelled` on every surface the app can make such a call through
+/// ([`App::cancelled`]). A command whose schema the run can't build params of is left out: the
+/// `examples` rule says so. The calls made.
+pub(super) fn cancelled(app: &dyn App, commands: &[CommandInfo], disabled: &Disabled, found: &mut Found) -> usize {
+    let expect = Expect { rule: Rule::Cancelled, code: "cancelled", key: Key::Any };
+    let mut calls = 0;
+    for command in commands.iter().filter(|c| !disabled.contains_key(&c.id)) {
+        let Some(params) = values::valid_params(&command.params).ok().and_then(|all| all.into_iter().next()) else { continue };
+        for surface in app.surfaces().into_iter().filter(|s| app.accepts(*s, &params)) {
+            let call = Call { surface, id: &command.id, params: &params, consent: true };
+            match catch_unwind(AssertUnwindSafe(|| app.cancelled(call))) {
+                Ok(None) => {}
+                Ok(Some(outcome)) => {
+                    calls += 1;
+                    expect.judge(found, &command.id, surface, "a call cancelled before it ran", &outcome);
+                }
+                Err(payload) => {
+                    calls += 1;
+                    found.add(Rule::NoPanic, &command.id, Some(surface), format!("the cancelled call panicked: {}", panic_message(&*payload)));
+                }
+            }
+        }
+    }
+    calls
+}
+
 /// A command's state, as a message shows it.
 fn show_state(why: Option<&Failure>) -> String {
     match why {

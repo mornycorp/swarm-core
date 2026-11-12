@@ -59,6 +59,13 @@ fn via_session(id: &str, params: &Value, consent: bool) -> Outcome {
     session().call(id, params.clone(), &opts).map_err(|e| Failure { code: e.code.to_string(), remediation: e.remediation, key: e.key })
 }
 
+/// The session's call with its cancel token already set: cancelled before it runs.
+fn via_session_cancelled(id: &str, params: &Value, consent: bool) -> Outcome {
+    let opts = Options { consent }.call_opts(Caller::Test);
+    opts.cancel.cancel();
+    session().call(id, params.clone(), &opts).map_err(|e| Failure { code: e.code.to_string(), remediation: e.remediation, key: e.key })
+}
+
 fn via_serve(id: &str, params: &Value, consent: bool) -> Outcome {
     let request = json!({"id": 1, "method": id, "params": params});
     let mut out = Vec::new();
@@ -232,6 +239,12 @@ impl App for Ours {
 
     fn enabled(&self, surface: Surface) -> Option<Result<Vec<Enabled>, String>> {
         states_via(surface)
+    }
+
+    /// A call cancelled before it runs: the session's, by its token. The transports cancel from
+    /// their own events (a dropped connection), which their own tests hold.
+    fn cancelled(&self, call: Call<'_>) -> Option<Outcome> {
+        (call.surface == Surface::InProcess).then(|| via_session_cancelled(call.id, call.params, call.consent))
     }
 
     // The run calls every command with params generated from its schema (with consent), so its `run` is

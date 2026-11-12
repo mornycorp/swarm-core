@@ -39,11 +39,16 @@
 //!   disabled one with the code `unavailable` and a remediation; and a call of a disabled command
 //!   with valid params and consent fails `unavailable` with that remediation on every surface.
 //!
+//! - **`cancelled`**: a call that is cancelled before it runs fails `cancelled`, on every surface
+//!   the app can cancel a call through ([`App::cancelled`]: the session's call, by its token; none
+//!   by default, and the rule then checks nothing). A cancel is a token the surfaces set from
+//!   their own events (a dropped connection, the UI's button), which a request can't carry, so
+//!   the app makes the cancelled call itself.
+//!
 //! Not checked: the reverse of `enabled` (an enabled command's `run` may still answer `unavailable`
-//! for its own reasons), and `cancelled`: a cancel is a token the surfaces set from their own events
-//! (a dropped connection, the UI's button), which no surface but the session's call can be given in
-//! a request. Either code may answer a call of the run: it is then held to `error-shape` and
-//! `same-result` like any other. Which state a fresh session is in is the app's: a command disabled
+//! for its own reasons), and a cancel that arrives while a command runs: whether a slow `run`
+//! polls its token is that command's own test. Either code may answer a call of the run: it is
+//! then held to `error-shape` and `same-result` like any other. Which state a fresh session is in is the app's: a command disabled
 //! there is checked to be refused; one enabled there has its refusal tested by the command's own
 //! tests.
 
@@ -230,6 +235,15 @@ pub trait App {
     fn enabled(&self, _surface: Surface) -> Option<Result<Vec<Enabled>, String>> {
         None
     }
+
+    /// The same call as [`App::call`], **cancelled before it runs**: its cancel token already set
+    /// (the session's `CallOpts`, with `cancel.cancel()` called). `None`: this surface has no way
+    /// to make a call cancelled from the start (a request can't carry a cancel; a dropped
+    /// connection is the transport's own test), and the `cancelled` rule leaves it out. The default
+    /// is `None` on every surface, for an app made before the rule: it then checks nothing.
+    fn cancelled(&self, _call: Call<'_>) -> Option<Outcome> {
+        None
+    }
 }
 
 /// A rule of the run: what a [`Violation`] says it broke.
@@ -246,6 +260,7 @@ pub enum Rule {
     Consent,
     Examples,
     Enabled,
+    Cancelled,
 }
 
 impl Rule {
@@ -263,6 +278,7 @@ impl Rule {
             Rule::Consent => "consent",
             Rule::Examples => "examples",
             Rule::Enabled => "enabled",
+            Rule::Cancelled => "cancelled",
         }
     }
 }
@@ -339,5 +355,6 @@ pub fn run(app: &dyn App) -> Result<Report, Violations> {
     check::over_cap(app, &commands, &mut found);
     let disabled = check::enabled(app, &commands, &mut found);
     let calls = check::every_surface_agrees(app, &commands, &disabled, &mut found);
+    let calls = calls + check::cancelled(app, &commands, &disabled, &mut found);
     if found.is_empty() { Ok(Report { commands: commands.len(), calls }) } else { Err(found.into_violations()) }
 }

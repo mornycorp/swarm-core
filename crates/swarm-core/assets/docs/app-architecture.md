@@ -342,7 +342,8 @@ One JSON object per line, UTF-8, `\n`-terminated.
 and with valid ones built from its params schema (which reach `run`), with consent and without (a
 command whose effects need it is `consent_required` without it, and on MCP even with it); it asks
 every command's enabled state on each surface that has the query and holds them to agree, and a
-disabled command's call to fail `unavailable` with its state's reason; `scan` holds the transports
+disabled command's call to fail `unavailable` with its state's reason; it holds a call cancelled
+before it runs to fail `cancelled`; `scan` holds the transports
 to the registry (no command named in one).
 
 ## The UI is a client
@@ -553,5 +554,6 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | One dispatch's check: the conformance run holds a call cancelled before it runs to fail `cancelled`, on the surfaces an app can cancel a call through (swarm-core#61) |
 | 2026-11-12 | minor | One dispatch: a panic in a command's `run` is caught by the dispatch and returned as `internal`, on the wire form and the typed one, and the session goes on (swarm-core#52) |
 | 2026-11-12 | major | The contract, from swarm-foundation's: the layers (with the optional `sources`), every action a command (the spec, the id rule, the enabled check, the menu path and shortcut, the error), one dispatch (the JSON-lines frame, the socket's auth, MCP from the registry), the UI as a client (its state as data, what is drawn is a command's result, the theme and the catalog, pictures), and the robustness rules, each naming the check that holds it (swarm-core#47) |
