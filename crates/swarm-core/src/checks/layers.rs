@@ -46,7 +46,9 @@ pub struct Layers {
     pub tooling: &'static str,
     /// The layer name of the testkit, outside the stack: only ever a dev-dependency.
     pub testkit: &'static str,
-    /// The UI toolkits, by package name.
+    /// The UI toolkits, by package name. [`Layers::STANDARD`]'s are the skeleton's (egui and what
+    /// comes with it); the contract picks none, so an app that draws with another names its own
+    /// (`Layers { toolkits: &["iced"], ..Layers::STANDARD }`).
     pub toolkits: &'static [&'static str],
     /// The lints every stack crate's root denies (`clippy::unwrap_used`, …).
     pub deny: &'static [&'static str],
@@ -408,6 +410,29 @@ mod tests {
 
     fn rules(root: &Path) -> Vec<(&'static str, String)> {
         layers(root, &Layers::STANDARD).err().map(|f| f.0.into_iter().map(|f| (f.rule, f.to_string())).collect()).unwrap_or_default()
+    }
+
+    /// #51: the toolkit is the app's choice, not the contract's. An app that draws with another
+    /// names it in its `Layers`, and the rule holds that one: its toolkit below the UI layer is
+    /// a finding, and the standard list's names are then ordinary crates.
+    #[test]
+    fn an_app_names_its_own_toolkit_and_the_rule_holds_that_one() {
+        let theirs = Layers { toolkits: &["iced", "iced_wgpu"], ..Layers::STANDARD };
+        let found = |name: &str, engine_dep: &str| {
+            let mut crates = well_formed();
+            crates.retain(|(d, _)| *d != "crates/engine" && *d != "crates/ui");
+            crates.push((
+                "crates/engine",
+                manifest("app-engine", "engine", &format!("app-domain = {{ path = \"../domain\" }}\napp-model = {{ path = \"../model\" }}\n{engine_dep}"), ""),
+            ));
+            crates.push(("crates/ui", manifest("app-ui", "ui", "app-engine = { path = \"../engine\" }\niced = \"1\"", "")));
+            let root = workspace(name, &crates);
+            layers(&root, &theirs).err().map(|f| f.0.iter().map(|f| (f.rule, f.problem.clone())).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        assert!(found("layers-own-toolkit", "").is_empty(), "the UI crate links the app's own toolkit: {:?}", found("layers-own-toolkit-again", ""));
+        let low = found("layers-own-toolkit-low", "iced_wgpu = \"1\"");
+        assert!(low.iter().any(|(r, p)| *r == "ui-toolkit" && p.contains("app-engine (engine) depends on iced_wgpu, a UI toolkit")), "{low:?}");
+        assert!(found("layers-own-toolkit-egui", "egui = \"1\"").is_empty(), "egui is no toolkit of this app's");
     }
 
     /// #63: a repo's tooling may be several crates that use each other; no crate of the stack

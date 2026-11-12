@@ -231,7 +231,9 @@ impl Scan {
 
     /// **`ui-colours`**: a colour made in the UI crate's drawing code ([`patterns::COLOURS`]:
     /// `Color32::from_rgb(…)`, `Color32::RED`, `hex_color!`) rather than taken from the theme's tokens
-    /// (name the theme module in [`Scan::except`]); the contract's The UI is a client.
+    /// (name the theme module in [`Scan::except`]); the contract's The UI is a client. The
+    /// built-in patterns are egui's, the skeleton's toolkit: an app that draws with another gives
+    /// its own (`Scan::ui_colours().matching(&[Pattern::Text(&["Color::from_rgb", …])])`).
     pub const fn ui_colours() -> Scan {
         Scan::new(
             "ui-colours",
@@ -543,6 +545,28 @@ mod tests {
 
     /// The drawing code takes its colours from the theme and its words from the catalog: a colour or
     /// a word made anywhere else in the UI crate is a finding, a reasoned one held to its count.
+    #[test]
+    /// #51: the built-in colour patterns are egui's; an app with another toolkit gives the scan
+    /// its own, and the rule, its files, its exception and its ratchet are unchanged.
+    fn an_app_gives_the_colour_scan_its_own_toolkits_patterns() {
+        const ICED: &[Pattern] = &[Pattern::Text(&["Color::from_rgb", "Color::from_rgba", "color!"])];
+        const UI: &[&str] = &["crates/ui/**/*.rs"];
+        let dir = tree(
+            "scan-own-colours",
+            &[
+                ("crates/ui/src/theme.rs", "pub fn error() -> Color { Color::from_rgb(1.0, 0.0, 0.0) }\n"),
+                ("crates/ui/src/draw.rs", "fn draw() { let c = Color::from_rgb(0.0, 0.0, 0.0); let e = Color32::RED; }\n"),
+            ],
+        );
+        let own = Scan::ui_colours().matching(ICED).files(UI).except(&["crates/ui/src/theme.rs"]);
+        let found = failures(&dir, &[own]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("crates/ui/src/draw.rs:1: [ui-colours]"), "its own constructor is found, by the same rule: {found:?}");
+        // The built-in patterns find egui's there, and not the app's.
+        let builtin = failures(&dir, &[Scan::ui_colours().files(UI).except(&["crates/ui/src/theme.rs"])]);
+        assert_eq!(builtin.len(), 1, "{builtin:?}");
+    }
+
     #[test]
     fn the_ui_crate_takes_colours_from_the_theme_and_words_from_the_catalog() {
         let draw = "#[expect(clippy::x, reason = \"a reason is no word drawn\")]\nfn d(ui: &mut Ui) {\n    ui.colored_label(Color32::RED, \"Failed\");\n    ui.label(catalog::RUN);\n    ui.label(\"\");\n}\n";
