@@ -14,8 +14,11 @@
 //!    newer commits are never overwritten ([`remote_state`]). One exception:
 //!    a branch a worker moved since `stack` (a rebase onto the same `main` while the gate
 //!    ran, say) that, restacked onto what the gate's stack put it on, is the tree the gate tested;
-//!    the stacked commit is pushed over it ([`moved`]). A move onto a base the gate didn't test, or
-//!    to another tree, stops. And `s-<pr>` is still the rebased tip the gate tested
+//!    the stacked commit is pushed over it ([`moved`]). So is one a worker rebased onto a newer
+//!    `main` whose own patch is the gated one, applies onto what the gate tested as the gated
+//!    tree, and whose newer `main` changes none of the PR's files ([`gated_on_newer`],
+//!    mornycorp/swarm-core#37). Any other move onto a base the gate didn't test, or to another
+//!    tree, stops. And `s-<pr>` is still the rebased tip the gate tested
 //!    ([`tested_tip`]). And the PR isn't closed: one GitHub closed when its base branch went (the
 //!    head branch of the PR below it, merged and deleted, sc#19) gets that branch pushed back
 //!    from the stack's record, is reopened, retargeted onto `main`, and the branch deleted again
@@ -143,6 +146,44 @@ pub struct Restack {
     pub own_tree: String,
     /// Its tree restacked onto what the PR was stacked onto; `None` when that conflicts.
     pub tree: Option<String>,
+    /// On a newer `main` than the gate tested (not `base_tested`), its own commits against the
+    /// gated change (#37); `None` on the tested base, or when it shares no history with `main`.
+    pub newer: Option<Newer>,
+}
+
+/// A branch a worker moved onto a newer `main` than the gate tested (#37): its own commits, from
+/// where it forks from `<remote>/<base>`, against the stacked commit's own, from what `stack` put
+/// the PR on ([`Entry::onto`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Newer {
+    /// The patch-id of its own commits' diff; `None` when that diff is empty.
+    pub patch_id: Option<String>,
+    /// The patch-id of the gated diff.
+    pub gated_patch_id: Option<String>,
+    /// Its own commits applied onto what `stack` put the PR on: the tree; `None` when that conflicts.
+    pub applied: Option<String>,
+    /// The PR's files (those the gated diff changes) that the newer `main` changed against what
+    /// `stack` put the PR on.
+    pub touched: Vec<String>,
+}
+
+/// Is the branch on a newer `main` the gated change (#37)? Its own patch is the gated patch,
+/// applied onto what the gate tested it is the gated tree, and the newer `main` changes none of
+/// the PR's files: then the server's rebase of the stacked commit lands just that patch, as when
+/// nobody moved it. `Err`: why not.
+pub fn gated_on_newer(r: &Restack) -> Result<(), String> {
+    let Some(n) = &r.newer else { return Err("it shares no history with the base".into()) };
+    if n.patch_id.is_none() || n.patch_id != n.gated_patch_id {
+        return Err("its patch is not the one gated".into());
+    }
+    if !n.touched.is_empty() {
+        return Err(format!("the newer base changes its files: {}", n.touched.join(", ")));
+    }
+    match &n.applied {
+        Some(t) if *t == r.gated_tree => Ok(()),
+        Some(_) => Err("its change applied onto what the gate tested is not the gated tree".into()),
+        None => Err("its change conflicts with what the gate tested".into()),
+    }
 }
 
 /// What `land` makes of a PR's source branch before it pushes.
@@ -153,8 +194,11 @@ pub enum Moved {
     /// A worker pushed `now` since, but restacked onto the base the gate tested it is the gated
     /// tree: push the stacked commit over it. `own`: its own commit is that tree already.
     SameTree { now: String, own: bool },
-    /// A worker pushed `now`, onto a base the gate didn't test.
-    AnotherBase(String),
+    /// A worker pushed `now` onto a newer `main`, and its patch is the gated one there
+    /// ([`gated_on_newer`], #37): push the stacked commit over it.
+    NewerMain(String),
+    /// A worker pushed `now`, onto a base the gate didn't test; `why` it isn't the gated change.
+    AnotherBase { now: String, why: String },
     /// A worker pushed `now`, and restacked its tree isn't the gated one (or it conflicts).
     AnotherTree(String),
 }
@@ -166,7 +210,10 @@ pub fn moved(remote: &Remote, restack: impl FnOnce(&str) -> Result<Restack, Stri
     let r = restack(now)?;
     let now = now.clone();
     Ok(if !r.base_tested {
-        Moved::AnotherBase(now)
+        match gated_on_newer(&r) {
+            Ok(()) => Moved::NewerMain(now),
+            Err(why) => Moved::AnotherBase { now, why },
+        }
     } else if r.tree.as_deref() == Some(r.gated_tree.as_str()) {
         Moved::SameTree { now, own: r.own_tree == r.gated_tree }
     } else {
@@ -445,7 +492,8 @@ fn land_one(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Resu
     }
     let local = stacked_tip(root, remote, e)?;
 
-    // 1, 2: never over a worker's newer commits (unless restacked they are the gated tree); never
+    // 1, 2: never over a worker's newer commits (unless restacked they are the gated tree, or on a
+    // newer `main` the gated patch, #37); never
     // merge a push that didn't land. A PR GitHub closed when the branch it was stacked on went is
     // reopened first: nothing is pushed to a closed PR's branch.
     let over = push_over(root, remote, base, e, &local)?;
@@ -591,8 +639,9 @@ fn retarget_stacked(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects)
 }
 
 /// Step 1: the tip the push goes over. The recorded pre-rebase tip; or, when a worker pushed since
-/// `stack` and that branch restacked onto the base the gate tested is the gated tree, the worker's.
-/// Any other move stops the landing.
+/// `stack` and that branch restacked onto the base the gate tested is the gated tree, or on a newer
+/// `main` its patch is the gated one ([`gated_on_newer`], #37), the worker's. Any other move stops
+/// the landing.
 fn push_over(root: &Path, remote: &str, base: &str, e: &Entry, local: &str) -> Result<String, String> {
     let src = &e.source_branch;
     let seen = remote_tip(root, remote, &format!("refs/heads/{src}"))?;
@@ -607,7 +656,16 @@ fn push_over(root: &Path, remote: &str, base: &str, e: &Entry, local: &str) -> R
             println!("land: #{} moved since stack ({} → {}) but its tree is the one gated ({how}): landing", e.mr, short(&e.old_tip), short(&now));
             Ok(now)
         }
-        Moved::AnotherBase(now) => Err(format!("{} onto a base the gate didn't test: {never}", was(&now))),
+        Moved::NewerMain(now) => {
+            println!(
+                "land: #{} moved onto a newer {base} ({} → {}) but its patch is the one gated: landing the gated commit",
+                e.mr,
+                short(&e.old_tip),
+                short(&now)
+            );
+            Ok(now)
+        }
+        Moved::AnotherBase { now, why } => Err(format!("{} onto a base the gate didn't test ({why}): {never}", was(&now))),
         Moved::AnotherTree(now) => Err(format!("{}, and restacked onto {} its tree is not the one gated: {never}", was(&now), short(&e.onto))),
     }
 }
@@ -621,14 +679,55 @@ fn restack(root: &Path, remote: &str, base: &str, e: &Entry, now: &str) -> Resul
     }
     event::fetch_tip(root, remote, &format!("refs/heads/{}", e.source_branch))?;
     let base_tip = event::fetch_tip(root, remote, &format!("refs/heads/{base}"))?.ok_or_else(|| format!("{remote}/{base} is gone"))?;
-    let fork = git(root, &["merge-base", now, &base_tip], None, &[]).map(|f| f.trim().to_owned());
-    let base_tested = fork.is_ok_and(|f| git(root, &["merge-base", "--is-ancestor", &f, &e.onto], None, &[]).is_ok());
+    let fork = git(root, &["merge-base", now, &base_tip], None, &[]).map(|f| f.trim().to_owned()).ok();
+    let base_tested = fork.as_deref().is_some_and(|f| git(root, &["merge-base", "--is-ancestor", f, &e.onto], None, &[]).is_ok());
     let restacked = git(root, &["merge-tree", "--write-tree", &e.onto, now], None, &[]).ok();
+    let newer = match fork.as_deref() {
+        Some(f) if !base_tested => Some(newer_facts(root, e, f, now)?),
+        _ => None,
+    };
     Ok(Restack {
         base_tested,
         gated_tree: tree_of(root, &e.new_tip)?,
         own_tree: tree_of(root, now)?,
         tree: restacked.and_then(|t| t.lines().next().map(str::to_owned)),
+        newer,
+    })
+}
+
+/// `now`'s own change (its diff from `fork`) applied onto `onto`, as a tree; `None` when it doesn't
+/// apply. A scratch index in the git directory, so no checkout, branch or ref of the gate's worktree
+/// changes. Not `merge-tree --merge-base`: git before 2.40 has no such option, and its failure
+/// would read as a conflict.
+fn applied_onto(root: &Path, onto: &str, fork: &str, now: &str) -> Result<Option<String>, String> {
+    let index = git(root, &["rev-parse", "--path-format=absolute", "--git-path", "land-apply.index"], None, &[])?.trim().to_owned();
+    let env = [("GIT_INDEX_FILE", index.as_str())];
+    let diff = git_bytes(root, &["diff", "--binary", "--full-index", "--no-renames", fork, now], None, &[])?;
+    let tree = git(root, &["read-tree", onto], None, &env).map(|_| diff.is_empty() || git(root, &["apply", "--cached", "-"], Some(&diff), &env).is_ok());
+    let tree = match tree {
+        Ok(true) => git(root, &["write-tree"], None, &env).map(|t| Some(t.trim().to_owned())),
+        Ok(false) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let _ = std::fs::remove_file(&index);
+    tree
+}
+
+/// The facts about `now`, forking from a newer `main` at `fork`, for [`gated_on_newer`]: git only
+/// (`patch-id`, a scratch index, `diff-tree`), no checkout, branch or ref of the gate's worktree
+/// changes.
+fn newer_facts(root: &Path, e: &Entry, fork: &str, now: &str) -> Result<Newer, String> {
+    let applied = applied_onto(root, &e.onto, fork, now)?;
+    let files = |from: &str, to: &str| -> Result<Vec<String>, String> {
+        let names = git(root, &["diff-tree", "-r", "-z", "--no-renames", "--name-only", from, to], None, &[])?;
+        Ok(names.split('\0').filter(|n| !n.is_empty()).map(str::to_owned).collect())
+    };
+    let mine = files(&e.onto, &e.new_tip)?;
+    Ok(Newer {
+        patch_id: patch_id(root, fork, now)?,
+        gated_patch_id: patch_id(root, &e.onto, &e.new_tip)?,
+        applied: applied.and_then(|t| t.lines().next().map(str::to_owned)),
+        touched: files(&e.onto, fork)?.into_iter().filter(|f| mine.contains(f)).collect(),
     })
 }
 
@@ -1136,6 +1235,7 @@ mod tests {
             gated_tree: "gated".into(),
             own_tree: own.into(),
             tree: tree.map(str::to_owned),
+            newer: None,
         };
         let worker = Remote::Moved("w".into());
         let asked = |r: Restack| {
@@ -1151,9 +1251,39 @@ mod tests {
         // A new commit: another tree, or one that conflicts restacked.
         assert_eq!(moved(&worker, asked(facts(true, "fix", Some("fix")))), Ok(Moved::AnotherTree("w".into())));
         assert_eq!(moved(&worker, asked(facts(true, "fix", None))), Ok(Moved::AnotherTree("w".into())));
-        // Onto a newer main the gate didn't test, whatever the trees say.
-        assert_eq!(moved(&worker, asked(facts(false, "gated", Some("gated")))), Ok(Moved::AnotherBase("w".into())));
+        // Onto a newer main the gate didn't test, whatever the trees say: unless its patch is the
+        // gated one there (#37, below).
+        let elsewhere = Moved::AnotherBase { now: "w".into(), why: "it shares no history with the base".into() };
+        assert_eq!(moved(&worker, asked(facts(false, "gated", Some("gated")))), Ok(elsewhere));
         assert_eq!(moved(&worker, |_| Err("no base".into())), Err("no base".into()));
+    }
+
+    /// #37: a branch a worker rebased onto a newer `main` lands only when its own patch is the
+    /// gated one, applied onto what the gate tested it is the gated tree, and the newer `main`
+    /// changes none of the PR's files.
+    #[test]
+    fn a_branch_on_a_newer_main_lands_only_with_the_gated_patch() {
+        let newer = |id: Option<&str>, applied: Option<&str>, touched: &[&str]| Restack {
+            base_tested: false,
+            gated_tree: "gated".into(),
+            own_tree: "newer".into(),
+            tree: None,
+            newer: Some(Newer {
+                patch_id: id.map(str::to_owned),
+                gated_patch_id: Some("p".into()),
+                applied: applied.map(str::to_owned),
+                touched: touched.iter().map(|&t| t.to_owned()).collect(),
+            }),
+        };
+        let worker = Remote::Moved("w".into());
+        let verdict = |r: Restack| moved(&worker, move |_: &str| Ok(r));
+        let stops = |why: &str| Ok(Moved::AnotherBase { now: "w".into(), why: why.into() });
+        assert_eq!(verdict(newer(Some("p"), Some("gated"), &[])), Ok(Moved::NewerMain("w".into())));
+        assert_eq!(verdict(newer(Some("fix"), Some("gated"), &[])), stops("its patch is not the one gated"));
+        assert_eq!(verdict(newer(None, Some("gated"), &[])), stops("its patch is not the one gated"), "an empty diff");
+        assert_eq!(verdict(newer(Some("p"), Some("gated"), &["one.rs", "two.rs"])), stops("the newer base changes its files: one.rs, two.rs"));
+        assert_eq!(verdict(newer(Some("p"), None, &[])), stops("its change conflicts with what the gate tested"));
+        assert_eq!(verdict(newer(Some("p"), Some("other"), &[])), stops("its change applied onto what the gate tested is not the gated tree"));
     }
 
     #[test]
@@ -1377,6 +1507,8 @@ mod tests {
         calls: RefCell<Vec<String>>,
         merged: RefCell<std::collections::BTreeSet<u64>>,
         merges: bool,
+        /// A merge moves the origin's `main`, as the server's does: a merge commit of the PR's head.
+        merges_main: bool,
         /// Polls answered "unknown" before the state.
         checking: RefCell<u32>,
         /// PRs whose server rebase is refused (merge commits).
@@ -1397,6 +1529,7 @@ mod tests {
         fn new(w: &World, merges: bool) -> Self {
             Self {
                 origin: w.origin.clone(),
+                merges_main: false,
                 during_wait: RefCell::default(),
                 calls: RefCell::default(),
                 merged: RefCell::default(),
@@ -1473,6 +1606,11 @@ mod tests {
             if self.merges {
                 self.merged.borrow_mut().insert(mr);
             }
+            if self.merges && self.merges_main {
+                let tree = tgit(&self.origin, &["rev-parse", &format!("{sha}^{{tree}}")]);
+                let merge = tgit(&self.origin, &["commit-tree", tree.trim(), "-p", "refs/heads/main", "-p", sha, "-m", &format!("Merge #{mr}")]);
+                tgit(&self.origin, &["update-ref", "refs/heads/main", merge.trim()]);
+            }
             Ok(())
         }
         fn delete_branch(&self, branch: &str) -> Result<(), String> {
@@ -1534,14 +1672,19 @@ mod tests {
     /// cover it): a few git processes where pushes from a worker's clone and the rebases took
     /// about a hundred.
     fn world(name: &str, owner: bool) -> (World, Stack) {
+        world_with(name, owner, &[("one.md", "1-one")], &[("two.rs", "2-two")])
+    }
+
+    /// [`world`], with the files each PR writes: `one` PR 1's, `two` PR 2's (stacked on it).
+    fn world_with(name: &str, owner: bool, one: &[(&str, &str)], two: &[(&str, &str)]) -> (World, Stack) {
         let dir = swarm_core_testkit::temp_dir(&format!("xtask-land-{name}"));
         let w = World { origin: dir.join("origin.git"), coord: dir.join("coord"), owner: dir.join("owner") };
         testgit::bare(&w.origin);
         // One is docs only, two (stacked on it) code.
         let mut h = testgit::History::default();
         let first = h.commit("main", &[], &[("README.md", "first")], "first");
-        let one = h.commit("1-one", &[&first], &[("one.md", "1-one")], "1-one");
-        h.commit("2-two", &[&one], &[("two.rs", "2-two")], "2-two");
+        let below = h.commit("1-one", &[&first], one, "1-one");
+        h.commit("2-two", &[&below], two, "2-two");
         let tips = h.import(&w.origin);
         if owner {
             testgit::clone(&w.origin, &w.owner);
@@ -1550,8 +1693,8 @@ mod tests {
         testgit::push_commit(&w.origin, "main", &["main"], &[("main.md", "main moves on")], "main moves on");
         testgit::clone(&w.origin, &w.coord);
         let mut h = testgit::History::default();
-        let s1 = h.commit("s-1", &["refs/remotes/origin/main"], &[("one.md", "1-one")], "1-one");
-        h.commit("s-2", &[&s1], &[("two.rs", "2-two")], "2-two");
+        let s1 = h.commit("s-1", &["refs/remotes/origin/main"], one, "1-one");
+        h.commit("s-2", &[&s1], two, "2-two");
         let stacked = h.import(&w.coord);
         let main = tgit(&w.coord, &["rev-parse", "refs/remotes/origin/main"]).trim().to_owned();
         let stack = recorded(&tips[1..], &stacked, &main);
@@ -1720,18 +1863,87 @@ mod tests {
         assert_eq!(tgit(&w.coord, &["rev-parse", "s-2"]).trim(), top(&stack));
     }
 
-    /// The worker rebased onto a newer `main` than the gate tested: never pushed over.
+    /// The worker rebased onto a newer `main` than the gate tested, with another patch: never
+    /// pushed over.
     #[test]
     fn a_branch_rebased_onto_another_base_is_left_alone() {
         let (w, mut stack) = world("newer", false);
+        testgit::push_commit(&w.origin, "main", &["main"], &[("later.md", "later")], "main moves on again");
+        let workers = testgit::push_commit(&w.origin, "1-one", &["main"], &[("one.md", "1-one, changed")], "1-one, changed on the newer main");
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        let fake = Fake::new(&w, true);
+        let e = land(&plan, &mut stack, &[1], &fake).unwrap_err();
+        assert!(e.contains("#1 stopped") && e.contains("onto a base the gate didn't test (its patch is not the one gated)"), "{e}");
+        assert_eq!(origin_tip(&w, "1-one"), workers, "the worker's commit survives");
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    }
+
+    /// #37: the worker rebased the gated patch onto a newer `main` that changes none of its
+    /// files while the gate ran: the stacked commit is pushed over it and lands, no re-gate. The
+    /// server's rebase onto that `main` is what merges (it carries the gated patch).
+    #[test]
+    fn a_branch_rebased_onto_a_newer_main_with_the_gated_patch_lands() {
+        let (w, mut stack) = world("newer-same", false);
         testgit::push_commit(&w.origin, "main", &["main"], &[("later.md", "later")], "main moves on again");
         let workers = testgit::push_commit(&w.origin, "1-one", &["main"], &[("one.md", "1-one")], "1-one, on the newer main");
         let plan =
             Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
         let fake = Fake::new(&w, true);
+        let origin = w.origin.clone();
+        let stacked = stack.entries[0].new_tip.clone();
+        *fake.during_wait.borrow_mut() = Some(Box::new(move || {
+            let pushed = tgit(&origin, &["rev-parse", "refs/heads/1-one"]);
+            assert_eq!(pushed.trim(), stacked, "the stacked commit went over the worker's");
+            testgit::push_commit(&origin, "1-one", &["main"], &[("one.md", "1-one")], "1-one, rebased by the server");
+        }));
+        assert_eq!(land(&plan, &mut stack, &[1], &fake).unwrap(), vec![1]);
+        let rebased = origin_tip(&w, "1-one");
+        assert_ne!(rebased, workers);
+        let calls = fake.calls();
+        assert!(calls.contains(&format!("merge 1 {rebased} [skip ci]")) && calls.contains(&"delete 1-one".to_owned()), "{calls:?}");
+        assert_eq!(tgit(&w.coord, &["rev-parse", "s-2"]).trim(), top(&stack), "nothing of the gate's worktree moved");
+    }
+
+    /// #37 keeps the gated-change rule: after the stacked commit went over a worker's rebase onto
+    /// a newer `main`, a worker's push while `land` waits is still never merged.
+    #[test]
+    fn a_push_while_land_waits_after_a_newer_main_is_never_merged() {
+        let (w, mut stack) = world("newer-raced", false);
+        testgit::push_commit(&w.origin, "main", &["main"], &[("later.md", "later")], "main moves on again");
+        testgit::push_commit(&w.origin, "1-one", &["main"], &[("one.md", "1-one")], "1-one, on the newer main");
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        let fake = Fake::new(&w, true);
+        let origin = w.origin.clone();
+        *fake.during_wait.borrow_mut() = Some(Box::new(move || {
+            testgit::push_commit(&origin, "1-one", &["main"], &[("one.md", "1-one, fixed")], "the worker's fix, ungated");
+        }));
         let e = land(&plan, &mut stack, &[1], &fake).unwrap_err();
-        assert!(e.contains("#1 stopped") && e.contains("onto a base the gate didn't test"), "{e}");
-        assert_eq!(origin_tip(&w, "1-one"), workers, "the worker's commit survives");
+        assert!(e.contains("#1 stopped") && e.contains("not the change the gate tested"), "{e}");
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| ["merge", "delete", "event", "tidy", "gate"].iter().any(|p| c.starts_with(p))), "{calls:?}");
+    }
+
+    /// #37: PR 1 landed, then `main` changed a line of PR 2's file far from PR 2's hunk, and
+    /// PR 2's worker rebased onto it: the same patch, applying cleanly, but the newer `main`
+    /// touches the PR's files, so it stops, nothing pushed.
+    #[test]
+    fn a_newer_main_that_touches_the_prs_files_stops() {
+        let lines = |first: &str, last: &str| format!("{first}\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n{last}\n");
+        let (base, two, later, both) = (lines("l1", "l10"), lines("L1", "l10"), lines("l1", "L10"), lines("L1", "L10"));
+        let (w, mut stack) = world_with("newer-touches", false, &[("one.rs", base.as_str())], &[("one.rs", two.as_str())]);
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        let mut fake = Fake::new(&w, true);
+        fake.merges_main = true;
+        assert_eq!(land(&plan, &mut stack, &[1], &fake).unwrap(), vec![1]);
+        testgit::push_commit(&w.origin, "main", &["main"], &[("one.rs", later.as_str())], "main changes one.rs's last line");
+        let workers = testgit::push_commit(&w.origin, "2-two", &["main"], &[("one.rs", both.as_str())], "2-two, on the newer main");
+        let fake = Fake::new(&w, true);
+        let e = land(&plan, &mut stack, &[2], &fake).unwrap_err();
+        assert!(e.contains("#2 stopped") && e.contains("the newer base changes its files: one.rs"), "{e}");
+        assert_eq!(origin_tip(&w, "2-two"), workers, "the worker's commit survives");
         assert!(fake.calls().is_empty(), "{:?}", fake.calls());
     }
 
