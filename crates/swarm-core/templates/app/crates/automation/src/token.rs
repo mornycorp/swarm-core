@@ -17,9 +17,9 @@
 //!   `%LOCALAPPDATA%`), not a shared one, or pass the token in the environment, which needs no file.
 //! - **The variable stays in the environment.** `std::env::remove_var` is `unsafe` in edition 2024
 //!   and this crate forbids `unsafe`, so [`ENV`] is not removed after it is read, and a child
-//!   process inherits it unless it is started without it: the app's process module
-//!   (docs/app-architecture.md › Never hang on another program) must start every child with
-//!   `env_remove("{{env}}_CONTROL_TOKEN")`. The skeleton starts no child process of its own.
+//!   process would inherit it. So the engine's process module, the one place a child is started
+//!   (docs/app-architecture.md › Never hang on another program), starts every child without it
+//!   (`process::TOKEN_ENV`, this same name: a test here holds the two together).
 //! - **It is never shown.** [`Token`]'s `Debug` is redacted, no error here repeats a token's value,
 //!   and nothing logs one.
 //! - **It is compared in constant time** ([`Token::matches`], [`ct_eq`]): the comparison takes the
@@ -312,6 +312,13 @@ mod tests {
 
     fn dir(name: &str) -> std::path::PathBuf {
         {{crate_prefix_ident}}testkit::temp_dir(name).unwrap()
+    }
+
+    /// The variable the token is read from is the one the process module takes out of every
+    /// child's environment.
+    #[test]
+    fn the_process_module_removes_this_variable_from_a_child() {
+        assert_eq!(ENV, {{crate_prefix_ident}}engine::process::TOKEN_ENV);
     }
 
     /// `text` in a file at `path`, private on Unix as a token file must be.

@@ -61,13 +61,17 @@ pub const TEST_FILES: &[&str] = crate::checks::TEST_FILES;
 /// The source files of the app's crates and binaries, in the skeleton's layout.
 pub const SOURCES: &[&str] = &["crates/**/*.rs", "apps/**/*.rs"];
 
+/// The skeleton's process module: the one place it starts another program, which the
+/// `process-module` scan leaves out.
+pub const PROCESS_MODULE: &str = "crates/engine/src/process.rs";
+
 /// The scans of docs/app-architecture.md ([`crate::checks::scan`]) pointed at the skeleton's files:
 /// a consumer's [`Hooks::scans`] returns them (`SCANS.to_vec()`) and changes what its app does
-/// differently: it names the process module in `process_command`'s `except` once it has one, adds
+/// differently: it adds
 /// the UI crate's scans (`Scan::ui_file_writes`, `Scan::ui_process_starts`, `Scan::value_reads`)
 /// and the state module's (`Scan::file_writes`). Every allowance gives its reason and a count.
 pub const SCANS: &[Scan] = &[
-    Scan::process_command().files(SOURCES).test_files(TEST_FILES),
+    Scan::process_command().files(SOURCES).except(&[PROCESS_MODULE]).test_files(TEST_FILES),
     Scan::value_reads().files(&["crates/automation/**/*.rs", "apps/**/*.rs"]).test_files(TEST_FILES),
     Scan::command_spec().files(SOURCES).test_files(TEST_FILES).allowing(&[Allowed {
         file: "crates/engine/src/registry.rs",
@@ -173,6 +177,7 @@ pub const FILES: &[Asset] = &[
     Asset { path: "crates/engine/src/error.rs", text: include_str!("../templates/app/crates/engine/src/error.rs") },
     Asset { path: "crates/engine/src/lib.rs", text: include_str!("../templates/app/crates/engine/src/lib.rs") },
     Asset { path: "crates/engine/src/menu.rs", text: include_str!("../templates/app/crates/engine/src/menu.rs") },
+    Asset { path: "crates/engine/src/process.rs", text: include_str!("../templates/app/crates/engine/src/process.rs") },
     Asset { path: "crates/engine/src/registry.rs", text: include_str!("../templates/app/crates/engine/src/registry.rs") },
     Asset { path: "crates/engine/src/session.rs", text: include_str!("../templates/app/crates/engine/src/session.rs") },
     Asset { path: "crates/engine/src/spec.rs", text: include_str!("../templates/app/crates/engine/src/spec.rs") },

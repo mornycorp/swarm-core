@@ -274,7 +274,8 @@ existing one is used only when it is a regular file (not a link, a FIFO or a dev
 from a planted one: each start writes a new token over the path (a client reads it after the
 start-up line), and the file gets its directory's permissions, so keep it under your profile, or
 use the variable. The variable is not removed from the app's environment (`remove_var` is
-`unsafe` in edition 2024), so the process module must start every child without it. There is
+`unsafe` in edition 2024), so the process module (`crates/engine/src/process.rs`, the one place
+the app starts another program) starts every child without it. There is
 no default location, so one is always chosen. The caps are the contract's (a request over 1 MiB is
 answered `too_large`, a reply over 8 MiB too; 16 authenticated connections, and a seventeenth is
 told `unavailable` and closed; 30 s idle); a connection that hasn't authenticated yet takes none

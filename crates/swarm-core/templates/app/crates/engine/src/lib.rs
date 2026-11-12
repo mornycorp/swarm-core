@@ -19,6 +19,9 @@
 //!   light look, with the stable pick of an identifier's colour; `ui.theme`
 //!   ([`commands::UiThemeCommand`]) gives them to every surface, and the UI crate's theme draws with
 //!   them.
+//! - **Another program is started in one place** ([`process`]): with a wall-clock and an idle
+//!   deadline, a capped output, its own process group, and without the control socket's token
+//!   (docs/app-architecture.md › Never hang on another program).
 //! - **The example** is `app.info` ([`commands::InfoCommand`]). It stays until the first real
 //!   command replaces it.
 //!
@@ -33,6 +36,7 @@ mod call;
 pub mod commands;
 mod error;
 pub mod menu;
+pub mod process;
 mod registry;
 mod session;
 mod spec;

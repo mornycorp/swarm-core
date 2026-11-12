@@ -84,9 +84,10 @@ the contract doesn't have is not this skill's job: stop and say so.
      on input (`.get(..)`); checked arithmetic on input; a cap before an allocation the input
      sizes; bounded recursion.
    - slow work is cancellable: poll `cx.check_cancelled()?` between steps.
-   - another program starts **only** through the app's process module, and a file is written
-     **only** through its atomic writer. If the app has neither yet, adding one is its own change,
-     not part of this command.
+   - another program starts **only** through the app's process module
+     (`crates/engine/src/process.rs`: `process::run`, with its deadlines and its cap), and a file
+     is written **only** through its atomic writer. If the app has no writer yet, adding one is
+     its own change, not part of this command.
 
    *Check:* `cargo clippy -p <crate> --all-targets -- -D warnings` (the crate roots deny the
    panicking forms) is clean.
