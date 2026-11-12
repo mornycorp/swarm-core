@@ -32,8 +32,16 @@
 //!   ([`keep_junit`]).
 //! - **A failure** is classified from the log ([`classify`], the project's own causes first),
 //!   logged `sub.stop` with `rc=<n>; cause=<cause>; kind=<kind>`, and keeps the lock: the
-//!   coordinator still owns the worktree. `--retry-transient` reruns once, as `<sub>-rerun`, when
-//!   the cause is the machine's ([`Cause::transient`]). The failing tests are listed.
+//!   coordinator still owns the worktree. The failing tests are listed.
+//! - **A failure reruns once by itself** where the project turns that on ([`Hooks::gate_reruns`],
+//!   mornycorp/swarm-core#39; `--rerun` for one run elsewhere), in the same invocation, as
+//!   `<sub>-rerun` ([`again`]): a failure only at the tests whose failed tests [`rerun::plan`]
+//!   names reruns each of them alone, then the steps the failure skipped, on the same HEAD, and
+//!   records a verified pass `land` accepts ([`rerun`]), as `ready` does; else a failure the
+//!   machine caused ([`Cause::transient`]: memory, link, toolchain, git-temp, gpu) reruns the
+//!   whole gate. A test that fails alone too is a real failure: one rerun, no more. `--no-rerun`
+//!   turns it off for one run. Elsewhere `--retry-transient` reruns a transient failure once, as
+//!   `<sub>-rerun`, as before.
 //! - **The same stack again**: a gate of the same PRs at the same heads onto the same `main` (or
 //!   the same `--merge` branches, or the same HEAD) as the last gate here, which failed, is its
 //!   rerun: its start note says `rerun of <that sub>:` with no flag, so a reader doesn't send its
@@ -77,12 +85,12 @@ pub const BASE: &str = "origin/main";
 const TEMP_REPO: &str = "swarm-test-";
 
 const USAGE_TEXT: &str =
-    "usage: cargo xtask gate --sub <id> --note \"<what it gates>\" [--merge <branch>]... [--full] [--wait] [--retry-transient] [--agent <instance>]
+    "usage: cargo xtask gate --sub <id> --note \"<what it gates>\" [--merge <branch>]... [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] [--agent <instance>]
        cargo xtask gate --rerun-failed <sub> [--note \"<text>\"] [--wait] [--agent <instance>]
        cargo xtask gate --stop <sub> --note \"<what it merged>\" [--agent <instance>]";
 
 /// The usage line, as [`crate::COMMANDS`] lists it.
-pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
+pub const USAGE: &str = "cargo xtask gate --sub <id> --note \"<what>\" [--merge <branch>]… [--full] [--wait] [--retry-transient] [--rerun | --no-rerun] | --rerun-failed <sub> | --stop <sub> --note \"<what>\"";
 
 /// How often `--wait` looks at capacity again, and for how long at most.
 const WAIT_STEP: Duration = Duration::from_secs(60);
@@ -774,7 +782,13 @@ struct Opts {
     agent: Option<String>,
     merge: Vec<String>,
     wait: bool,
+    /// `--retry-transient`: a transient failure reruns once (where reruns are off).
     retry: bool,
+    /// `--rerun`: this run reruns a failure once by itself, as where the project turns that on
+    /// ([`Hooks::gate_reruns`], [`again`]).
+    rerun_now: bool,
+    /// `--no-rerun`: this run doesn't, where the project turns it on.
+    no_rerun: bool,
     full: bool,
 }
 
@@ -792,6 +806,8 @@ fn parse_args(args: &[&str]) -> Result<Opts, String> {
             "--merge" => o.merge.push(value()?),
             "--wait" => o.wait = true,
             "--retry-transient" => o.retry = true,
+            "--rerun" => o.rerun_now = true,
+            "--no-rerun" => o.no_rerun = true,
             "--full" => o.full = true,
             other => return Err(format!("gate: unknown argument `{other}`\n{USAGE_TEXT}")),
         }
@@ -806,8 +822,11 @@ fn check_opts(o: &Opts) -> Result<(), String> {
     if [&o.sub, &o.rerun, &o.stop].iter().filter(|m| m.is_some()).count() != 1 {
         return Err(format!("gate: give --sub <id> to run a gate, --rerun-failed <sub> to rerun its failed tests, or --stop <sub> to close one\n{USAGE_TEXT}"));
     }
-    if o.sub.is_none() && (o.retry || o.full || !o.merge.is_empty()) {
-        return Err(format!("gate: --merge, --retry-transient and --full go with --sub\n{USAGE_TEXT}"));
+    if o.sub.is_none() && (o.retry || o.rerun_now || o.no_rerun || o.full || !o.merge.is_empty()) {
+        return Err(format!("gate: --merge, --rerun, --no-rerun, --retry-transient and --full go with --sub\n{USAGE_TEXT}"));
+    }
+    if o.no_rerun && (o.retry || o.rerun_now) {
+        return Err(format!("gate: --no-rerun contradicts --rerun and --retry-transient\n{USAGE_TEXT}"));
     }
     if o.stop.is_some() && o.wait {
         return Err(format!("gate: --wait goes with --sub or --rerun-failed\n{USAGE_TEXT}"));
@@ -880,19 +899,98 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         silent::record(&logs, &sub, &gated);
         attempt(&g, &sub, Some(&start), room.seen)?
     };
-    let (sub, rc) = match cause {
-        Some(c) if o.retry && c.transient() => {
-            let rerun = format!("{sub}-rerun");
-            event::check_id(&rerun)?;
-            println!("gate: rerunning once as {rerun} (cause {})", c.name());
-            let room = room_to_build(project, (&agent, &rerun), root, &target, true, kind).map_err(lock_kept)?;
-            silent::record(&logs, &rerun, &gated);
-            let (rc, _) = attempt(&g, &rerun, Some(&format!("rerun of {sub}: {note}")), room.seen)?;
-            (rerun, rc)
-        }
-        _ => (sub, rc),
-    };
+    let policy = Policy::of(hooks, &o);
+    let (sub, rc) = if rc == 0 { (sub, rc) } else { again(&g, policy, (&sub, &note, &gated), (rc, cause))? };
     finish(&sub, rc)
+}
+
+/// Which reruns a failed gate gets by itself: of its failed tests alone, and of the whole gate for
+/// a transient cause.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Policy {
+    tests: bool,
+    transient: bool,
+}
+
+impl Policy {
+    /// Both where the project turns reruns on ([`Hooks::gate_reruns`]) or `--rerun` asks, none with
+    /// `--no-rerun`; else, as before, the transient one only with `--retry-transient`.
+    fn of(hooks: &dyn Hooks, o: &Opts) -> Policy {
+        if o.no_rerun {
+            return Policy::default();
+        }
+        let on = o.rerun_now || hooks.gate_reruns();
+        Policy { tests: on, transient: on || o.retry }
+    }
+}
+
+/// What [`again`] does after a failed gate: rerun its failed tests alone, rerun the whole gate, or
+/// nothing (and why).
+#[derive(Debug)]
+enum Again {
+    Tests(rerun::Rerun),
+    Whole(Cause),
+    No(String),
+}
+
+/// What follows gate `sub`'s failure (`cause`, with `plan` the rerun of its failed tests alone,
+/// or why there is none) under `policy`: those tests, when the failure was only theirs; else the
+/// whole gate, when the machine caused it; else nothing.
+fn next_step(policy: Policy, cause: Option<Cause>, plan: Result<rerun::Rerun, String>) -> Again {
+    match (plan, cause) {
+        (Ok(plan), _) if policy.tests => Again::Tests(plan),
+        (_, Some(c)) if policy.transient && c.transient() => Again::Whole(c),
+        (Ok(_), _) => Again::No("reruns are off: `--rerun`, or `gate --rerun-failed` by hand".to_owned()),
+        (Err(why), _) => Again::No(why),
+    }
+}
+
+/// Gate `sub` failed (`rc`, `cause`): rerun it once in the same invocation, as `<sub>-rerun`, as
+/// `policy` allows (mornycorp/swarm-core#39). A failure only at the tests whose failed tests
+/// [`rerun::plan`] names reruns each of them alone, then the steps it skipped, on the same HEAD,
+/// as `gate --rerun-failed` does, recording a verified pass `land` accepts; else a failure the
+/// machine caused reruns the whole gate. The rerun is recorded as a gate of the same stack
+/// (`gated`, [`silent`]), so a gate of it after is noted as its rerun too. The run whose result
+/// stands and its exit code; both are printed.
+fn again(g: &Gate<'_>, policy: Policy, (sub, note, gated): (&str, &str, &str), (rc, cause): (i32, Option<Cause>)) -> Result<(String, i32), String> {
+    if policy == Policy::default() {
+        return Ok((sub.to_owned(), rc));
+    }
+    let rerun = format!("{sub}-rerun");
+    event::check_id(&rerun)?;
+    let logs = g.target.join(LOG_DIR);
+    let plan = if policy.tests { plan_from_records(g.project, &logs, sub, &rerun, g.head) } else { Err(String::new()) };
+    let (kind, field, plan, start) = match next_step(policy, cause, plan) {
+        Again::No(why) => {
+            if !why.is_empty() {
+                println!("gate {sub}: no rerun: {why}");
+            }
+            return Ok((sub.to_owned(), rc));
+        }
+        Again::Whole(c) => {
+            println!("gate {sub}: rerunning the whole gate once as {rerun} (cause {}: the machine's)", c.name());
+            (g.kind, g.kind_field.to_owned(), None, format!("rerun of {sub}: {note}"))
+        }
+        Again::Tests(plan) => {
+            let tests: Vec<String> = plan.tests.iter().map(rerun::Test::spec).collect();
+            println!(
+                "gate {sub}: failed only at its tests; rerunning them once as {rerun}, each alone ({}), then the steps it skipped ({})",
+                tests.join(", "),
+                plan.steps.join(", ")
+            );
+            let start = format!("rerun of {sub}: its failed tests alone ({}), then the steps it skipped", plan.tests.len());
+            (plan.kind, kind_field(plan.kind, &format!("rerun of {sub}")), Some(plan), start)
+        }
+    };
+    let g = Gate { kind, kind_field: &field, rerun: plan.as_ref(), ..*g };
+    let room = room_to_build(g.project, (g.agent, &rerun), g.root, g.target, true, kind).map_err(lock_kept)?;
+    silent::record(&logs, &rerun, gated);
+    let (again, _) = attempt(&g, &rerun, Some(&start), room.seen)?;
+    println!(
+        "gate {sub}: rc={rc}; its rerun {rerun}: rc={again}{}",
+        if again == 0 { " (passed: land it as this run)" } else { " (failed too: a real failure)" }
+    );
+    Ok((rerun, again))
 }
 
 /// Where gate `sub` of `head` keeps its records (`target`'s [`LOG_DIR`]), what it gates
@@ -1142,6 +1240,10 @@ mod tests {
             parse_args(&["--sub", "gate-mr1", "--note", "local gate: #1", "--wait", "--retry-transient"]),
             Ok(Opts { sub: Some("gate-mr1".into()), note: Some("local gate: #1".into()), wait: true, retry: true, ..Opts::default() })
         );
+        assert_eq!(
+            parse_args(&["--sub", "gate-mr1", "--note", "n", "--no-rerun"]),
+            Ok(Opts { sub: Some("gate-mr1".into()), note: Some("n".into()), no_rerun: true, ..Opts::default() })
+        );
         assert_eq!(parse_args(&["--sub", "g", "--note", "x", "--full"]).map(|o| o.full), Ok(true));
         assert_eq!(parse_args(&["--sub", "g", "--note", "x", "--merge", "1-a", "--merge", "2-b"]).map(|o| o.merge), Ok(vec!["1-a".into(), "2-b".into()]));
         assert!(parse_args(&["--stop", "gate-mr1", "--note", "merged #1"]).is_ok());
@@ -1155,6 +1257,9 @@ mod tests {
             (&["--stop", "a", "--note", "x", "--full"][..], "go with --sub"),
             (&["--stop", "a", "--note", "x", "--merge", "b"][..], "go with --sub"),
             (&["--rerun-failed", "a", "--retry-transient"][..], "go with --sub"),
+            (&["--rerun-failed", "a", "--no-rerun"][..], "go with --sub"),
+            (&["--sub", "a", "--note", "n", "--no-rerun", "--retry-transient"][..], "contradicts"),
+            (&["--sub", "a", "--note", "n", "--no-rerun", "--rerun"][..], "contradicts"),
             (&["--rerun-failed", "../a"][..], "can't name"),
             (&["--sub", "a"][..], "--note"),
             (&["--sub", "a", "--note", "  "][..], "--note"),
@@ -1362,6 +1467,78 @@ mod tests {
         let build = ran_from_records(&P, &logs, sub, &head, 101, Some(Cause::Build));
         assert_eq!((build.cause, build.rerun_tests), (Some(Cause::Build), None), "a build failure has no rerun path");
         let _ = std::fs::remove_dir_all(&logs);
+    }
+
+    /// #39: after a failed gate, a failure only at the tests reruns them
+    /// alone; else the machine's (transient) cause reruns the whole gate; else nothing does.
+    #[test]
+    fn a_failure_reruns_its_tests_alone_else_a_transient_one_the_whole_gate() {
+        let head = "c89b857c7c9ce601a87162b88d8732b5ebc02506";
+        let failed = "swarm-engine::panic_hunt every_command";
+        let log = format!(
+            "=== ci: test ===
+        FAIL [  1.0s] (1/9) {failed}
+────────────
+     Summary [ 3.0s] 9 tests run: 8 passed, 1 failed, 0 skipped
+        FAIL [  1.0s] (1/9) {failed}
+             error: test run failed
+
+CI summary:
+  ok    fmt
+  ok    clippy
+  FAIL  test: cargo nextest run (exit code: 100)
+  skip  layers
+xtask: ci failed at `test`
+"
+        );
+        let rc = format!(
+            "rc=1 60s cause=test kind=full head={head}
+"
+        );
+        let plan = || rerun::plan("swarm-engine::golden", "gate-7", &rc, &log, head, None);
+        let on = Policy { tests: true, transient: true };
+        assert!(matches!(next_step(on, Some(Cause::Test), plan()), Again::Tests(p) if p.tests.len() == 1), "the failed test alone");
+        let none = || Err::<rerun::Rerun, String>("a build failure, which no rerun alone can take".into());
+        assert!(matches!(next_step(on, Some(Cause::Link), none()), Again::Whole(Cause::Link)), "the machine's: the whole gate again");
+        assert!(matches!(next_step(on, Some(Cause::Gpu), none()), Again::Whole(Cause::Gpu)));
+        assert!(matches!(next_step(on, Some(Cause::Build), none()), Again::No(why) if why.contains("build failure")), "the change's: no rerun");
+        // Reruns off (the default): the failed tests aren't rerun; `--retry-transient` still
+        // reruns a transient failure whole, as before.
+        let retry = Policy { tests: false, transient: true };
+        assert!(matches!(next_step(Policy::default(), Some(Cause::Test), plan()), Again::No(why) if why.contains("reruns are off")));
+        assert!(matches!(next_step(retry, Some(Cause::Gpu), plan()), Again::Whole(Cause::Gpu)));
+        assert!(matches!(next_step(Policy::default(), Some(Cause::Link), none()), Again::No(_)));
+        // A rerun of this HEAD already: no second one.
+        let previous = format!(
+            "rc=1 30s kind=test head={head} of=gate-7 rerun={failed}
+"
+        );
+        let again = rerun::plan("swarm-engine::golden", "gate-7", &rc, &log, head, Some(&previous));
+        assert!(matches!(next_step(on, Some(Cause::Test), again), Again::No(why) if why.contains("rerun already")));
+    }
+
+    struct Reruns(bool);
+    impl Hooks for Reruns {
+        fn gate_reruns(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// #34: reruns are a project's choice. With its hooks unchanged a gate reruns nothing, but a
+    /// transient failure with `--retry-transient`, as before; `--rerun` turns both on for one run,
+    /// and where the project turns them on `--no-rerun` turns them off.
+    #[test]
+    fn reruns_are_off_unless_the_project_or_the_run_turns_them_on() {
+        let opts = |args: &[&str]| parse_args(&[&["--sub", "g", "--note", "n"][..], args].concat()).unwrap();
+        let off = Policy::default();
+        let both = Policy { tests: true, transient: true };
+        struct Default;
+        impl Hooks for Default {}
+        assert_eq!(Policy::of(&Default, &opts(&[])), off, "the old behaviour: no rerun");
+        assert_eq!(Policy::of(&Default, &opts(&["--retry-transient"])), Policy { tests: false, transient: true });
+        assert_eq!(Policy::of(&Default, &opts(&["--rerun"])), both);
+        assert_eq!(Policy::of(&Reruns(true), &opts(&[])), both);
+        assert_eq!(Policy::of(&Reruns(true), &opts(&["--no-rerun"])), off);
     }
 
     #[test]

@@ -49,8 +49,11 @@ and gate the rest. If the lock is refused, log `session.stop --note "gate lock h
 
 Step 5: gate. `cargo xtask gate --sub gate-mr<ids> --note "local gate: #<m> …" --wait
 --retry-transient`. Never `--full`, never `fullgate`: the periodic full gate is the next capable
-agent's. If only tests failed and they may be load flakes, `cargo xtask gate --rerun-failed
-gate-mr<ids> --wait`, then land as usual. On a real failure: note the cause on the PRs,
+agent's. Where the project turns gate reruns on (`Hooks::gate_reruns`), a failed gate reruns once
+by itself: a failure only at the tests, those tests alone; a transient failure, the whole gate;
+when its rerun `gate-mr<ids>-rerun` passes, land on it (`--sub gate-mr<ids>-rerun`). Elsewhere,
+if only tests failed and they may be load flakes, `cargo xtask gate --rerun-failed gate-mr<ids>
+--wait`, then land as usual. On a real failure: note the cause on the PRs,
 `cargo xtask lock drop`, log `session.stop`, and stop.
 
 CI is local: GitHub runs no workflows, so the gate is the only check before landing. A Swarm

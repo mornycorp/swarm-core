@@ -76,6 +76,9 @@ have defaults:
 
 - `gate_kind`: the gate a change needs (docs, tooling or full), from the consumer's own change
   planner. The default is full, unsure, so the coordinator smokes.
+- `gate_reruns`: whether a failed gate reruns once by itself: a failure only at the tests, its
+  failed tests alone; else a transient failure, the whole gate. Off by default; `gate --rerun` and
+  `--no-rerun` choose for one run.
 - `extra_causes`: the consumer's own causes of a failed gate (`gpu`, `python`, say), read
   before the machine's.
 - `around_ci`: wraps the gate's run of the consumer's `ci` (its Python, a GPU lease, its stack's
