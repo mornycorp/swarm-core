@@ -372,7 +372,9 @@ pub fn ready_says(line: &str, empty: Option<&str>) -> String {
 }
 
 /// Why the open PR `v`'s branch holds no work against its base branch, `None` when it does,
-/// from the clone at `root`; each head (`head_sha`) checked once, in `verdicts`.
+/// from the clone at `root`; each head (`head_sha`) checked once, in `verdicts`. A branch pushed
+/// since the listing has a tip that isn't its head: no verdict, and none kept; the next poll
+/// decides (mornycorp/swarm-core#32).
 fn emptiness(root: &Path, v: &Value, verdicts: &mut BTreeMap<String, Option<String>>) -> Result<Option<String>, String> {
     let sha = v.get("head_sha").and_then(Value::as_str).unwrap_or_default();
     if let Some(known) = verdicts.get(sha) {
@@ -386,6 +388,9 @@ fn emptiness(root: &Path, v: &Value, verdicts: &mut BTreeMap<String, Option<Stri
     let base = format!("refs/remotes/origin/{target}");
     event::fetch(root, "origin", &format!("refs/heads/{target}"), &base)?;
     let tip = event::fetch_tip(root, "origin", &format!("refs/heads/{branch}"))?.ok_or_else(|| format!("origin/{branch} is gone"))?;
+    if !sha.is_empty() && tip != sha {
+        return Ok(None);
+    }
     let why = crate::empty::why(root, &base, &tip)?;
     if !sha.is_empty() {
         verdicts.insert(sha.to_owned(), why.clone());
@@ -782,6 +787,29 @@ not json
         assert_eq!(ready_says("#10 PR (10-real)", None), "ready: #10 PR (10-real)");
         let says = ready_says("#9 PR (9-empty)", Some(&why));
         assert!(says.starts_with("ready but empty: #9 PR (9-empty): it holds only its claim commit") && says.ends_with("close the PR"), "{says}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// mornycorp/swarm-core#32: the listing gave the claim commit as the head, then the branch was
+    /// pushed with work before the fetch. The verdict would be the new tip's, cached under the old
+    /// head: there is none, and the next poll, with the new head, decides.
+    #[test]
+    fn a_branch_pushed_between_the_listing_and_the_fetch_gets_no_verdict() {
+        use crate::stack::testgit;
+        let dir = swarm_core_testkit::temp_dir("xtask-prwatch-moved");
+        let (origin, clone) = (dir.join("origin.git"), dir.join("clone"));
+        testgit::bare(&origin);
+        testgit::push_commit(&origin, "main", &[], &[("code.rs", "fn a() {}\n")], "first");
+        testgit::clone(&origin, &clone);
+        let listed = testgit::push_commit(&origin, "9-moved", &["main"], &[], "Claim #9: nothing yet");
+        let pushed = testgit::push_commit(&origin, "9-moved", &["9-moved"], &[("code.rs", "fn a() { b() }\n")], "the work");
+        let mr = |sha: &str| json!({"number": 9, "head_sha": sha, "head_ref": "9-moved", "base_ref": "main"});
+        let mut verdicts = BTreeMap::new();
+
+        assert_eq!(emptiness(&clone, &mr(&listed), &mut verdicts), Ok(None), "no verdict for a head the branch no longer has");
+        assert!(verdicts.is_empty(), "and none kept: {verdicts:?}");
+        assert_eq!(emptiness(&clone, &mr(&pushed), &mut verdicts), Ok(None), "the new head holds work");
+        assert_eq!(verdicts.get(&pushed), Some(&None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
