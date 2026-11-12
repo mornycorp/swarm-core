@@ -148,6 +148,16 @@ pub fn members(root: &Path, files: &[String]) -> (Vec<Member>, Table, Vec<Findin
         workspace.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
     };
     let (include, exclude) = (globs("members"), globs("exclude"));
+    // Cargo's globs have character classes and braces; these don't. A pattern with one would match
+    // nothing here and leave its members unchecked, silently: it is said instead.
+    for (key, list) in [("members", &include), ("exclude", &exclude)] {
+        for pattern in list.iter().filter(|p| p.contains(['[', ']', '{', '}'])) {
+            let problem = format!(
+                "the workspace's `{key}` has `{pattern}`, a glob with a character class or braces, which the checks don't read: its crates would go unchecked"
+            );
+            problems.push(Finding::new("Cargo.toml", line_of_key(&top.0, "workspace", key), "workspace", problem, "list those members by `*` or by name"));
+        }
+    }
     let excluded = |dir: &str| exclude.iter().any(|g| glob::matches(g, dir) || dir.starts_with(&format!("{}/", g.trim_end_matches('/'))));
     let mut found = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -430,6 +440,15 @@ mod tests {
         assert_eq!(m.line_of_dep(&dep("winit", Kind::Normal)), Some(11));
         assert_eq!(m.line_of_dep(&dep("nope", Kind::Normal)), None);
         assert_eq!(line_of_key("[package.metadata.swarm]\nlayer = \"ui\"\n", "package.metadata.swarm", "layer"), Some(2));
+    }
+
+    #[test]
+    fn a_members_glob_the_checks_cant_read_is_a_finding() {
+        let dir = swarm_core_testkit::temp_dir("checks-members-class");
+        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/[ab]*\", \"apps/*\"]\n").unwrap();
+        let (_, _, problems) = members(&dir, &["Cargo.toml".to_owned()]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].rule == "workspace" && problems[0].problem.contains("`crates/[ab]*`") && problems[0].line == Some(2), "{:?}", problems[0]);
     }
 
     #[test]
