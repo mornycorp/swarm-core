@@ -42,7 +42,7 @@ layers`, a step of `ci`, from each manifest's layer (`Hooks::architecture`) or f
 |---|---|---|
 | 0 `model` | `crates/model/` | The types and parsers of everything read from outside (files, wire frames, user text). Hostile input, no I/O |
 | 1 `domain` | `crates/<area>/` | The libraries that do {{product}}'s work, one crate per area. No I/O |
-| 2 `sources` (optional) | `crates/<source>/` | Where data comes from: files, git, the network, a device. Each call with a deadline and a capped result. Cut it if {{product}} reads nothing from outside |
+| 2 `backends` (optional) | `crates/<backend>/` | What {{product}} reads from and writes to outside itself: files, git, the network, a device. Each call with a deadline and a capped result. Cut it if {{product}} touches nothing outside |
 | 3 `engine` | `crates/engine/` | The session, the command registry and the one dispatch |
 | 4 `automation` | `crates/automation/` | The transports: `serve`, the loopback socket, MCP. Thin adapters over the dispatch |
 | 5 `ui` | `crates/ui/` | The UI shell: toolkit code, drawing, input. A client of the engine, never a writer |

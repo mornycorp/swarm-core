@@ -7,8 +7,9 @@
 //! - **Downward.** A dependency (normal or build) of a stack crate is a crate in a strictly lower
 //!   layer, so no one depends on an app, on tooling or on a crate of its own layer. A dev-dependency
 //!   is free of the order; tooling and the testkit may use any layer.
-//! - **`sources` is optional**: the layer between `domain` and `engine` that
-//!   reads the outside (files, git, the network, a device). A workspace with no crate in it checks
+//! - **`backends` is optional**: the layer between `domain` and `engine` that reads and writes
+//!   the outside (files, git, the network, a device). A manifest that names it `sources`, its
+//!   name until mornycorp/swarm-core#87, is read as `backends` ([`Layers::aliases`]). A workspace with no crate in it checks
 //!   as it did before the layer was added: a manifest names its layer, never a position, so nothing
 //!   else moves. `domain` sits below it, so a domain crate can't reach the outside through it.
 //! - **Toolkits** ([`Layers::toolkits`]: egui, winit, …) are linked only by the UI layer and the
@@ -37,6 +38,10 @@ use super::{Finding, Findings, headers, read};
 pub struct Layers {
     /// The layers, lowest first. A crate depends only on a lower one.
     pub stack: &'static [&'static str],
+    /// Earlier names of layers, each with the name in `stack` it is read as: a manifest that
+    /// still declares the old one keeps passing. One that maps to no layer of `stack` does
+    /// nothing.
+    pub aliases: &'static [(&'static str, &'static str)],
     /// The UI layer, which holds toolkit code: one of `stack`.
     pub ui: &'static str,
     /// The apps' layer, the top of `stack`: an app links a toolkit only when it is built on a UI
@@ -64,11 +69,12 @@ pub struct Layers {
 pub use crate::layers::{UNSAFE_LINES, Unsafe};
 
 impl Layers {
-    /// The contract's layers (`model`, `domain`, the optional `sources`, `engine`, `automation`,
+    /// The contract's layers (`model`, `domain`, the optional `backends`, `engine`, `automation`,
     /// `ui`, `apps`), the UI toolkits both reference apps use, and the deny list of the
     /// Swarm Core's own crate root.
     pub const STANDARD: Layers = Layers {
-        stack: &["model", "domain", "sources", "engine", "automation", "ui", "apps"],
+        stack: &["model", "domain", "backends", "engine", "automation", "ui", "apps"],
+        aliases: &[("sources", "backends")],
         ui: "ui",
         apps: "apps",
         tooling: "tooling",
@@ -207,6 +213,7 @@ fn place_of(config: &Layers, name: &str) -> Option<Place> {
     } else if name == config.testkit {
         Some(Place::Testkit)
     } else {
+        let name = config.aliases.iter().find(|(old, _)| *old == name).map_or(name, |(_, now)| now);
         config.stack.iter().position(|l| *l == name).map(Place::Stack)
     }
 }
@@ -533,63 +540,81 @@ mod tests {
         );
     }
 
-    /// `well_formed` with a `sources` crate, which the engine reads the outside through.
-    fn with_sources() -> Vec<(&'static str, String)> {
-        let engine = manifest("app-engine", "engine", "app-domain = { path = \"../domain\" }\napp-sources = { path = \"../sources\" }", "");
+    /// `well_formed` with a `backends` crate, which the engine reads the outside through.
+    fn with_backends() -> Vec<(&'static str, String)> {
+        let engine = manifest("app-engine", "engine", "app-domain = { path = \"../domain\" }\napp-backends = { path = \"../backends\" }", "");
         let mut crates = changed("crates/engine", engine);
-        crates.push(("crates/sources", manifest("app-sources", "sources", "app-domain = { path = \"../domain\" }\napp-model = { path = \"../model\" }", "")));
+        crates
+            .push(("crates/backends", manifest("app-backends", "backends", "app-domain = { path = \"../domain\" }\napp-model = { path = \"../model\" }", "")));
         crates
     }
 
     #[test]
-    fn the_optional_sources_layer_sits_between_the_domain_and_the_engine() {
-        assert_eq!(Layers::STANDARD.stack, ["model", "domain", "sources", "engine", "automation", "ui", "apps"]);
-        // Without it (`well_formed`, the pass above) and with it, the contract is kept.
-        let report = layers(&workspace("layers-sources", &with_sources()), &Layers::STANDARD).unwrap();
-        assert_eq!(report.members, 10);
-        // The engine, the transports and the apps may use it; the apps may skip the engine for it.
-        let cli = manifest("app-cli", "apps", "app-automation = { path = \"../../crates/automation\" }\napp-sources = { path = \"../../crates/sources\" }", "");
-        let mut crates = with_sources();
-        crates.retain(|(d, _)| *d != "apps/cli");
-        crates.push(("apps/cli", cli));
-        assert!(rules(&workspace("layers-sources-app", &crates)).is_empty());
+    fn a_manifest_that_still_says_sources_is_read_as_backends() {
+        // mornycorp/swarm-core#87: the layer was `sources`; a consumer's manifests pass unchanged,
+        // and are held to the same order.
+        let old: Vec<(&'static str, String)> =
+            with_backends().into_iter().map(|(dir, text)| (dir, text.replace("layer = \"backends\"", "layer = \"sources\""))).collect();
+        assert!(old.iter().any(|(_, text)| text.contains("layer = \"sources\"")));
+        assert!(layers(&workspace("layers-sources-alias", &old), &Layers::STANDARD).is_ok());
+        let up = manifest("app-backends", "sources", "app-domain = { path = \"../domain\" }\napp-engine = { path = \"../engine\" }", "");
+        let mut crates = with_backends();
+        crates.retain(|(d, _)| *d != "crates/backends");
+        crates.push(("crates/backends", up));
+        let found = rules(&workspace("layers-sources-alias-up", &crates));
+        assert!(found.iter().any(|(rule, m)| *rule == "layer-order" && m.contains("app-backends (backends) depends on app-engine")), "{found:?}");
     }
 
     #[test]
-    fn the_domain_and_the_model_never_reach_the_outside_through_sources() {
+    fn the_optional_backends_layer_sits_between_the_domain_and_the_engine() {
+        assert_eq!(Layers::STANDARD.stack, ["model", "domain", "backends", "engine", "automation", "ui", "apps"]);
+        // Without it (`well_formed`, the pass above) and with it, the contract is kept.
+        let report = layers(&workspace("layers-backends", &with_backends()), &Layers::STANDARD).unwrap();
+        assert_eq!(report.members, 10);
+        // The engine, the transports and the apps may use it; the apps may skip the engine for it.
+        let cli =
+            manifest("app-cli", "apps", "app-automation = { path = \"../../crates/automation\" }\napp-backends = { path = \"../../crates/backends\" }", "");
+        let mut crates = with_backends();
+        crates.retain(|(d, _)| *d != "apps/cli");
+        crates.push(("apps/cli", cli));
+        assert!(rules(&workspace("layers-backends-app", &crates)).is_empty());
+    }
+
+    #[test]
+    fn the_domain_and_the_model_never_reach_the_outside_through_backends() {
         for (dir, name, layer, deps) in [
-            ("crates/domain", "app-domain", "domain", "app-model = { path = \"../model\" }\napp-sources = { path = \"../sources\" }"),
-            ("crates/model", "app-model", "model", "serde = \"1\"\napp-sources = { path = \"../sources\" }"),
+            ("crates/domain", "app-domain", "domain", "app-model = { path = \"../model\" }\napp-backends = { path = \"../backends\" }"),
+            ("crates/model", "app-model", "model", "serde = \"1\"\napp-backends = { path = \"../backends\" }"),
         ] {
-            let mut crates = with_sources();
+            let mut crates = with_backends();
             crates.retain(|(d, _)| *d != dir);
             crates.push((dir, manifest(name, layer, deps, "")));
-            let found = rules(&workspace("layers-sources-down", &crates));
-            // The domain's is a cycle too (sources uses the domain); the order finds it all the same.
-            let want = format!("{dir}/Cargo.toml:12: [layer-order] {name} ({layer}) depends on app-sources (sources): only strictly lower layers");
+            let found = rules(&workspace("layers-backends-down", &crates));
+            // The domain's is a cycle too (backends uses the domain); the order finds it all the same.
+            let want = format!("{dir}/Cargo.toml:12: [layer-order] {name} ({layer}) depends on app-backends (backends): only strictly lower layers");
             assert!(found.iter().any(|(r, m)| *r == "layer-order" && m.starts_with(&want)), "{want} in {found:?}");
         }
     }
 
     #[test]
-    fn sources_uses_only_the_model_and_the_domain_and_no_toolkit() {
-        let up = manifest("app-sources", "sources", "app-domain = { path = \"../domain\" }\napp-engine = { path = \"../engine\" }", "");
-        let mut crates = with_sources();
-        crates.retain(|(d, _)| *d != "crates/sources");
-        crates.push(("crates/sources", up));
-        let found = rules(&workspace("layers-sources-up", &crates));
+    fn backends_uses_only_the_model_and_the_domain_and_no_toolkit() {
+        let up = manifest("app-backends", "backends", "app-domain = { path = \"../domain\" }\napp-engine = { path = \"../engine\" }", "");
+        let mut crates = with_backends();
+        crates.retain(|(d, _)| *d != "crates/backends");
+        crates.push(("crates/backends", up));
+        let found = rules(&workspace("layers-backends-up", &crates));
         assert!(
             found.iter().any(|(r, m)| *r == "layer-order"
-                && m.starts_with("crates/sources/Cargo.toml:12: [layer-order] app-sources (sources) depends on app-engine (engine)")),
+                && m.starts_with("crates/backends/Cargo.toml:12: [layer-order] app-backends (backends) depends on app-engine (engine)")),
             "{found:?}"
         );
-        let toolkit = manifest("app-sources", "sources", "app-domain = { path = \"../domain\" }\nrfd = \"1\"", "");
-        let mut crates = with_sources();
-        crates.retain(|(d, _)| *d != "crates/sources");
-        crates.push(("crates/sources", toolkit));
-        let found = rules(&workspace("layers-sources-toolkit", &crates));
+        let toolkit = manifest("app-backends", "backends", "app-domain = { path = \"../domain\" }\nrfd = \"1\"", "");
+        let mut crates = with_backends();
+        crates.retain(|(d, _)| *d != "crates/backends");
+        crates.push(("crates/backends", toolkit));
+        let found = rules(&workspace("layers-backends-toolkit", &crates));
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].1.starts_with("crates/sources/Cargo.toml:12: [ui-toolkit] app-sources (sources) depends on rfd, a UI toolkit"), "{found:?}");
+        assert!(found[0].1.starts_with("crates/backends/Cargo.toml:12: [ui-toolkit] app-backends (backends) depends on rfd, a UI toolkit"), "{found:?}");
     }
 
     #[test]
@@ -602,9 +627,9 @@ mod tests {
         let mut crates = changed("crates/engine", engine);
         crates.push(("crates/source", source));
         assert!(layers(&workspace("layers-own-stack", &crates), &own).is_ok());
-        let dir = workspace("layers-own-stack-sources", &with_sources());
+        let dir = workspace("layers-own-stack-backends", &with_backends());
         let found = layers(&dir, &own).err().map(|f| f.0.into_iter().map(|f| f.to_string()).collect::<Vec<_>>()).unwrap_or_default();
-        assert!(found.iter().any(|m| m.starts_with("crates/sources/Cargo.toml:5: [layer-declared] app-sources declares a layer that isn't")), "{found:?}");
+        assert!(found.iter().any(|m| m.starts_with("crates/backends/Cargo.toml:5: [layer-declared] app-backends declares a layer that isn't")), "{found:?}");
     }
 
     #[test]
