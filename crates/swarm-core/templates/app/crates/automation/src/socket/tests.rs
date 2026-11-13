@@ -198,9 +198,13 @@ fn stop_closes_the_connections_and_the_port() {
     let addr = server.addr();
     assert_eq!(server.connections(), 1);
     server.stop();
+    // Nothing listens there: the test can listen there itself, at once. (A connect, refused, would
+    // leave the freed port for seconds on Windows, as it tries again, for another process to take
+    // and answer: mornycorp/swarm-core#97.)
+    let rebound = TcpListener::bind(addr);
+    assert!(rebound.is_ok(), "nothing listens after stop: {rebound:?}");
     assert_eq!(server.connections(), 0);
     assert_eq!(client.recv(), None);
-    assert!(TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err(), "nothing listens after stop");
     server.stop();
 }
 
