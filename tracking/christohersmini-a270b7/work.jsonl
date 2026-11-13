@@ -4,3 +4,4 @@
 {"event":"sub.stop","note":"rc=0; kind=full; main=d4df5a2c72c3387cd841b6a724d2769567260082; merged #101","sub":"gate-101","t":"2026-11-13T17:13:15Z"}
 {"event":"sub.start","name":"gate","note":"#103 skeleton swatch wrap; capacity=3 free=10.7; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-103","t":"2026-11-13T18:00:01Z"}
 {"event":"merge","issue":102,"mr":103,"sub":"gate-103","t":"2026-11-13T18:01:14Z"}
+{"event":"sub.stop","note":"rc=0; kind=full; main=0561aacdbd47b2a83f3827a0e0672f88af6c0f54; merged #103","sub":"gate-103","t":"2026-11-13T18:01:20Z"}
