@@ -29,7 +29,9 @@
 //!    machine's test-run slots ([`crate::test_runs`]), waited for, whichever swarm holds them,
 //!    unless the project's planner ([`Hooks::gate_kind`]) says the change is docs: on 2026-11-03 a
 //!    `ready` and a periodic full gate tested at once and locked up a 24 GB Mac
-//!    (mornycorp/swarm-core#17).
+//!    (mornycorp/swarm-core#17). Under the project's [`Proof::Batch`] every `ci` it runs gets the
+//!    proof's `ready_env`, which leaves out what the coordinator's full gate runs for the batch,
+//!    such as the GPU tests (mornycorp/swarm-core#53, [`with_proof`]).
 //!    Where the project caps its workers' builds ([`Hooks::worker_build_jobs`]), on a machine
 //!    with the `full-gate` capability, each build it starts gets `CARGO_BUILD_JOBS` (unless the
 //!    environment sets it), said aloud and on its log's first line, so a gate there keeps memory
@@ -63,7 +65,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::claim::issue_of_branch;
-use crate::{Hooks, Project, capacity, event, gate, github, test_runs};
+use crate::{Hooks, Project, Proof, capacity, event, gate, github, test_runs};
 
 pub mod own_gate;
 
@@ -213,6 +215,9 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         println!("ready: --no-ci: no ci --changed here; the submit says so, and the coordinator's gate runs it for this PR instead of the smoke");
         push(root)?;
     } else {
+        if let Some(left) = left_out(project) {
+            println!("ready: the batch proof: ci --changed with {left}; the coordinator's full gate runs the rest");
+        }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let set = std::env::var("CARGO_BUILD_JOBS").ok();
         let gb = capacity::Costs::from_env(|name| std::env::var(name).ok()).gb;
@@ -299,6 +304,7 @@ fn ci_command(project: &Project, root: &Path, built_from: &str, jobs: Option<u64
         GateWith::Rebuilt => {
             let mut ci = Command::new(rebuilt_xtask(root, jobs)?);
             ci.current_dir(root).env_remove("CARGO_MANIFEST_DIR").arg("ci").args(args);
+            with_proof(project, &mut ci);
             ci
         }
     };
@@ -341,7 +347,24 @@ fn with_jobs(cmd: &mut Command, jobs: Option<u64>) {
 fn this_ci_command(project: &Project, exe: &Path, root: &Path, args: &[String]) -> Command {
     let mut ci = Command::new(exe);
     ci.current_dir(root).env(project.env_name("XTASK_STALE"), "ok").arg("ci").args(args);
+    with_proof(project, &mut ci);
     ci
+}
+
+/// Set the project's [`Proof::Batch`] `ready_env` on a `ci` that `ready` runs (its gate and the
+/// rerun of its failed tests): the part of `ci` the coordinator's full gate runs for the batch,
+/// this one leaves out (mornycorp/swarm-core#53). Nothing under [`Proof::Ready`].
+fn with_proof(project: &Project, ci: &mut Command) {
+    if let Proof::Batch { ready_env } = project.proof {
+        ci.envs(ready_env.iter().copied());
+    }
+}
+
+/// What the batch proof sets on `ready`'s `ci`, as `NAME=value` words, for its output and the
+/// gate's `sub.start` note; `None` under the ready proof.
+pub(crate) fn left_out(project: &Project) -> Option<String> {
+    let Proof::Batch { ready_env } = project.proof else { return None };
+    Some(ready_env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "))
 }
 
 /// The tree at `root`'s own xtask, built into `<target>/ready-xtask` (never over the running one),
@@ -814,13 +837,35 @@ mod tests {
         assert_eq!(job_cap(&Caps(None), Some("12"), (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(None), "an explicit value wins");
         assert_eq!(job_cap(&Caps(None), Some(" "), (32, capacity::GB_PER_BUILD), || Ok(true)), Ok(Some(4)), "an empty one doesn't");
         assert_eq!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Ok(false)), Ok(None), "not a machine where gates run");
-        assert!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Err("SWARM_INSPECTOR_FULLGATE=maybe: expected on or off".to_owned())).is_err());
+        assert!(job_cap(&Caps(None), None, (32, capacity::GB_PER_BUILD), || Err("APP_SWARM_FULLGATE=maybe: expected on or off".to_owned())).is_err());
         assert_eq!(jobs_on_ci(Some(4)), [Some("4".to_owned())]);
         let said = capped(4);
         assert!(
             said.starts_with("ready: CARGO_BUILD_JOBS=4 for its builds") && said.contains("where gates run") && said.contains("set CARGO_BUILD_JOBS"),
             "{said}"
         );
+    }
+
+    /// #16: under the batch proof `ready`'s `ci` carries the proof's `ready_env`, which leaves the
+    /// batch's tests to the coordinator's full gate; under the ready proof it carries nothing more.
+    #[test]
+    fn the_batch_proof_sets_its_environment_on_readys_ci() {
+        use crate::project::fixtures::{APP_SWARM, GPU_SWARM};
+        let env = |project: &Project| {
+            let ci = this_ci_command(project, Path::new("xtask"), Path::new("."), &own_gate::scope("origin/main"));
+            let stale = project.env_name("XTASK_STALE");
+            let mut set: Vec<(String, String)> = ci
+                .get_envs()
+                .filter(|(k, _)| *k != stale.as_str())
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()))
+                .collect();
+            set.sort();
+            set
+        };
+        assert_eq!(env(&GPU_SWARM), [("GPU_SWARM_SKIP_GPU_TESTS".to_owned(), "1".to_owned())]);
+        assert_eq!(left_out(&GPU_SWARM).as_deref(), Some("GPU_SWARM_SKIP_GPU_TESTS=1"));
+        assert!(env(&APP_SWARM).is_empty());
+        assert_eq!(left_out(&APP_SWARM), None);
     }
 
     #[test]

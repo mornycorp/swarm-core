@@ -150,6 +150,14 @@ mod tests {
     const TESTED_221: &str = r#"{"event":"submit","issue":211,"mr":221,"t":"2026-11-03T10:05:00Z"}"#;
 
     #[test]
+    fn a_batch_proofs_full_gate_stays_full() {
+        // mornycorp/swarm-core#53: under the batch proof the stack's gate is already the whole
+        // `ci`, so a PR readied without its run changes nothing.
+        let planned = (Kind::Full, "batch proof; a product crate".to_owned());
+        assert_eq!(kind_for(planned.clone(), &[9]), planned);
+    }
+
+    #[test]
     fn a_submits_note_says_when_ready_skipped_its_run() {
         assert!(skipped_ci("no-ci"));
         assert!(skipped_ci(" no-ci ; and more"));

@@ -36,7 +36,7 @@ use swarm_core::changed::{self, Plan};
 use swarm_core::checks::{Layers, Scan};
 use swarm_core::gate::rerun::Test;
 use swarm_core::project::{Branches, GitHub, Labels, Limits, ReadyWatch};
-use swarm_core::{Hooks, Project, skeleton};
+use swarm_core::{Hooks, Project, Proof, skeleton};
 
 /// What this swarm is. CHANGE: every value, to the new repo's.
 pub const PROJECT: Project = Project {
@@ -57,6 +57,9 @@ pub const PROJECT: Project = Project {
     ready_watch: ReadyWatch::Stream,
     gate_tag: "",
     golden_binary: "my-engine::golden",
+    // Each PR's `ready` runs everything; `Proof::Batch { ready_env: … }` when the coordinator's
+    // full gate proves each batch instead (cmaughan/swarm-foundation#16). CHANGE: if so.
+    proof: Proof::Ready,
 };
 
 /// The app skeleton's CLI binary and package (`apps/<cli>`). CHANGE: to the new repo's (it is `cli` below too).

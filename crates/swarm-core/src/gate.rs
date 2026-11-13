@@ -74,7 +74,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::stack::{self, Stack, short};
-use crate::{Hooks, Project, capacity, event, fullgate, lock, machine_lock, test_runs};
+use crate::{Hooks, Project, Proof, capacity, event, fullgate, lock, machine_lock, test_runs};
 
 pub mod daemon;
 pub mod rerun;
@@ -293,6 +293,17 @@ pub fn coordinator_kind(needed: (Kind, String), forced: bool) -> (Kind, String) 
         _ if forced => (Kind::Full, "--full".to_owned()),
         (Kind::Full, why) => (Kind::Smoke, why),
         other => other,
+    }
+}
+
+/// The gate the coordinator runs under the project's `proof` (mornycorp/swarm-core#53):
+/// [`coordinator_kind`]'s under [`Proof::Ready`]; under [`Proof::Batch`] what needed the full
+/// gate (or is unsure) gets it, as the proof of every MR in the stack, whose own `ready` left
+/// part of `ci` out.
+pub fn coordinator_kind_for(proof: Proof, needed: (Kind, String), forced: bool) -> (Kind, String) {
+    match (proof, needed) {
+        (Proof::Batch { .. }, (Kind::Full, why)) if !forced => (Kind::Full, format!("batch proof; {why}")),
+        (_, needed) => coordinator_kind(needed, forced),
     }
 }
 
@@ -994,7 +1005,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     } else if o.full {
         coordinator_kind((Kind::Full, String::new()), true)
     } else {
-        untested::kind(project, root, &o.merge, coordinator_kind(hooks.gate_kind(root), false))
+        untested::kind(project, root, &o.merge, coordinator_kind_for(project.proof, hooks.gate_kind(root), false))
     };
     println!("gate {sub}: the {} gate ({why})", kind.name());
     let field = kind_field(kind, &why);
@@ -1396,6 +1407,26 @@ mod tests {
             assert_eq!(e, "gate: still no room for a build after 0 min");
         }
         assert_eq!(waiting(QUEUE, false), "gate: no room for another build now: waiting (every 60 s)", "the line it said before");
+    }
+
+    /// #16: under the batch proof the coordinator keeps the full gate a stack needs (and the one
+    /// it is unsure of), saying why; under the ready proof it smokes it, as before. The docs and
+    /// tooling gates, and `--full`, are the same under both.
+    #[test]
+    fn the_batch_proof_keeps_the_full_gate_the_ready_proof_smokes_it() {
+        use crate::project::fixtures::{APP_SWARM, GPU_SWARM};
+        let full = || (Kind::Full, "reaches model".to_owned());
+        assert_eq!(coordinator_kind_for(GPU_SWARM.proof, full(), false), (Kind::Full, "batch proof; reaches model".into()));
+        assert_eq!(coordinator_kind_for(APP_SWARM.proof, full(), false), (Kind::Smoke, "reaches model".into()));
+        let unsure = crate::Defaults.gate_kind(Path::new("."));
+        assert_eq!(coordinator_kind_for(GPU_SWARM.proof, unsure.clone(), false).0, Kind::Full);
+        assert_eq!(coordinator_kind_for(APP_SWARM.proof, unsure, false).0, Kind::Smoke);
+        for p in crate::project::fixtures::BOTH {
+            for k in [Kind::Docs, Kind::Tooling] {
+                assert_eq!(coordinator_kind_for(p.proof, (k, "x".into()), false), (k, "x".into()), "{}", p.name);
+            }
+            assert_eq!(coordinator_kind_for(p.proof, full(), true), (Kind::Full, "--full".into()), "{}", p.name);
+        }
     }
 
     /// The coordinator smokes what needed the full gate, and what it is unsure of; the docs and

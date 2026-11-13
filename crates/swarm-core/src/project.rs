@@ -47,6 +47,9 @@ pub struct Project {
     /// The smoke's golden tests' binary, as nextest names it (`ci --smoke`'s `golden` step): a
     /// rerun of a failed golden test runs it alone (`swarm-engine::golden`).
     pub golden_binary: &'static str,
+    /// What proves a change before it merges: each MR's own `ready`, or the coordinator's gate of
+    /// its batch (mornycorp/swarm-core#53).
+    pub proof: Proof,
 }
 
 /// A doc `cargo xtask` writes, and the command that writes it (and checks it with `--check`).
@@ -66,6 +69,21 @@ pub enum ReadyWatch {
     /// the background, its exit waking it, and re-arms it). What it reported is kept in `record`, a
     /// file in the clone's git directory.
     Exit { record: &'static str },
+}
+
+/// What proves a change before it merges (mornycorp/swarm-core#53).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proof {
+    /// Each PR's own: `ready` runs the whole `ci --changed`, and the coordinator's gate for a
+    /// change its planner calls full is the smoke ([`crate::gate::coordinator_kind`]). Right
+    /// where the workers' machines can each run everything.
+    Ready,
+    /// The batch's: the coordinator's gate for a stack its planner calls full is the full gate,
+    /// one run for every PR in it ([`crate::gate::coordinator_kind_for`]), and `ready` runs its
+    /// `ci --changed` with `ready_env` set, which leaves out what the project keeps for that gate
+    /// (its GPU tests, say). Right where the workers share the gate's machine, or lack what its
+    /// tests need.
+    Batch { ready_env: &'static [(&'static str, &'static str)] },
 }
 
 /// Where its issues and pull requests are.
@@ -144,6 +162,7 @@ impl Project {
         ready_watch: ReadyWatch::Stream,
         gate_tag: "",
         golden_binary: "swarm-engine::golden",
+        proof: Proof::Ready,
     };
 }
 
@@ -173,6 +192,7 @@ pub(crate) mod fixtures {
         ready_watch: ReadyWatch::Stream,
         gate_tag: "",
         golden_binary: "swarm-engine::golden",
+        proof: Proof::Ready,
     };
 
     pub const GPU_SWARM: Project = Project {
@@ -197,6 +217,7 @@ pub(crate) mod fixtures {
         ready_watch: ReadyWatch::Exit { record: "gpu-prwatch-ready.txt" },
         gate_tag: " (GPU)",
         golden_binary: "gpu-engine::golden",
+        proof: Proof::Batch { ready_env: &[("GPU_SWARM_SKIP_GPU_TESTS", "1")] },
     };
 
     pub const BOTH: [Project; 2] = [APP_SWARM, GPU_SWARM];

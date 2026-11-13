@@ -74,7 +74,11 @@ machine, and the first coordinator and workers.
 | architecture | `layers` (the consumer wires it: its own command and a `ci` step) | `layers` (and the `docs/architecture.md` template), `checks` (`checks::layers`, `checks::scan`, `checks::check`) |
 
 A consumer describes itself in a `Project` (a `const`) and implements `Hooks`, whose methods all
-have defaults:
+have defaults. `Project::proof` says what proves a change before it merges: `Proof::Ready` (each
+PR's `ready` runs the whole `ci --changed` and the coordinator smokes) or `Proof::Batch {
+ready_env }` (`ready` runs with `ready_env` set, which leaves a class of tests out, and the
+coordinator's full gate of the stack runs them once for every PR in it; the protocol's "What
+proves a change"). The hooks:
 
 - `gate_kind`: the gate a change needs (docs, tooling or full), from the consumer's own change
   planner. The default is full, unsure, so the coordinator smokes.
