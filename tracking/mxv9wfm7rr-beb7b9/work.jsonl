@@ -5,3 +5,4 @@
 {"event":"sub.stop","note":"rc=0","sub":"ready-8cb5ed0","t":"2026-11-13T17:10:54Z"}
 {"event":"submit","issue":100,"mr":101,"t":"2026-11-13T17:11:04Z"}
 {"event":"claim","issue":102,"t":"2026-11-13T17:55:19Z"}
+{"event":"work","issue":102,"mr":103,"t":"2026-11-13T17:55:29Z"}
