@@ -5,6 +5,11 @@ use std::fmt;
 
 use serde::Serialize;
 
+use {{crate_prefix_ident}}backends::{BackendError, Kind};
+
+/// `clip` is the backends' own, so the message of a call and of a backend are clipped alike.
+pub use {{crate_prefix_ident}}backends::clip;
+
 /// A failure's stable, machine-read code. Their spelling and meaning never change; an app adds
 /// codes of its own beside the contract's (here: `unavailable`) and never reuses one of these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -79,19 +84,6 @@ impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// The longest text of a hostile input a message repeats.
-const CLIP: usize = 200;
-
-/// `text` cut to [`CLIP`] characters, so a message never repeats a hostile input whole: transports
-/// use it on what they echo.
-pub fn clip(text: &str) -> String {
-    let mut out: String = text.chars().take(CLIP).collect();
-    if text.chars().nth(CLIP).is_some() {
-        out.push('…');
-    }
-    out
 }
 
 /// Why a call failed, for every surface.
@@ -170,35 +162,24 @@ impl fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
-/// A backend's failure, as a caller sees it: its kind's code, its message and its remediation.
-/// What couldn't be done there (a deadline, the disk) is `internal`.
-impl From<{{crate_prefix_ident}}backends::BackendError> for CommandError {
-    fn from(e: {{crate_prefix_ident}}backends::BackendError) -> CommandError {
-        use {{crate_prefix_ident}}backends::Kind;
-        match e.kind {
-            Kind::NotFound => CommandError::not_found(e.message, e.remediation),
-            Kind::TooLarge => CommandError::too_large(e.message, e.remediation),
-            Kind::Cancelled => CommandError::cancelled(),
-            Kind::Failed => CommandError::internal(e.message),
-        }
+/// A backend's failure as a call's, so a command calls a backend with `?`: its kind is the code,
+/// and its message and remediation are kept. `Failed` (a deadline passed, the disk or the system
+/// refused) is `unavailable`: not a bug in the app, and worth a retry once its cause is gone.
+impl From<BackendError> for CommandError {
+    fn from(e: BackendError) -> CommandError {
+        let code = match e.kind {
+            Kind::NotFound => ErrorCode::NotFound,
+            Kind::TooLarge => ErrorCode::TooLarge,
+            Kind::Cancelled => ErrorCode::Cancelled,
+            Kind::Failed => ErrorCode::Unavailable,
+        };
+        CommandError::new(code, e.message, e.remediation)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_backends_failure_keeps_its_kind_message_and_remediation() {
-        use {{crate_prefix_ident}}backends::BackendError;
-        let e = CommandError::from(BackendError::too_large("the file is over 10 bytes", "delete it"));
-        assert_eq!((e.code, e.message.as_str(), e.remediation.as_str()), (ErrorCode::TooLarge, "the file is over 10 bytes", "delete it"));
-        assert_eq!(CommandError::from(BackendError::not_found("no such program", "install it")).code, ErrorCode::NotFound);
-        assert_eq!(CommandError::from(BackendError::cancelled()).code, ErrorCode::Cancelled);
-        let e = CommandError::from(BackendError::failed("the disk refused"));
-        assert_eq!(e.code, ErrorCode::Internal);
-        assert!(!e.remediation.is_empty());
-    }
 
     #[test]
     fn a_remediation_is_never_empty() {
@@ -225,6 +206,20 @@ mod tests {
             serde_json::json!({"code": "bad_params", "message": "missing field `path`", "remediation": "pass `path`, a file path", "key": "path"})
         );
         assert!(serde_json::to_value(CommandError::cancelled()).unwrap().get("key").is_none());
+    }
+
+    #[test]
+    fn a_backends_failure_keeps_its_words_and_takes_its_code() {
+        let cases = [
+            (BackendError::not_found("no `git` here", "install it"), ErrorCode::NotFound),
+            (BackendError::too_large("over the cap", "ask for less"), ErrorCode::TooLarge),
+            (BackendError::cancelled(), ErrorCode::Cancelled),
+            (BackendError::failed("it hung", "run it by hand"), ErrorCode::Unavailable),
+        ];
+        for (backend, code) in cases {
+            let e = CommandError::from(backend.clone());
+            assert_eq!((e.code, e.message, e.remediation, e.key), (code, backend.message, backend.remediation, None));
+        }
     }
 
     #[test]

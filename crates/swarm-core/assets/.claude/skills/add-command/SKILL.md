@@ -85,7 +85,7 @@ the contract doesn't have is not this skill's job: stop and say so.
      sizes; bounded recursion.
    - slow work is cancellable: poll `cx.check_cancelled()?` between steps.
    - another program starts **only** through the app's process module
-     (`crates/backends/src/process.rs`: `process::run`, with its deadlines and its cap), and a file
+     (`crates/backends/src/process.rs`: a `Program`, run with its deadlines and its cap), and a file
      is written **only** through its atomic writer (`crates/backends/src/files.rs`:
      `files::write_atomic`), by the one module that owns that file. A failure of either becomes
      the command's error with `?`. Shared state sits behind the
