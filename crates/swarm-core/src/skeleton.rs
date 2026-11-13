@@ -95,10 +95,11 @@ pub const SCANS: &[Scan] = &[
     Scan::value_reads().files(&["crates/automation/**/*.rs", "apps/**/*.rs"]).test_files(TEST_FILES),
     Scan::command_spec().files(SOURCES).test_files(TEST_FILES).allowing(&[REGISTRY]),
     Scan::real_config_dir().files(SOURCES).test_files(TEST_FILES),
-    Scan::file_writes().files(SOURCES).except(FILE_WRITERS).test_files(TEST_FILES).allowing(&[TOKEN_FILE]),
+    Scan::file_writes().files(SOURCES).except(FILE_WRITERS).test_files(TEST_FILES),
 ];
 
-/// The one write outside the backends crate: the control socket's token.
+/// The earlier layout's one write outside its state module: the control socket's token, which
+/// the backends crate's writer now makes (private, and never over a file that is there).
 const TOKEN_FILE: Allowed = Allowed {
     file: "crates/automation/src/token.rs",
     count: 3,

@@ -3,9 +3,14 @@
 //!
 //! - **Where it comes from.** `{{env}}_CONTROL_TOKEN` ([`ENV`]) when that is set, else a file
 //!   ([`Token::from_file`]). Neither is a typed error that says what to set ([`Token::resolve`]).
-//! - **On Unix the file is private and yours.** A missing file is created `0600` with a random
-//!   token (`create_new`, so an existing file or a planted symlink is never followed into a write),
-//!   and an existing one is read only when it is a regular file (not a symlink, a FIFO or a device:
+//! - **It is written by the backends' one atomic writer** (`files::write_atomic_as`, with
+//!   `Access::Private`): the token goes to a new temporary file that is the owner's alone (`0600` on
+//!   Unix) before its first byte, then into place, so it is never readable by others, never half
+//!   written, and nothing planted at the path is written through.
+//! - **On Unix the file is private and yours.** A missing file is created with a random token, linked
+//!   into place only where nothing is (`Existing::Keep`: a file that appeared meanwhile, or a planted
+//!   symlink, is kept and then checked, never followed into a write), and an existing one is read
+//!   only when it is a regular file (not a symlink, a FIFO or a device:
 //!   checked before it is opened, so nothing at the path can block the start), owned by the user
 //!   the app runs as, and readable by nobody else. Anything else is refused, not used: a token
 //!   someone else planted would be one they know.
@@ -20,9 +25,9 @@
 //!   regular file, yours and private), and never makes or replaces a file.
 //! - **The variable stays in the environment.** `std::env::remove_var` is `unsafe` in edition 2024
 //!   and this crate forbids `unsafe`, so [`ENV`] is not removed after it is read, and a child
-//!   process would inherit it. So the backends layer's process module, the one place a child is started
-//!   (docs/app-architecture.md › Never hang on another program), starts every child without it
-//!   (`process::TOKEN_ENV`, this same name: a test here holds the two together).
+//!   process would inherit it: the backends' process module (docs/app-architecture.md › Never hang
+//!   on another program), the one place a program is started, takes it out of every child's
+//!   environment. [`ENV`] is that module's `TOKEN_ENV`, so the two never name different variables.
 //! - **It is never shown.** [`Token`]'s `Debug` is redacted, no error here repeats a token's value,
 //!   and nothing logs one.
 //! - **It is compared in constant time** ([`Token::matches`], [`ct_eq`]): the comparison takes the
@@ -30,14 +35,17 @@
 //!   way.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::path::Path;
 
+use {{crate_prefix_ident}}backends::BackendError;
+use {{crate_prefix_ident}}backends::files::{self, Access, Existing, Written};
 use {{crate_prefix_ident}}engine::CommandError;
 
-/// The environment variable that carries the token instead of a file.
-pub const ENV: &str = "{{env}}_CONTROL_TOKEN";
+/// The environment variable that carries the token instead of a file: the one the process module
+/// takes out of every child's environment.
+pub const ENV: &str = {{crate_prefix_ident}}backends::process::TOKEN_ENV;
 
 /// The shortest token accepted: a short one is guessable.
 pub const MIN_LEN: usize = 16;
@@ -158,15 +166,15 @@ impl Token {
     /// at every call (an existing file is never read).
     pub fn from_file(path: &Path) -> Result<Token, CommandError> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            make_dir(dir).map_err(|e| io_failure(dir, "create the directory of", &e))?;
+            files::make_dir(dir, Access::Private).map_err(stored)?;
         }
         if cfg!(windows) {
             return renew(path);
         }
-        match create_private(path) {
-            Ok(file) => write_new(path, file),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => read_private(path),
-            Err(e) => Err(io_failure(path, "create", &e)),
+        match fs::symlink_metadata(path) {
+            Ok(_) => read_private(path),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => create(path),
+            Err(e) => Err(io_failure(path, "read", &e)),
         }
     }
 }
@@ -201,30 +209,24 @@ fn refused(path: &Path, why: &str, fix: String) -> CommandError {
     CommandError::unavailable(format!("the token file {} {why}", path.display()), fix)
 }
 
-/// A new file for the token, readable and writable by its owner only (`0600` on Unix). It fails
-/// with `AlreadyExists` for any existing path, a symlink included.
-fn create_private(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)
+/// The writer's failure on the token file, with what to do about it here.
+fn stored(e: BackendError) -> CommandError {
+    CommandError::unavailable(format!("the token file: {}", e.message), "check the path and its permissions, or set the token in the environment instead")
 }
 
-/// The token's directory, made `0700` on Unix when it has to be created.
-fn make_dir(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
+/// The token as its file holds it: one line.
+fn line(token: &Token) -> String {
+    format!("{}\n", token.0)
 }
 
-/// A random token written to `file`, just created at `path`.
-fn write_new(path: &Path, mut file: File) -> Result<Token, CommandError> {
+/// Unix: a random token at `path`, where nothing was. When something appeared there meanwhile it is
+/// kept, never written through, and read as an existing file is (with its checks).
+fn create(path: &Path) -> Result<Token, CommandError> {
     let token = Token::generate()?;
-    writeln!(file, "{}", token.0).and_then(|()| file.flush()).map_err(|e| io_failure(path, "write", &e))?;
-    Ok(token)
+    match files::write_atomic_as(path, line(&token).as_bytes(), Access::Private, Existing::Keep).map_err(stored)? {
+        Written::Wrote => Ok(token),
+        Written::Kept => read_private(path),
+    }
 }
 
 /// What is at `path`, looked at without following a link: a regular file, or a refusal. A link
@@ -240,9 +242,9 @@ fn regular(path: &Path) -> Result<fs::Metadata, CommandError> {
     Ok(meta)
 }
 
-/// Windows: a fresh token written to a new file beside `path`, renamed over it. What was at `path`
-/// is replaced unread (it may be a link or a file someone else made); only a directory there is
-/// refused.
+/// Windows: a fresh token written to a new file beside `path`, renamed over it (the one atomic
+/// writer). What was at `path` is replaced unread (it may be a link or a file someone else made);
+/// only a directory there is refused.
 fn renew(path: &Path) -> Result<Token, CommandError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => {
@@ -252,17 +254,14 @@ fn renew(path: &Path) -> Result<Token, CommandError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(io_failure(path, "read", &e)),
     }
-    let fresh = beside(path, "new")?;
-    let token = create_private(&fresh).map_err(|e| io_failure(&fresh, "create", &e)).and_then(|file| write_new(&fresh, file));
-    let token = token.and_then(|token| fs::rename(&fresh, path).map(|()| token).map_err(|e| io_failure(path, "replace", &e)));
-    if token.is_err() {
-        let _ = fs::remove_file(&fresh);
-    }
-    token
+    let token = Token::generate()?;
+    files::write_atomic_as(path, line(&token).as_bytes(), Access::Private, Existing::Replace).map_err(stored)?;
+    Ok(token)
 }
 
 /// A path beside `path` that nothing has: its name, a random part and `suffix`.
-fn beside(path: &Path, suffix: &str) -> Result<PathBuf, CommandError> {
+#[cfg(unix)]
+fn beside(path: &Path, suffix: &str) -> Result<std::path::PathBuf, CommandError> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Ok(path.with_file_name(format!(".{name}.{}.{suffix}", random_hex(8)?)))
 }
@@ -320,22 +319,26 @@ fn owned_by(path: &Path, owner: u32, me: u32) -> Result<(), CommandError> {
 
 /// Unix: the user id the app runs as. `std` has no `geteuid` (and this crate no `unsafe`), but a
 /// file the process creates is owned by it: a probe file beside the token file (or in the temp
-/// directory, when that one can't be written) says, and is removed.
+/// directory, when that one can't be written), made by the one atomic writer, says, and is removed.
 #[cfg(unix)]
 fn my_uid(path: &Path) -> Result<u32, CommandError> {
     use std::os::unix::fs::MetadataExt;
     let mut last = None;
     for probe in [beside(path, "probe")?, std::env::temp_dir().join(format!(".control-token.{}.probe", random_hex(8)?))] {
-        match create_private(&probe).and_then(|file| file.metadata()) {
-            Ok(meta) => {
-                let _ = fs::remove_file(&probe);
-                return Ok(meta.uid());
+        match files::write_atomic_as(&probe, b"", Access::Private, Existing::Keep) {
+            Ok(Written::Wrote) => {
+                let owner = fs::symlink_metadata(&probe).map(|meta| meta.uid());
+                let _ = files::remove(&probe);
+                match owner {
+                    Ok(uid) => return Ok(uid),
+                    Err(e) => last = Some(io_failure(path, "check the owner of", &e)),
+                }
             }
-            Err(e) => last = Some(e),
+            Ok(Written::Kept) => last = Some(refused(&probe, "was already there", "start again".to_owned())),
+            Err(e) => last = Some(stored(e)),
         }
     }
-    let e = last.unwrap_or_else(|| io::ErrorKind::PermissionDenied.into());
-    Err(io_failure(path, "check the owner of", &e))
+    Err(last.unwrap_or_else(|| io_failure(path, "check the owner of", &io::Error::from(io::ErrorKind::PermissionDenied))))
 }
 
 #[cfg(test)]
@@ -344,13 +347,6 @@ mod tests {
 
     fn dir(name: &str) -> std::path::PathBuf {
         {{crate_prefix_ident}}testkit::temp_dir(name).unwrap()
-    }
-
-    /// The variable the token is read from is the one the process module takes out of every
-    /// child's environment.
-    #[test]
-    fn the_process_module_removes_this_variable_from_a_child() {
-        assert_eq!(ENV, {{crate_prefix_ident}}backends::process::TOKEN_ENV);
     }
 
     /// `text` in a file at `path`, private on Unix as a token file must be.

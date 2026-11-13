@@ -72,7 +72,8 @@ beside it) is **only a `[dev-dependencies]` entry**, never a dependency of produ
     says what is stored, its `schema_version`, its migrations and when it is saved; a command
     declares the effect (`writes`, `runs_code`, `network`, `device`) and the dispatch asks for
     consent. A backend's failure is its own typed error, which the engine turns into the
-    command's.
+    command's: what couldn't be done there (a deadline passed, the disk refused) is
+    `unavailable`, not `internal`, as it is no bug in the app.
   - **A transport's own socket and stdio are not this layer's**: they are how the app is
     reached, in `automation`.
   - **A further backend is the app's choice** (a module in that crate, or a crate of its own in
@@ -589,6 +590,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | State on disk: the skeleton's one writer also makes a private file and one that is never written over what is there, so the control socket's token goes through it and no file write is allow-listed; a backend's `Failed` (a deadline, a refusing disk) reaches a caller as `unavailable`, not `internal` (swarm-core#94) |
 | 2026-11-13 | minor | Layers: only `backends` touches the outside. The process module and the one atomic file writer live there (the skeleton's `crates/backends`), so a backend can start a program or write a file through the same two modules; the engine keeps what is stored and when, and turns a backend's error into the command's. The layer is always there; a further backend is the app's choice. The `file-writes` scan reads every crate outside the layer (swarm-core#91) |
 | 2026-11-13 | minor | One dispatch: MCP runs on a session of its own or attached to a running app's control socket (`{{cli}} mcp --attach <port> [--token-file <path>]`), one MCP adapter over a seam of two calls, with the same answers and the same consent rule (a command whose effects need consent is `consent_required` even on a socket started with `--yes`); The JSON-lines frame: a spec in `commands` carries its effects, and a client counts any effect that isn't `false` as needing consent; the check adds the surface test that compares `mcp --attach` with `mcp` (swarm-core#89) |
 | 2026-11-13 | minor | Layers: the optional `sources` layer is `backends`, and it reads and writes the outside (a write there is a command's declared effect; the app's own state stays with the state module). A manifest that still says `sources` is read as `backends` (swarm-core#87) |
