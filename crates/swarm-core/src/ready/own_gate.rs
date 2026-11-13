@@ -90,7 +90,8 @@ impl OwnGate<'_> {
     pub fn run(&self, log: &mut dyn FnMut(&[&str])) -> Result<Option<Reran>, String> {
         let head = crate::stack::rev(self.root, "HEAD")?;
         let sub = sub_of(&head);
-        let first = as_sub(self.agent, &sub, "ci --changed before submitting", log, &mut || self.attempt(&sub, &head, &scope(self.base), None))?;
+        let note = start_note(self.project);
+        let first = as_sub(self.agent, &sub, &note, log, &mut || self.attempt(&sub, &head, &scope(self.base), None))?;
         if first.rc == 0 {
             return Ok(None);
         }
@@ -152,6 +153,16 @@ fn rerun_plan(enabled: bool, golden: &str, sub: &str, first: &Ran, head: &str, p
         return Err("--no-rerun".to_owned());
     }
     rerun::plan(golden, sub, &first.line, &first.log, head, previous)
+}
+
+/// The first gate's `sub.start` note: `ci --changed before submitting`, and under the batch proof
+/// what it left to the coordinator's full gate (mornycorp/swarm-core#53), so a reader of the
+/// timeline can tell a `ready` that ran everything from one that didn't.
+fn start_note(project: &crate::Project) -> String {
+    match super::left_out(project) {
+        Some(left) => format!("ci --changed before submitting; batch proof: {left}"),
+        None => "ci --changed before submitting".to_owned(),
+    }
 }
 
 /// Run `gate` as the worker's own sub-agent `sub`: `sub.start --name ready`

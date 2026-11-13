@@ -29,6 +29,7 @@ const FAKE: Project = Project {
     ready_watch: ReadyWatch::Stream,
     gate_tag: "",
     golden_binary: "fake::golden",
+    proof: swarm_core::Proof::Ready,
 };
 
 const FAKE_XTASK: &str = env!("CARGO_BIN_EXE_fake-xtask");

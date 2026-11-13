@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-12 · **Change:** minor (a take-over: `stop` frees a claim, a red `main` doesn't hold it, a local branch ahead is refused; standing rules; a fresh context for a different task; every PR branched from `main`; a timeout repeated alone is proof; the review's checklist gains the robustness traps; the periodic full gate reads again under the machine lock) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-13 · **Change:** minor (what proves a change: the ready proof or the batch proof, a project setting, sc#53) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -116,7 +116,10 @@ the periodic full gate of main (`<commit>`): the whole `ci`, about <n> min." Whe
 them "Full gate done: passed." or "Full gate done: failed (`<cause>`), filed `main-red` #<n>;
 working on that instead." Do the work with tests. Your
 gate is `cargo xtask ci --changed` (it becomes the full `cargo xtask ci` when its plan says the
-change reaches everything). Before each run that builds, run `cargo xtask capacity`: when it
+change reaches everything). Under the project's batch proof ([What proves a
+change](#what-proves-a-change)), `ready` runs it without the tests the coordinator's full gate
+runs for the batch: run those of what you are building yourself, once. Before each run that
+builds, run `cargo xtask capacity`: when it
 suggests 0 more builds, iterate with `cargo test -p <crate>` or wait a few minutes and check
 again, rather than start another build. On a machine where the coordinator gates, cap every
 build's jobs: `CARGO_BUILD_JOBS=<n>`, `<n>` from capacity's `worker builds:` line
@@ -349,13 +352,22 @@ request. Always pass `--repo {{github.repo}}` to gh.
    Rebasing just before submitting puts conflicts with you, who know the change, rather
    than in the coordinator's stack, and makes your gate test what will be stacked. By hand: the
    same steps, then `gh pr ready <m> --repo {{github.repo}}`. **Workers do not
-   merge:** the coordinator rebases, runs the local gate (a smoke, `cargo xtask ci --smoke`, for a
-   change the docs and tooling gates don't take) and merges in dependency order; the
-   periodic full gate tests `main` after ([The coordinator's loop](#the-coordinators-loop)). So
-   your own `cargo xtask ci --changed` before ready is what proves your change before it merges
-   (owner, 2026-10-22): the whole gate for the packages your change affects, their
-   dependents and the packages that read a file it changed, doctests included; it becomes the
-   full `cargo xtask ci` when its plan says the change reaches everything. The merge closes the
+   merge:** the coordinator rebases, runs the local gate and merges in dependency order
+   ([The coordinator's loop](#the-coordinators-loop)). For a change the docs and tooling gates
+   don't take, that gate depends on the project's proof ([What proves a
+   change](#what-proves-a-change)):
+   - **The ready proof:** it is a smoke (`cargo xtask ci --smoke`), and the periodic full
+     gate tests `main` after. So your own `cargo xtask ci --changed` before ready is what proves
+     your change before it merges (owner, 2026-10-22): the whole gate for the packages
+     your change affects, their dependents and the packages that read a file it changed,
+     doctests included. It becomes the full `cargo xtask ci` when its plan says the change
+     reaches everything.
+   - **The batch proof:** it is the full gate of the stack, which proves every PR in it (sc#53).
+     Your `ready` is the same `ci --changed` without the tests that gate keeps (the project's
+     `ready_env`): it shows that the change builds, lints and passes the rest. Run the left-out
+     tests of what you built yourself, once.
+
+   The merge closes the
    issue, and the coordinator removes its label (`cargo xtask tidy <n>`). From your first
    submit, watch your PRs with `cargo xtask prwatch --agent <id>` (`--once` on every wake) and act
    at once: a merged base means rebasing what is stacked on it
@@ -782,13 +794,15 @@ On each finished pull request:
      without its run (changed): `cargo xtask gate` picks one from
      the stack's change against `origin/main` and `ci --changed`'s plan for it:
      The project's planner (`Hooks::gate_kind`; [swarm.md › The gate's kinds
-     here](swarm.md#the-gates-kinds-here)) decides docs, tooling or full; the coordinator runs
-     full as the smoke unless `--full` forces it. What each kind takes is the project's:
+     here](swarm.md#the-gates-kinds-here)) decides docs, tooling or full. Under the ready proof
+     the coordinator runs full as the smoke unless `--full` forces it; under the batch proof it
+     runs the full gate ([What proves a change](#what-proves-a-change)). What each kind takes is
+     the project's:
      - **docs:** only what the planner counts as docs (only Markdown, say; a project
        may take its templates and scripts too); runs `cargo xtask ci --changed --base origin/main`;
      - **tooling:** only what the planner counts as tooling, and the plan builds no
        crate but xtask (no product crate depends on it); runs `ci --changed --base origin/main` too;
-     - **smoke** (owner, 2026-10-22): anything else (a product crate,
+     - **smoke** (owner, 2026-10-22; the ready proof's): anything else (a product crate,
        the workspace manifest, `.config/nextest.toml`, `clippy.toml`, a new
        top-level file; a planner may judge a `Cargo.lock` change by the crates it reaches), and
        whenever it is unsure (no plan, no change seen); runs `cargo xtask ci
@@ -801,7 +815,9 @@ On each finished pull request:
        it on purpose: a stale `#[expect]` exemption where two PRs meet is a stack's most common
        failure, and no test run catches it. The whole `ci` moved to [the periodic full
        gate](#the-periodic-full-gate) of `main`.
-     - **full:** `--full` forces it: the whole `cargo xtask ci`. **Only when the author's own
+     - **full:** the whole `cargo xtask ci`. **Under the batch proof** (sc#53), every stack
+       that needs it, or whose planner is unsure: its notes say `kind=full (batch proof;
+       <why>)`. **Under the ready proof**, `--full` forces it, **only when the author's own
        run can't speak for the gating machine** (owner, 2026-10-23): its
        `ci --changed` ran on another platform (a Mac or Linux worker: `cfg(windows)` code is then
        only linted, by `clippy-windows`, never tested), its plan left out tests the change
@@ -1216,6 +1232,38 @@ overnight on 2026-10-18 for that reason. So (owner, 2026-10-19):
   paused. After a session restart, whose background tasks died with it, the ready watch is
   re-armed the same way; the scheduled check survives a restart and stays as it was.
 
+## What proves a change
+
+A project picks what proves a change before it merges, in its `Project::proof` (sc#53; its
+swarm.md says which):
+
+- **The ready proof** (`Proof::Ready`): each PR proves itself. A worker's `ready` runs the whole
+  `ci --changed`, and the coordinator's gate of a stack that reaches product code is the smoke.
+  Right where every worker's machine runs what the gating machine runs: each PR pays for its own
+  tests, on its own machine.
+- **The batch proof** (`Proof::Batch { ready_env }`): the stack proves itself. `ready` runs `ci
+  --changed`, and the rerun of its failed tests, with `ready_env` set, which leaves out the
+  tests the project keeps for the coordinator's gate (the GPU tests, say). Its output and its
+  `sub.start` note say so (`ci --changed before submitting; batch proof: <NAME>=<value>`). The
+  coordinator's gate of a stack its planner calls full, or is unsure of, is the full gate, one
+  run for every PR in it. Right where the workers share the gating machine, or lack what its
+  tests need. Measured on 2026-10-29: a GPU desktop that hosted a coordinator and its workers
+  spent 26.7 hours on about 100 per-PR `ready` runs, while one full gate merged 4 to 9 PRs in
+  about 25 minutes.
+  - `ci --changed` already narrows a run to the packages a change reaches. The batch proof
+    narrows it another way: within those packages, it leaves a class of tests to the one run
+    that gates the stack.
+  - A worker still runs the left-out tests of what it is building, once, as it would while
+    iterating: the batch proof moves the regression run, not the author's own check.
+  - Let a few PRs queue before gating: a full gate per PR costs more than the ready proof did.
+  - A red full gate names its failing tests. `gate --rerun-failed` first when the cause may be
+    the machine's. A real failure's crate usually points at one PR: send it back and gate the
+    rest again; else split the stack.
+  - A full gate that lands whole verifies `main` ([The periodic full
+    gate](#the-periodic-full-gate)), so the periodic gate idles while batches land.
+  - A PR readied with `ready --no-ci` changes nothing here: its stack's gate is already the
+    full one.
+
 ## The periodic full gate
 
 The owner's direction, 2026-10-22, for both swarms: **unload the
@@ -1225,8 +1273,9 @@ coordinator.** It merges after the [smoke](#the-coordinators-loop) (step 3), and
 unverified too long. Workers keep testing their own branches, with `cargo xtask ci --changed`
 (AGENTS.md §5). `cargo xtask fullgate` (Swarm Core's `fullgate`):
 
-- **What counts as a pass** (sc#15): the periodic gate's own, and **a landed `--full` gate**.
-  When the coordinator's `gate --full` (the whole `ci` on the stacked tree) lands and `main` is
+- **What counts as a pass** (sc#15): the periodic gate's own, and **a landed full gate**.
+  When the coordinator's full gate (the whole `ci` on the stacked tree: `gate --full`, or any
+  gate the batch proof makes full, sc#53) lands and `main` is
   then exactly the tree it tested (every PR of its stack landed onto the `main` it was stacked
   on), `land` closes it with `main=<its commit>` in its stop note, and that commit of `main`
   counts as verified. A stack landed in part, or onto a `main` that moved meanwhile, counts for
@@ -1385,6 +1434,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | What proves a change (new): a project's `Project::proof`. The ready proof (each PR's `ready` runs everything; the coordinator smokes; what every swarm ran until now) or the batch proof (`ready` runs without the project's `ready_env` tests; the coordinator's gate of a stack that needs it is the full gate, and a landed one verifies `main`). Starting a worker, Picking work › Finish, the coordinator's step 3 and the periodic full gate's passes say what each means (sc#53) |
 | 2026-11-13 | minor | The coordinator's loop › land: `land` assumes `main` requires no up-to-date branches, as `docs/new-swarm.md` sets it up; a PR stacked on one the server rebased then merges as gated (sc#38) |
 | 2026-11-12 | minor | The gate daemon: a bisection's last suspect is gated alone before it is sent back, and nobody is when it passes too; the off switch is read before each gate; `--retry <pr>` forgets what it kept of one PR; a second daemon in a worktree is refused; GitHub's conflict flag is only where to look, and a conflict `stack` resolves is gated; `main` failing on the gating machine files a `main-red` issue; a PR it can't put back to draft is held; three gates in a row that don't run set the switch (sc#45) |
 | 2026-11-12 | minor | The gate daemon (new): `cargo xtask gate --daemon` runs steps 2 and 3 of the coordinator's loop on the gating machine: pauses on its switch or an open `main-red` issue; flags a ready PR that conflicts with `main` once per head; stacks in dependency order with rerere off, dropping a conflict and what is stacked on it; folds newly ready PRs in while the gate waits for room and never kills a gate; lands what didn't change during the gate; drops the PR a failure points at (back to draft, the log's excerpt in a comment) or bisects, keeping its suspects; where the project turns it on (`Hooks::verify_main`) runs a stack's failed tests alone on `main` before blaming a PR. `--status`, `--stop`, `--resume`; what stays with the coordinator. A daemon gate's failure is a send-back only of what its `sendback` names (sc#44) |

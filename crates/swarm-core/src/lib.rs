@@ -48,7 +48,7 @@ pub mod test_runs;
 pub mod tidy;
 pub mod time;
 
-pub use project::Project;
+pub use project::{Project, Proof};
 
 /// This crate's version, from its manifest. The revision a consumer pins is in its `Cargo.lock`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
