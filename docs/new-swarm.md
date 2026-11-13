@@ -108,7 +108,10 @@ missing, so it never overwrites the repo's own.
      and the state files' prefix), its `env_prefix` (`<PREFIX>_AGENT`, `<PREFIX>_TRACKING`, …),
      its GitHub host and repository, and its own file names (`checkout_marker`, `gate_lock_file`,
      `tracking_queue`, `stack_state`) so two swarms on one machine never share one. List the docs
-     `cargo xtask` generates in `generated`, so `stack` regenerates one that conflicts.
+     `cargo xtask` generates in `generated`, so `stack` regenerates one that conflicts. Its
+     `proof` says what proves a change before it merges: keep `Proof::Ready` unless the workers
+     share the gating machine or lack what its tests need (`Proof::Batch`; the protocol's "What
+     proves a change").
    - **The `Hooks`** (`swarm_core::Hooks`): every method has a default. Start with
      `changed` (the package prefix, which is also the prefix of the app skeleton's crates) and
      `asset_vars` (the placeholders' values: `product` and `cli` name the skeleton's directories
@@ -118,7 +121,11 @@ missing, so it never overwrites the repo's own.
      instead); `scans` holds the architecture's scans
      (`skeleton::scans_at`: the skeleton's, once the repo has it). Add a `gate_kind` planner when docs and
      tooling changes should skip the smoke, and `extra_causes`, `around_ci`, `full_gate_capable` or
-     `full_gate_env` when the gate needs them.
+     `full_gate_env` when the gate needs them. Four more are off until the swarm wants them:
+     `gate_reruns` (a failed gate reruns once by itself), `gate_priority` (a gate goes ahead of
+     workers' builds), `worker_build_jobs` (a cap on a worker's build jobs where gates run) and
+     `verify_main` (the gate daemon checks `main` before it sends a PR back;
+     [gate-daemon.md](gate-daemon.md)). Say which are on in `docs/swarm.md`.
    - **The dispatch**: `swarm_core::serves(command)` then `swarm_core::run(&PROJECT,
      &Ours, &root, command, rest)`, beside the repo's own commands.
    - **App or not** is nothing to set: the example asks the workspace (`skeleton::is_app`: the

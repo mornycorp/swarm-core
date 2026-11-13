@@ -52,6 +52,26 @@ machine lacks (the protocol's [Picking work](swarm-protocol.md#picking-work)).
   headless run of the CLI ({{cli}}) -->.
 - **full:** the whole `cargo xtask ci`, the periodic full gate's.
 
+**What proves a change here** (the protocol's [What proves a
+change](swarm-protocol.md#what-proves-a-change); `Project::proof` in `xtask/`): the ready proof.
+Each PR's `ready` runs the whole `ci --changed`, and the coordinator smokes.
+<!-- Or the batch proof: say which tests `ready` leaves out (its `ready_env`), that the
+     coordinator's gate of a stack that reaches product code is then the full gate, and that a
+     worker runs the left-out tests of what it built itself, once. -->
+
+**What this repo turns on** (each a `Hooks` method in `xtask/`, off until it says otherwise):
+
+| Setting | Off (the default) | On |
+|---|---|---|
+| `gate_reruns` | a failed gate stops; `gate --rerun-failed` reruns it by hand | a failed gate reruns once by itself: its failed tests alone, or the whole gate for a transient failure |
+| `gate_priority` | a gate queues for room like any build | a gate goes ahead of workers' builds after a short grace, and `ready` yields to it |
+| `worker_build_jobs` | no cap on a worker's build jobs | `ready` caps `CARGO_BUILD_JOBS` on a machine where gates run |
+| `verify_main` | the gate daemon blames a stack's failed tests on its PRs | the daemon first runs them alone on `main`, and stops itself when they fail there too |
+
+<!-- Say here which are on, and whether the coordinator runs the gate daemon (`cargo xtask gate
+     --daemon`, the protocol's [The gate daemon](swarm-protocol.md#the-gate-daemon)) or gates by
+     hand. -->
+
 The shared files that conflict most in a stack are AGENTS.md §6's.
 
 ## Each batch

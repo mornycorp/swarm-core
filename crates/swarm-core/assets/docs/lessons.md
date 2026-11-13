@@ -52,7 +52,7 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   - **Check:** xtask resolves its root at run time (the `CARGO_MANIFEST_DIR` `cargo run` sets,
     else a walk up to the workspace manifest), with a test that runs it from another directory;
     `cargo xtask ci` refuses a target dir another checkout used last.
-  - **Rule:** one target dir per checkout or worktree, never shared (both swarms' AGENTS.md §6).
+  - **Rule:** one target dir per checkout or worktree, never shared (AGENTS.md §6).
 
 ## 3. The whole gate, GPU and all, on every merge
 

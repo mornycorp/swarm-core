@@ -148,7 +148,7 @@ package falls outside the plan.
 
 ## Assets
 
-The files both swarms keep the same live in `crates/swarm-core/assets/`, at the path each takes in
+The files every swarm keeps the same live in `crates/swarm-core/assets/`, at the path each takes in
 a consumer, and are built into the crate (`assets::ASSETS`):
 
 - `docs/swarm-protocol.md` (the roles, the claim, tracking, the gates, the coordinator's loop, the
