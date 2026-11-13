@@ -19,13 +19,14 @@
 //!   light look, with the stable pick of an identifier's colour; `ui.theme`
 //!   ([`commands::UiThemeCommand`]) gives them to every surface, and the UI crate's theme draws with
 //!   them.
-//! - **Another program is started in one place** ([`process`]): with a wall-clock and an idle
-//!   deadline, a capped output, its own process group, and without the control socket's token
-//!   (docs/app-architecture.md › Never hang on another program).
+//! - **The outside is the backends layer's** (the `backends` crate, below this one): a command
+//!   starts another program through its one process module and writes a file through its one
+//!   atomic writer, and a failure there becomes a [`CommandError`] with `?`
+//!   (docs/app-architecture.md › Layers, Never hang on another program, State on disk). This
+//!   crate starts no program and writes no file. The call's [`CancelToken`] is that layer's, so a
+//!   command hands it straight down.
 //! - **Its own lock** ([`lock::Lock`]): a caller that can't take it within its deadline gets an
 //!   error that names it, never a wait for ever (› Never hang on a lock).
-//! - **The one atomic writer** ([`state::write_atomic`]) and its capped read: every file the app
-//!   persists goes through them (› State on disk).
 //! - **The example** is `app.info` ([`commands::InfoCommand`]). It stays until the first real
 //!   command replaces it.
 //!
@@ -41,11 +42,9 @@ pub mod commands;
 mod error;
 pub mod lock;
 pub mod menu;
-pub mod process;
 mod registry;
 mod session;
 mod spec;
-pub mod state;
 pub mod theme;
 mod ui;
 

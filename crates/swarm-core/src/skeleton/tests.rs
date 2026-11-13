@@ -436,3 +436,23 @@ fn swarm_core_command_runs_init_app_with_or_without_ui_and_refuses_ui_alone() {
     assert!(either_order.join("crates/ui/Cargo.toml").is_file());
     assert!(crate::pin::USAGE.contains("init [--app [--ui]]"));
 }
+
+/// mornycorp/swarm-core#91: an app from an earlier skeleton keeps its process module and its
+/// writer in the engine, and is read with that layout's scans; one with the backends crate is
+/// held to the layer.
+#[test]
+fn an_app_without_the_backends_crate_is_scanned_at_its_engines_modules() {
+    let root = swarm_core_testkit::temp_dir("core-skeleton-earlier-layout");
+    std::fs::create_dir_all(root.join("crates/engine")).unwrap();
+    std::fs::write(root.join("crates/engine/Cargo.toml"), "").unwrap();
+    assert!(is_app(&root) && !has_backends(&root));
+    let excepts = |scans: &[Scan], rule: &str| scans.iter().find(|s| s.rule == rule).map(|s| s.except.to_vec()).unwrap_or_default();
+    let earlier = scans_at(&root);
+    assert_eq!(excepts(&earlier, "process-module"), [ENGINE_PROCESS_MODULE]);
+    assert_eq!(excepts(&earlier, "file-writes"), [STATE_MODULE]);
+    std::fs::create_dir_all(root.join("crates/backends")).unwrap();
+    std::fs::write(root.join("crates/backends/Cargo.toml"), "").unwrap();
+    let now = scans_at(&root);
+    assert_eq!(excepts(&now, "process-module"), [PROCESS_MODULE]);
+    assert_eq!(excepts(&now, "file-writes"), FILE_WRITERS);
+}

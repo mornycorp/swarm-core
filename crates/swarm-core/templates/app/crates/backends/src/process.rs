@@ -18,9 +18,10 @@
 //!   has already exited is not found by it, and the call still returns at its deadline;
 //! - **the control socket's token** ([`TOKEN_ENV`]) is taken out of the child's environment: a
 //!   program the app starts never inherits the secret that lets it drive the app;
-//! - **every failure is a [`CommandError`]** with a remediation: the program isn't there
+//! - **every failure is a [`BackendError`]** with a remediation: the program isn't there
 //!   (`not_found`), it printed too much (`too_large`), the caller cancelled (`cancelled`), it ran
-//!   past a deadline or couldn't be waited for (`internal`).
+//!   past a deadline or couldn't be waited for (`failed`). The engine turns each into a
+//!   `CommandError` (`internal` for the last).
 //!
 //! A program that exits with a failure is not an error here: its code is in [`Ran`], and the
 //! command that started it says what that means.
@@ -33,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::{CancelToken, CommandError};
+use crate::{BackendError, CancelToken};
 
 /// The environment variable that holds the control socket's token: never a child's.
 pub const TOKEN_ENV: &str = "{{env}}_CONTROL_TOKEN";
@@ -84,7 +85,7 @@ impl Drop for Running {
 /// Runs `program` with `args` in `dir` and waits for it within `limits`, feeding it `stdin` when
 /// there is some (it is closed either way). `cancel` ends it early. See the module's doc for what
 /// each failure is.
-pub fn run(program: &Path, args: &[&str], dir: Option<&Path>, stdin: Option<&str>, limits: Limits, cancel: &CancelToken) -> Result<Ran, CommandError> {
+pub fn run(program: &Path, args: &[&str], dir: Option<&Path>, stdin: Option<&str>, limits: Limits, cancel: &CancelToken) -> Result<Ran, BackendError> {
     let what = format!("{} {args:?}", program.display());
     let mut command = prepared(program, args, dir, stdin.is_some());
     let started = Instant::now();
@@ -103,7 +104,7 @@ pub fn run(program: &Path, args: &[&str], dir: Option<&Path>, stdin: Option<&str
     };
     let text = |(bytes, over): (Vec<u8>, bool), stream: &str| {
         if over {
-            Err(CommandError::too_large(
+            Err(BackendError::too_large(
                 format!("{what} printed more than {} bytes on {stream}", limits.output),
                 "ask it for less (a filter, a limit, a quieter mode), or raise the cap where this program is started",
             ))
@@ -127,16 +128,16 @@ fn prepared(program: &Path, args: &[&str], dir: Option<&Path>, fed: bool) -> Com
 }
 
 /// Why `program` didn't start.
-fn not_started(program: &Path, e: &std::io::Error) -> CommandError {
+fn not_started(program: &Path, e: &std::io::Error) -> BackendError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        return CommandError::not_found(format!("the program `{}` isn't on this machine", program.display()), "install it, or put it on the PATH");
+        return BackendError::not_found(format!("the program `{}` isn't on this machine", program.display()), "install it, or put it on the PATH");
     }
-    CommandError::internal(format!("couldn't start `{}`: {e}", program.display()))
+    BackendError::failed(format!("couldn't start `{}`: {e}", program.display()))
 }
 
 /// The error for a program that ran past a deadline (`how`), after `limit`.
-fn timed_out(what: &str, how: &str, limit: Duration) -> CommandError {
-    CommandError::internal(format!("{what} {how} after {} s, and was stopped", limit.as_secs_f32()))
+fn timed_out(what: &str, how: &str, limit: Duration) -> BackendError {
+    BackendError::failed(format!("{what} {how} after {} s, and was stopped", limit.as_secs_f32()))
 }
 
 /// Writes `stdin` to the child and closes it, on a thread that is never joined: a program that
@@ -153,7 +154,7 @@ fn feed(child: &mut Child, stdin: Option<&str>) {
 
 /// Waits for the program: its exit code, or the error for a cancel, the wall deadline, the idle
 /// deadline or a failed wait, each after killing it with what it started.
-fn wait(running: &mut Running, what: &str, started: Instant, heard: &AtomicU64, limits: Limits, cancel: &CancelToken) -> Result<Option<i32>, CommandError> {
+fn wait(running: &mut Running, what: &str, started: Instant, heard: &AtomicU64, limits: Limits, cancel: &CancelToken) -> Result<Option<i32>, BackendError> {
     loop {
         let stop = match running.child.try_wait() {
             Ok(Some(status)) => {
@@ -161,7 +162,7 @@ fn wait(running: &mut Running, what: &str, started: Instant, heard: &AtomicU64, 
                 return Ok(status.code());
             }
             Ok(None) => stop_now(what, started, heard, limits, cancel),
-            Err(e) => Some(CommandError::internal(format!("couldn't wait for {what}: {e}"))),
+            Err(e) => Some(BackendError::failed(format!("couldn't wait for {what}: {e}"))),
         };
         if let Some(error) = stop {
             kill_tree(&mut running.child);
@@ -173,11 +174,11 @@ fn wait(running: &mut Running, what: &str, started: Instant, heard: &AtomicU64, 
 }
 
 /// Why a running program is to be stopped now, if it is.
-fn stop_now(what: &str, started: Instant, heard: &AtomicU64, limits: Limits, cancel: &CancelToken) -> Option<CommandError> {
+fn stop_now(what: &str, started: Instant, heard: &AtomicU64, limits: Limits, cancel: &CancelToken) -> Option<BackendError> {
     let ran = started.elapsed();
     let silent = ran.saturating_sub(Duration::from_millis(heard.load(Ordering::Relaxed)));
     if cancel.is_cancelled() {
-        Some(CommandError::cancelled())
+        Some(BackendError::cancelled())
     } else if ran >= limits.wall {
         Some(timed_out(what, "was still running", limits.wall))
     } else if silent >= limits.idle {
@@ -265,12 +266,12 @@ fn tree_killer(_pid: u32) -> Option<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ErrorCode;
+    use crate::Kind;
 
     const QUICK: Limits = Limits { wall: Duration::from_secs(30), idle: Duration::from_secs(30), output: 1024 * 1024 };
 
     /// A shell that runs `script`: the same program on every machine the tests run on.
-    fn shell(script: &str, stdin: Option<&str>, limits: Limits, cancel: &CancelToken) -> Result<Ran, CommandError> {
+    fn shell(script: &str, stdin: Option<&str>, limits: Limits, cancel: &CancelToken) -> Result<Ran, BackendError> {
         #[cfg(windows)]
         let (program, flag) = ("cmd", "/c");
         #[cfg(not(windows))]
@@ -287,7 +288,7 @@ mod tests {
     #[test]
     fn a_program_that_is_not_there_is_not_found() {
         let e = run(Path::new("no-such-program-anywhere"), &[], None, None, QUICK, &CancelToken::default()).unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotFound);
+        assert_eq!(e.kind, Kind::NotFound);
         assert!(e.message.contains("no-such-program-anywhere") && !e.remediation.is_empty(), "{e}");
     }
 
@@ -310,7 +311,7 @@ mod tests {
         let limits = Limits { wall: Duration::from_millis(400), ..QUICK };
         let started = Instant::now();
         let e = shell("sleep 30 & while true; do echo tick; sleep 0.05; done", None, limits, &CancelToken::default()).unwrap_err();
-        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(e.kind, Kind::Failed);
         assert!(e.message.contains("was still running") && e.message.contains("stopped"), "{e}");
         assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     }
@@ -332,7 +333,7 @@ mod tests {
     fn output_over_the_cap_is_too_large_never_a_truncated_result() {
         let limits = Limits { output: 1000, ..QUICK };
         let e = shell("i=0; while [ $i -lt 2000 ]; do echo 0123456789; i=$((i+1)); done", None, limits, &CancelToken::default()).unwrap_err();
-        assert_eq!(e.code, ErrorCode::TooLarge);
+        assert_eq!(e.kind, Kind::TooLarge);
         assert!(e.message.contains("1000 bytes on stdout"), "{e}");
     }
 
@@ -343,7 +344,7 @@ mod tests {
         cancel.cancel();
         let started = Instant::now();
         let e = shell("sleep 30", None, QUICK, &cancel).unwrap_err();
-        assert_eq!(e.code, ErrorCode::Cancelled);
+        assert_eq!(e.kind, Kind::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 

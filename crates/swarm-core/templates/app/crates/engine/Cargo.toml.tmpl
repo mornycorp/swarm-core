@@ -9,6 +9,7 @@ publish = false
 layer = "engine"
 
 [dependencies]
+{{crate_prefix}}backends = { path = "../backends" }
 {{crate_prefix}}model = { path = "../model" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

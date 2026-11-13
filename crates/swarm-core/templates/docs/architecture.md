@@ -14,14 +14,14 @@ lives, and how a new command is added. The rules every change keeps are the pinn
 ## Layers
 
 <!-- One row per crate, in the layer its manifest declares. Cut the layers this repo has no use
-     for (`backends` is optional: an app with no data outside itself has none); the default map is
+     for (`backends` always has the skeleton's `crates/backends`; a further backend is the app's choice); the default map is
      AGENTS.md §2. -->
 
 | Layer | Crate | What it holds |
 |---|---|---|
 | 0 `model` | <!-- `crates/model` --> | <!-- the types and parsers of what is read from outside --> |
 | 1 `domain` | <!-- one crate per area --> | <!-- what each does: no I/O --> |
-| 2 `backends` (optional) | <!-- `crates/<backend>`, one crate per backend or one for all --> | <!-- what it reads from and writes to outside itself (files, git, the network, a device): each call with a deadline and a cap --> |
+| 2 `backends` | `crates/backends` <!-- and `crates/<backend>` for each further one --> | the process module, the atomic file writer and its capped read <!-- and what else it reads from and writes to outside itself (git, the network, a device): each call with a deadline and a cap --> |
 | 3 `engine` | <!-- `crates/engine` --> | the session, the command registry, the one dispatch |
 | 4 `automation` | <!-- `crates/automation` --> | `serve`, the loopback socket, MCP |
 | 5 `ui` | <!-- `crates/ui` --> | the UI shell |
@@ -87,8 +87,8 @@ started with `--yes`.
 | The UI's state (`ui.inspect`, `ui.set`) | the session; `--ui-state <file>` when the window closes | the window's `ui_state` module | `schema_version` in the file |
 | <!-- projects, caches, journals --> | | | |
 
-Every file is written by the engine's one atomic writer (`state::write_atomic`) and read with its
-capped read, by the module that owns it; shared state in memory sits behind the engine's lock
+Every file is written by the one atomic writer (`crates/backends`: `files::write_atomic`) and read
+with its capped read, by the module that owns it; shared state in memory sits behind the engine's lock
 (`lock::Lock`). The config directory comes from one function a test points at a temp dir; nothing
 else names it.
 

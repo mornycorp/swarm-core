@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (one dispatch: MCP on its own session or attached to a running app's control socket, `{{cli}} mcp --attach <port>`; the `sources` layer is `backends`) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -44,7 +44,7 @@ Dependencies point down; a crate depends only on strictly lower layers.
 |---|---|---|---|
 | 0 | `model` | the types and parsers of everything that is read from outside: files, wire frames, user text. **Hostile input, no I/O.** | the standard library, `serde` |
 | 1 | `domain` | libraries that do the app's work (one crate per area). **No I/O:** what it needs from outside is handed to it by a layer above | model |
-| 2 | `backends` (optional) | what the app reads from and writes to outside itself: files, git, the network, a device. **Every call has a deadline and a capped result**; a child process still goes through the process module | model, domain |
+| 2 | `backends` | **the one layer that touches the outside**: it starts every child process, writes every file, and holds what the app reads from and writes to outside itself (files, git, the network, a device). **Every call has a deadline and a capped result** | model, domain |
 | 3 | `engine` | the session, the command registry, the one dispatch | model, domain, backends |
 | 4 | `automation` | the transports: `serve`, the loopback socket, MCP | engine |
 | 5 | `ui` | the UI shell: toolkit code, drawing, input | engine |
@@ -58,17 +58,28 @@ beside it) is **only a `[dev-dependencies]` entry**, never a dependency of produ
   (`[package.metadata.swarm] layer = "engine"`), so there is no table to keep in step. It names
   the layer, never its number: the numbers above are only the order. (An app that keeps its
   layers in its xtask's table, `Hooks::layers`, is held to the same order from there.)
-- **`backends` is optional.** An app that works with data outside itself (it reads or writes
-  files, git, a network service or a device) puts that in `backends` crates (`layer =
-  "backends"`), so the domain stays pure and every outside call, in either direction, has one
-  home. Each call there has a deadline (a hung server or a slow disk is a typed error, not a
-  hang) and caps what it keeps (a huge answer is `too_large`, never an allocation sized by the
-  other side); what it reads is parsed by the model, as hostile input. A write there is a
-  command's declared effect (`writes`, `network`, `device`), and is to what the person or
-  another system owns: an export, a document, a remote. The app's own state stays with the
-  state module and its one writer ([State on disk](#state-on-disk)). An app without outside
-  data leaves the layer out, and the rest of the order is the same. The layer was `sources`
-  until 2026-11-13; a manifest that still says so is read as `backends`.
+- **Only `backends` touches the outside.** The process module
+  ([Never hang on another program](#never-hang-on-another-program)) and the one atomic file
+  writer with its capped read ([State on disk](#state-on-disk)) live in a `backends` crate
+  (`layer = "backends"`; the skeleton's is `crates/backends`), and so does whatever else the app
+  reads from or writes to outside itself: files, git, a network service, a device. So every
+  outside call, in either direction, has one home, a backend that runs a program or writes a
+  file uses the same two modules as everything else, and the domain stays pure. Each call there
+  has a deadline (a hung server or a slow disk is a typed error, not a hang) and caps what it
+  keeps (a huge answer is `too_large`, never an allocation sized by the other side); what it
+  reads is parsed by the model, as hostile input.
+  - **It does the I/O; the layers above decide.** The engine, or the module that owns a file,
+    says what is stored, its `schema_version`, its migrations and when it is saved; a command
+    declares the effect (`writes`, `runs_code`, `network`, `device`) and the dispatch asks for
+    consent. A backend's failure is its own typed error, which the engine turns into the
+    command's.
+  - **A transport's own socket and stdio are not this layer's**: they are how the app is
+    reached, in `automation`.
+  - **A further backend is the app's choice** (a module in that crate, or a crate of its own in
+    the layer); an app with no data outside itself has only the two modules.
+  - An app made from a skeleton before 2026-11-13 keeps them in its engine until it moves them:
+    nothing below the engine can then start a program or write a file. The layer was `sources`
+    until then too; a manifest that still says so is read as `backends`.
 - **UI toolkits only in the UI layer** and the apps built on it (the windowed app). The CLI and
   every layer below never link one.
 - **Lints and headers.** `[lints] workspace = true` in every member; every crate root carries the
@@ -87,7 +98,7 @@ beside it) is **only a `[dev-dependencies]` entry**, never a dependency of produ
 **Check:** `layers` (`swarm_core::checks::layers`; its error names the file, the rule and the
 fix): the order, so a `domain` or `model` crate can't use a `backends` one. `review` for the rest:
 that `model` and `domain` do no I/O, and that each outside call in `backends` has its deadline and
-its cap.
+its cap. `scan` holds the process starts and the file writes to that layer (below).
 
 ## Every action is a command
 
@@ -502,7 +513,8 @@ recursion and allocation bounds.
 
 ## Never hang on another program
 
-One module (the **process module**) starts every child process. It, and nothing else:
+One module (the **process module**, in the `backends` layer) starts every child process. It, and
+nothing else:
 
 - closes the child's **stdin** (unless the command feeds it);
 - sets a **wall-clock deadline** and an **idle deadline** (no output for so long);
@@ -542,16 +554,16 @@ Everything the app persists (settings, UI state, caches, journals) is:
 - **versioned**: a `schema_version` in the file, a schema, and a **migration path** from every
   earlier version (a file from a newer version is refused with a typed error, never overwritten);
 - **owned** by one module that reads and writes it, and no other;
-- written by **the one atomic writer** (a temporary file in the same directory, flushed, then
-  renamed), so a crash leaves the old file or the new, never half of one;
+- written by **the one atomic writer**, in the `backends` layer (a temporary file in the same
+  directory, flushed, then renamed), so a crash leaves the old file or the new, never half of one;
 - **saved before memory changes**: the app writes the new state to disk first, and changes its
   memory only when that succeeded, so a failed save never leaves the screen saying what the file
   doesn't;
 - loaded without ever **writing defaults over what it couldn't read**: a read that fails or blocks
   leaves the person's file alone.
 
-**Check:** `scan` (a file write outside the state module and the writer, allow-listed with a
-reason and a count); the writer's and each migration's tests; `review`.
+**Check:** `scan` (a file write in any crate outside the `backends` layer, a crate the app adds
+later too; allow-listed with a reason and a count); the writer's and each migration's tests; `review`.
 
 ## No secrets out
 
@@ -577,6 +589,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Layers: only `backends` touches the outside. The process module and the one atomic file writer live there (the skeleton's `crates/backends`), so a backend can start a program or write a file through the same two modules; the engine keeps what is stored and when, and turns a backend's error into the command's. The layer is always there; a further backend is the app's choice. The `file-writes` scan reads every crate outside the layer (swarm-core#91) |
 | 2026-11-13 | minor | One dispatch: MCP runs on a session of its own or attached to a running app's control socket (`{{cli}} mcp --attach <port> [--token-file <path>]`), one MCP adapter over a seam of two calls, with the same answers and the same consent rule (a command whose effects need consent is `consent_required` even on a socket started with `--yes`); The JSON-lines frame: a spec in `commands` carries its effects, and a client counts any effect that isn't `false` as needing consent; the check adds the surface test that compares `mcp --attach` with `mcp` (swarm-core#89) |
 | 2026-11-13 | minor | Layers: the optional `sources` layer is `backends`, and it reads and writes the outside (a write there is a command's declared effect; the app's own state stays with the state module). A manifest that still says `sources` is read as `backends` (swarm-core#87) |
 | 2026-11-12 | minor | One dispatch's check: the conformance run holds a call cancelled before it runs to fail `cancelled`, on the surfaces an app can cancel a call through (swarm-core#61) |

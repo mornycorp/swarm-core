@@ -7,8 +7,8 @@
 //! - **Downward.** A dependency (normal or build) of a stack crate is a crate in a strictly lower
 //!   layer, so no one depends on an app, on tooling or on a crate of its own layer. A dev-dependency
 //!   is free of the order; tooling and the testkit may use any layer.
-//! - **`backends` is optional**: the layer between `domain` and `engine` that reads and writes
-//!   the outside (files, git, the network, a device). A manifest that names it `sources`, its
+//! - **`backends`**: the layer between `domain` and `engine`, the one that touches the outside
+//!   (child processes, files, git, the network, a device). A workspace need not have a crate in it. A manifest that names it `sources`, its
 //!   name until mornycorp/swarm-core#87, is read as `backends` ([`Layers::aliases`]). A workspace with no crate in it checks
 //!   as it did before the layer was added: a manifest names its layer, never a position, so nothing
 //!   else moves. `domain` sits below it, so a domain crate can't reach the outside through it.
@@ -69,7 +69,7 @@ pub struct Layers {
 pub use crate::layers::{UNSAFE_LINES, Unsafe};
 
 impl Layers {
-    /// The contract's layers (`model`, `domain`, the optional `backends`, `engine`, `automation`,
+    /// The contract's layers (`model`, `domain`, `backends`, `engine`, `automation`,
     /// `ui`, `apps`), the UI toolkits both reference apps use, and the deny list of the
     /// Swarm Core's own crate root.
     pub const STANDARD: Layers = Layers {
@@ -566,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn the_optional_backends_layer_sits_between_the_domain_and_the_engine() {
+    fn the_backends_layer_sits_between_the_domain_and_the_engine() {
         assert_eq!(Layers::STANDARD.stack, ["model", "domain", "backends", "engine", "automation", "ui", "apps"]);
         // Without it (`well_formed`, the pass above) and with it, the contract is kept.
         let report = layers(&workspace("layers-backends", &with_backends()), &Layers::STANDARD).unwrap();
