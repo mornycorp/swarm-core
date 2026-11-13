@@ -8,3 +8,4 @@
 {"event":"work","issue":102,"mr":103,"t":"2026-11-13T17:55:29Z"}
 {"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-f3366a6","t":"2026-11-13T17:58:18Z"}
 {"event":"sub.stop","note":"rc=0","sub":"ready-f3366a6","t":"2026-11-13T17:58:42Z"}
+{"event":"submit","issue":102,"mr":103,"t":"2026-11-13T17:58:50Z"}
