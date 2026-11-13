@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use {{crate_prefix_ident}}engine::{CallContext, Caller, Command, Effects, Session, Why, commands};
+use {{crate_prefix_ident}}testkit::DeadPort;
 
 use super::*;
 use crate::frame::{self, Reply as FrameReply};
@@ -239,22 +240,45 @@ fn a_missing_token_file_says_what_to_pass() {
     assert!(!missing.exists(), "a client never makes a token file");
 }
 
+/// The answer when the app is gone says how to start it, and that it never got the call.
+fn says_to_start_the_app(error: &Value) {
+    assert_eq!(error["data"]["code"], "unavailable", "{error}");
+    let remediation = error["data"]["remediation"].as_str().unwrap_or_default();
+    assert!(remediation.contains("--socket") && !remediation.contains("may have run"), "{error}");
+}
+
+/// The port is held for the test ([`DeadPort`]: a port it freed, another process could take before
+/// it connects), so the app there is one that is gone: the connection is made, then closed before
+/// `auth` is answered, rather than refused. No call has gone out, so the answer is a refused one's.
 #[test]
-fn a_closed_port_is_unavailable_with_how_to_start_the_app() {
+fn a_port_the_app_is_gone_from_is_unavailable_with_how_to_start_the_app() {
     if !env_free() {
         return;
     }
-    let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
+    let dead = DeadPort::new().unwrap();
     let file = token_file("attach-closed", TOKEN);
-    let (error, took) = protocol_error(&mut attached(port, &file), &call(1, "app-info", &json!({})));
-    assert_eq!(error["data"]["code"], "unavailable", "{error}");
-    assert!(error["data"]["remediation"].as_str().is_some_and(|r| r.contains("--socket")), "{error}");
+    let (error, took) = protocol_error(&mut attached(dead.port(), &file), &call(1, "app-info", &json!({})));
+    says_to_start_the_app(&error);
+    assert!(error["message"].as_str().is_some_and(|m| m.contains("closed before it answered")), "{error}");
+    assert_eq!(dead.accepted(), 1, "it connected once");
     assert!(took < Duration::from_secs(8), "{took:?}");
 }
 
+/// A refused connection can't be had on a port the test holds (std listens on each port it binds),
+/// so its answer is checked here, from the error a refused or timed-out connect gives.
+#[test]
+fn a_refused_connection_is_unavailable_with_how_to_start_the_app() {
+    for kind in [io::ErrorKind::ConnectionRefused, io::ErrorKind::TimedOut] {
+        let e = cannot_connect(4000, &io::Error::from(kind));
+        assert_eq!(e.code, ErrorCode::Unavailable, "{kind:?}");
+        assert!(e.message.starts_with("cannot connect to the app on 127.0.0.1:4000") && e.remediation.contains("--socket"), "{e:?}");
+    }
+}
+
 /// A server that speaks the frame for the handshake (`auth`, `commands`), then does `then` with the
-/// connection: one connection, then it is gone.
-fn fake(then: impl FnOnce(&mut BufReader<TcpStream>, &mut TcpStream) + Send + 'static) -> (u16, JoinHandle<()>) {
+/// connection: one connection, then it is gone. Its thread gives back its listener, still holding the
+/// port: a test that connects again holds it with [`DeadPort::on`], so no other process takes it.
+fn fake(then: impl FnOnce(&mut BufReader<TcpStream>, &mut TcpStream) + Send + 'static) -> (u16, JoinHandle<TcpListener>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
@@ -268,6 +292,7 @@ fn fake(then: impl FnOnce(&mut BufReader<TcpStream>, &mut TcpStream) + Send + 's
             write_line(&mut writer, &FrameReply::success(request.id, answer).encode(usize::MAX)).unwrap();
         }
         then(&mut reader, &mut writer);
+        listener
     });
     (port, handle)
 }
@@ -298,10 +323,11 @@ fn a_connection_that_drops_mid_call_is_a_typed_error_and_the_next_call_connects_
     assert!(error["message"].as_str().is_some_and(|m| m.contains("closed before it answered")), "{error}");
     assert!(error["data"]["remediation"].as_str().is_some_and(|r| r.contains("may have run")), "{error}");
     assert!(took < Duration::from_secs(8), "{took:?}");
-    handle.join().unwrap();
-    // The fake is gone: the next call connects once, is refused, and says so.
+    let dead = DeadPort::on(handle.join().unwrap()).unwrap();
+    // The fake is gone: the next call connects once, is closed before `auth` is answered, and says so.
     let (error, took) = protocol_error(&mut bridge, &call(2, "app-info", &json!({})));
-    assert!(error["message"].as_str().is_some_and(|m| m.contains("cannot connect")), "{error}");
+    says_to_start_the_app(&error);
+    assert_eq!(dead.accepted(), 1, "it connected once");
     assert!(took < Duration::from_secs(8), "{took:?}");
 }
 

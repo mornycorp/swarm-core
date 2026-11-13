@@ -209,7 +209,7 @@ error, the JSON-lines frame). Follow these in order, alone:
    `crates/engine` (the session, the typed command registry, the one dispatch with typed errors, and
    the example command `app.info`), `crates/automation` (JSON lines with the contract's caps, `serve`
    on stdio, the loopback control socket, an MCP server generated from the registry), `apps/<cli>`
-   (`run <command> [json]`, `commands`, `serve [--socket]`, `mcp`), `crates/testkit` (temp dirs, hostile request lines), `apps/<cli>/tests/surfaces.rs` (the
+   (`run <command> [json]`, `commands`, `serve [--socket]`, `mcp`), `crates/testkit` (temp dirs, hostile request lines, a port no app answers on), `apps/<cli>/tests/surfaces.rs` (the
    conformance run over every surface, below), and `clippy.toml` and `rustfmt.toml`. Every crate root carries the lint
    headers and every manifest `[package.metadata.swarm] layer = "<name>"` and `[lints] workspace =
    true`.

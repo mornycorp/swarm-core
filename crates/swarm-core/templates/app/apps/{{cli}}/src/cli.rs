@@ -330,15 +330,19 @@ mod tests {
         }
     }
 
+    /// The port is held for the test (a port it freed, another process could take before it
+    /// connects): the app there is one that is gone, which closes the connection rather than refuses
+    /// it, and the answer is a refused one's.
     #[test]
-    fn mcp_attach_needs_a_token_and_answers_a_closed_port_with_how_to_start_the_app() {
+    fn mcp_attach_needs_a_token_and_answers_a_port_the_app_is_gone_from_with_how_to_start_the_app() {
         if std::env::var_os({{crate_prefix_ident}}automation::token::ENV).is_some() {
             return;
         }
         let (code, out, err) = cli(&["mcp", "--attach", "4000"], "");
         assert_eq!((code, out.as_str()), (2, ""));
         assert!(err.contains("--token-file") && err.contains("usage:"), "{err}");
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port().to_string();
+        let dead = {{crate_prefix_ident}}testkit::DeadPort::new().unwrap();
+        let port = dead.port().to_string();
         let dir = {{crate_prefix_ident}}testkit::temp_dir("cli-mcp-attach").unwrap();
         let file = dir.join("control.token");
         std::fs::write(&file, "test-token-not-real-0123456789\n").unwrap();
@@ -346,10 +350,11 @@ mod tests {
         std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
         let call = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"app-info\"}}\n";
         let (code, out, err) = cli(&["mcp", "--attach", &port, "--token-file", &file.to_string_lossy()], call);
-        assert_eq!((code, err.as_str()), (0, ""), "a closed port is an MCP answer, not a crash");
+        assert_eq!((code, err.as_str()), (0, ""), "a port with no app is an MCP answer, not a crash");
         let reply: Value = serde_json::from_str(out.trim()).unwrap();
         assert_eq!(reply["error"]["data"]["code"], "unavailable", "{reply}");
         assert!(reply["error"]["data"]["remediation"].as_str().is_some_and(|r| r.contains("--socket")), "{reply}");
+        assert_eq!(dead.accepted(), 1, "it connected once");
         assert!(!out.contains("not-real"), "the token is never shown: {out}");
     }
 

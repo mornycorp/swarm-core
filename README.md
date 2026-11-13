@@ -146,7 +146,7 @@ overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swa
 which one example command (`app.info`) already runs through every surface and the checks pass:
 `crates/model` (the id rule), `engine` (the session, the typed registry, the one dispatch),
 `automation` (JSON lines with the contract's caps, the loopback control socket with token auth, an
-MCP server generated from the registry), `testkit` (temp dirs, hostile request lines; the
+MCP server generated from the registry), `testkit` (temp dirs, hostile request lines, a port no app answers on; the
 conformance run is this repo's testkit) and `apps/<cli>` (`run`, `commands`, `enabled`,
 `serve [--socket]`, `mcp`), with the lint headers and each crate's layer.
 `cargo xtask swarm-core init --app` writes it (and the starting points) where files are missing,

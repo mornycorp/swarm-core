@@ -9,7 +9,7 @@
 //!   read), `crates/engine` (the session, the typed registry, the one dispatch, `app.info`), `crates/automation` (the JSON-lines
 //!   frame with the contract's caps, `serve`, the loopback control socket with its token and `auth`,
 //!   an MCP server generated from the registry), `apps/<cli>` (`run`, `commands`, `serve [--socket]`, `mcp`), `crates/testkit` (temp
-//!   dirs, hostile request lines; its tests run swarm-core's conformance run, a pinned `[dev-dependencies]` entry), plus `rustfmt.toml` (`clippy.toml` is the
+//!   dirs, hostile request lines, a port no app answers on; its tests run swarm-core's conformance run, a pinned `[dev-dependencies]` entry), plus `rustfmt.toml` (`clippy.toml` is the
 //!   starting points' own). Every crate root carries
 //!   the contract's lint headers, `[lints] workspace = true` and `[package.metadata.swarm] layer`
 //!   (docs/app-architecture.md), which `checks::check` holds it to. It implements the contract's

@@ -27,9 +27,11 @@
 //!   the call in the app). Nothing here waits without one.
 //! - **Typed failures, no loop.** No app on the port, a wrong token and a connection that drops are
 //!   each a [`CommandError`] (`unavailable`, `unauthenticated`) with what to do, which MCP answers as
-//!   a JSON-RPC error. A connection the app has closed since the last call (it was idle, or the app
-//!   restarted) is seen before the next call is sent and made again, once; a connection that drops
-//!   while a call is out is reported, not retried, as the call may have run.
+//!   a JSON-RPC error. A connection refused, or closed before `auth` and `commands` are answered (an
+//!   app going away accepts and closes), says to start the app: no call has gone out. A connection
+//!   the app has closed since the last call (it was idle, or the app restarted) is seen before the
+//!   next call is sent and made again, once; a connection that drops while a call is out is
+//!   reported, not retried, as the call may have run.
 
 use std::io::{self, BufReader, Read};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
@@ -254,6 +256,19 @@ fn start_the_app(port: u16) -> String {
     )
 }
 
+/// The app at `port` refused the connection, or didn't take it within the deadline.
+fn cannot_connect(port: u16, e: &io::Error) -> CommandError {
+    let what = if matches!(e.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) { "timed out".to_owned() } else { e.to_string() };
+    CommandError::unavailable(format!("cannot connect to the app on 127.0.0.1:{port}: {what}"), start_the_app(port))
+}
+
+/// `e`, from a connection to the app at `port` that was lost before the handshake was done: no call
+/// has gone out, so nothing ran, and an app that closes a connection it has just accepted is going
+/// away. A connection that dropped is told to start the app; a deadline that passed keeps its own.
+fn before_any_call(port: u16, e: CommandError) -> CommandError {
+    if e.code == ErrorCode::Unavailable { CommandError::unavailable(e.message, start_the_app(port)) } else { e }
+}
+
 /// The connection to the app at `port` dropped while a request was out.
 fn dropped(port: u16, why: &str) -> CommandError {
     CommandError::unavailable(
@@ -280,13 +295,10 @@ impl Conn {
         let (port, deadline) = (config.port, config.connect_timeout);
         let token = Token::read_existing(config.token_file.as_deref())
             .map_err(|e| CommandError::new(e.code, e.message, format!("{} (the token of the app on port {port})", e.remediation)))?;
-        let stream = TcpStream::connect_timeout(&config.addr(), deadline).map_err(|e| {
-            let what = if matches!(e.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) { "timed out".to_owned() } else { e.to_string() };
-            CommandError::unavailable(format!("cannot connect to the app on 127.0.0.1:{port}: {what}"), start_the_app(port))
-        })?;
+        let stream = TcpStream::connect_timeout(&config.addr(), deadline).map_err(|e| cannot_connect(port, &e))?;
         let write_wait = config.reply_timeout.max(deadline);
         let setup = stream.set_nodelay(true).and_then(|()| stream.set_write_timeout(Some(write_wait))).and_then(|()| stream.try_clone());
-        let writer = setup.map_err(|e| dropped(port, &e.to_string()))?;
+        let writer = setup.map_err(|e| before_any_call(port, dropped(port, &e.to_string())))?;
         let mut conn = Conn { reader: BufReader::new(Deadline { stream, until: Instant::now() }), writer, specs: Vec::new(), next: 0 };
         conn.handshake(&token, config)?;
         Ok(conn)
@@ -307,9 +319,13 @@ impl Conn {
                 ));
             }
             // Another refusal (every connection in use) says what to do itself.
-            Answer::Replied(Err(e)) | Answer::Lost(e) => return Err(e),
+            Answer::Replied(Err(e)) => return Err(e),
+            Answer::Lost(e) => return Err(before_any_call(port, e)),
         }
-        let commands = self.ask("commands", None, config.connect_timeout, port).into_outcome()??;
+        let commands = match self.ask("commands", None, config.connect_timeout, port) {
+            Answer::Replied(outcome) => outcome?,
+            Answer::Lost(e) => return Err(before_any_call(port, e)),
+        };
         self.specs = Spec::list(commands)?;
         Ok(())
     }
