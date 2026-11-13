@@ -71,6 +71,10 @@ proves a change"). The hooks:
   own xtask, a leftover test process, say).
 - `full_gate_capable`, `full_gate_env`: whether this machine runs the periodic full gate, and what
   the project adds to it (a GPU, the path to its test data, say).
+- `claim_holds_first`: a claim holds its issue on the tracking branch before it makes anything,
+  so of two claims at once one holds it and the other is refused naming the holder
+  (`claim::hold`). Off by default: the claim's events after its PR, as before. This repo's own
+  xtask (`xtask/`, Swarm Core by path) turns it on.
 - `regenerate`: how `stack` regenerates a generated doc that conflicted (default: the consumer's
   own `cargo xtask <command>`).
 - `changed`, `xtask_reads`, `file_class`: what `ci --changed`'s plan needs from the consumer: its

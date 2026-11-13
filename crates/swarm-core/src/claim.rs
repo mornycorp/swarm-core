@@ -42,6 +42,11 @@
 //! - **The worktree:** a claim switches the worktree it ran in to the new branch when that
 //!   worktree is clean and isn't the owner's (primary) checkout, which stays on `main` (AGENTS.md
 //!   §6). `--no-switch` leaves it where it is.
+//! - **The hold first** (mornycorp/swarm-core#96), where the project turns it on
+//!   ([`crate::Hooks::claim_holds_first`]): once the checks pass, the `claim` event goes on the
+//!   tracking branch before anything else, pushed only onto the branch it read and found free, so
+//!   of two claims at once one holds the issue and the other is refused before it makes anything
+//!   ([`hold`]). The PR then goes on the `work` event, and no race is run.
 //!
 //! The decisions are pure functions over parsed GitHub and tracking data (tested); the `gh` and
 //! `git` calls around them are thin.
@@ -54,6 +59,8 @@ use serde_json::Value;
 use crate::process::git;
 use crate::{Hooks, Project, event};
 use crate::{github, needs};
+
+pub mod hold;
 
 /// How long a `claim` or `work` event holds an issue with no later `stop` or `release` (the
 /// 24-hour rule of AGENTS.md §4 step 6).
@@ -934,6 +941,9 @@ fn starts_from_main(o: &Opts) -> bool {
 /// One step of a claim once its checks have passed, in [`plan`]'s order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
+    /// The `claim` event on the tracking branch, sent only onto a branch with no other live claim
+    /// of the issue ([`hold`]); where the project turns it on, the claim's first step.
+    Hold,
     /// The branch `<n>-<slug>` from `origin/main` with its claim commit, pushed.
     Branch,
     /// The draft PR (or an earlier run's, resumed).
@@ -942,7 +952,7 @@ pub enum Step {
     Label,
     /// The `claimed: <name>, PR !<m>` comment.
     Comment,
-    /// The `claim` and `work` events.
+    /// The `claim` and `work` events; after the [`Step::Hold`], only `work`, naming the PR.
     Events,
     /// An older PR for the issue won the race: mine is closed and released.
     Race,
@@ -958,12 +968,22 @@ pub enum Step {
 /// claimed twice in that window. The report and the worktree's switch come last, after a gate that
 /// didn't release it. `--no-mr` (`no_mr`) has no branch, PR or race; `--no-fullgate` no gate.
 pub fn plan(no_mr: bool, no_fullgate: bool) -> Vec<Step> {
+    plan_for(no_mr, no_fullgate, false)
+}
+
+/// [`plan`], with the hold first where the project turns it on (`hold_first`,
+/// [`crate::Hooks::claim_holds_first`], mornycorp/swarm-core#96): the `claim` event on the
+/// tracking branch before anything else ([`hold`]), which decides a race, so none follows.
+pub fn plan_for(no_mr: bool, no_fullgate: bool, hold_first: bool) -> Vec<Step> {
     let mut steps = Vec::new();
+    if hold_first {
+        steps.push(Step::Hold);
+    }
     if !no_mr {
         steps.extend([Step::Branch, Step::Pr]);
     }
     steps.extend([Step::Label, Step::Comment, Step::Events]);
-    if !no_mr {
+    if !no_mr && !hold_first {
         steps.push(Step::Race);
     }
     if !no_fullgate {
@@ -1012,14 +1032,40 @@ pub fn release_comment(name: &str, why: &str) -> String {
     format!("released: {name}, {why}")
 }
 
-/// The atomic claim: its checks, then [`plan`]'s steps.
+/// Whether a claim on this machine plans the periodic full gate's step: one that runs it
+/// (`capable`, [`crate::fullgate::capable`]), and not `--no-fullgate` (`no_fullgate`). Where the
+/// machine doesn't (Swarm Core's own, by default), the step is left out, and with it its line
+/// that the gate runs first when it is due (mornycorp/swarm-core#96). A `capable` that can't
+/// say is a warning, and no gate, as [`crate::fullgate::before_claim`] has it.
+pub fn plans_full_gate(no_fullgate: bool, capable: Result<bool, String>) -> bool {
+    match capable {
+        _ if no_fullgate => false,
+        Ok(capable) => capable,
+        Err(e) => {
+            eprintln!("warning: fullgate: {e}");
+            false
+        }
+    }
+}
+
+/// What [`Step::FullGate`] prints before the gate: the issue is held (`mr`: its draft PR), and
+/// the gate runs first when it is due. Printed only where the claim plans the gate
+/// ([`plans_full_gate`]).
+pub fn full_gate_line(issue: u64, mr: Option<u64>) -> String {
+    let held = mr.map(|m| format!(" (draft PR #{m})")).unwrap_or_default();
+    format!("claim: #{issue} is held{held}; the periodic full gate of main runs first when it is due")
+}
+
+/// The atomic claim: its checks, then [`plan`]'s steps, the full gate's only where it runs
+/// ([`plans_full_gate`]).
 fn claim(ctx: &Ctx<'_>, o: &Opts) -> Result<(), String> {
     if o.take_over {
         return crate::takeover::run(ctx, opened(ctx, o)?, o.no_switch);
     }
     let mut c = checked(ctx, o)?;
-    for step in plan(o.no_mr, o.no_fullgate) {
-        c.take(step)?;
+    let gate = plans_full_gate(o.no_fullgate, crate::fullgate::capable(ctx.project, ctx.hooks));
+    for step in plan_for(o.no_mr, !gate, ctx.hooks.claim_holds_first()) {
+        c.take(step).map_err(|e| c.still_held(step, e))?;
     }
     Ok(())
 }
@@ -1038,6 +1084,8 @@ struct Claiming<'a> {
     /// My own open PR for the issue, from an earlier run: [`Step::Pr`] keeps it.
     resumed: Option<Pr>,
     mr: Option<Pr>,
+    /// What [`Step::Hold`] did, once it has run.
+    held: Option<hold::Held>,
 }
 
 /// What the checks every claim (a takeover's too) starts with found.
@@ -1104,7 +1152,7 @@ fn checked<'a>(ctx: &Ctx<'a>, o: &'a Opts) -> Result<Claiming<'a>, String> {
         }
         println!("claim: taking over #{issue} (--force):{list}");
     }
-    Ok(Claiming { ctx: *ctx, root, o, issue, agent, name, title, branch, facts, resumed, mr: None })
+    Ok(Claiming { ctx: *ctx, root, o, issue, agent, name, title, branch, facts, resumed, mr: None, held: None })
 }
 
 impl Claiming<'_> {
@@ -1117,6 +1165,14 @@ impl Claiming<'_> {
     fn take(&mut self, step: Step) -> Result<(), String> {
         let (project, root, issue) = (self.ctx.project, self.root, self.issue);
         match step {
+            Step::Hold => {
+                let held = hold::take(project, root, &self.agent, issue, self.o.force)?;
+                if held == hold::Held::Off {
+                    println!("claim: tracking is off ({}=off): no hold on the tracking branch", project.env_name("TRACKING"));
+                }
+                self.held = Some(held);
+                Ok(())
+            }
             Step::Branch => ensure_branch(project, root, &self.branch, issue, &self.title),
             Step::Pr => {
                 // Mine from the events or the comment, else the one from my branch.
@@ -1132,9 +1188,7 @@ impl Claiming<'_> {
             Step::Label => edit_label(project, issue, true),
             Step::Comment if self.facts.claim_note.as_ref().is_some_and(|n| n.name == self.name && n.mr == self.mr_iid()) => Ok(()),
             Step::Comment => post_note(project, issue, &claim_comment(&self.name, self.mr_iid())),
-            Step::Events => claim_events(&self.agent, issue, self.mr_iid())
-                .iter()
-                .try_for_each(|ev| event::run(project, root, &ev.iter().map(String::as_str).collect::<Vec<_>>())),
+            Step::Events => self.events().iter().try_for_each(|ev| event::run(project, root, &ev.iter().map(String::as_str).collect::<Vec<_>>())),
             Step::Race => self.race(),
             Step::FullGate => self.full_gate(),
             Step::Report => {
@@ -1142,6 +1196,30 @@ impl Claiming<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// The events [`Step::Events`] logs: `claim` and `work` ([`claim_events`]), or after a hold
+    /// that landed or was there already, `work` naming the PR ([`work_event`]).
+    fn events(&self) -> Vec<Vec<String>> {
+        match self.held {
+            Some(hold::Held::Now | hold::Held::Already) => vec![work_event(&self.agent, self.issue, self.mr_iid())],
+            _ => claim_events(&self.agent, self.issue, self.mr_iid()).into(),
+        }
+    }
+
+    /// The error `e` of `step`, saying the issue is still held when the hold is on the tracking
+    /// branch and the step that failed didn't release it: run the claim again to finish it, or
+    /// release it.
+    fn still_held(&self, step: Step, e: String) -> String {
+        let held = matches!(self.held, Some(hold::Held::Now | hold::Held::Already));
+        if !held || !matches!(step, Step::Branch | Step::Pr | Step::Label | Step::Comment | Step::Events) {
+            return e;
+        }
+        format!(
+            "{e}
+#{} stays held by your claim on the tracking branch: run the claim again to finish it, or give it up with `cargo xtask event release --agent {} --issue {}`",
+            self.issue, self.agent, self.issue
+        )
     }
 
     /// The race: another agent's PR for the issue opened before mine wins (AGENTS.md §4 step 3).
@@ -1219,8 +1297,7 @@ impl Claiming<'_> {
     /// claim ([`after_gate`]).
     fn full_gate(&self) -> Result<(), String> {
         let project = self.ctx.project;
-        let held = self.mr.as_ref().map(|m| format!(" (draft PR #{})", m.number)).unwrap_or_default();
-        println!("claim: #{} is held{held}; the periodic full gate of main runs first when it is due", self.issue);
+        println!("{}", full_gate_line(self.issue, self.mr_iid()));
         let Some(outcome) = crate::fullgate::before_claim(&self.ctx, &self.agent) else { return Ok(()) };
         let filed = match outcome {
             crate::fullgate::Outcome::Red(n) => n,
@@ -1312,6 +1389,16 @@ pub fn claim_events(agent: &str, issue: u64, mr: Option<u64>) -> [Vec<String>; 2
     }
     let work = ["work", "--agent", agent, "--issue", &issue.to_string()].map(str::to_owned).into();
     [claim, work]
+}
+
+/// The `work` event a claim whose hold is on the tracking branch logs once it has its PR, which
+/// it names: the hold's `claim` event came before the PR (mornycorp/swarm-core#96).
+pub fn work_event(agent: &str, issue: u64, mr: Option<u64>) -> Vec<String> {
+    let mut work: Vec<String> = ["work", "--agent", agent, "--issue", &issue.to_string()].map(str::to_owned).into();
+    if let Some(m) = mr {
+        work.extend(["--mr".to_owned(), m.to_string()]);
+    }
+    work
 }
 
 /// Comment `body` on `issue`.
@@ -1982,6 +2069,40 @@ mod tests {
             }
             assert_eq!(steps.last(), Some(&Report), "the switch after a gate that kept the claim");
         }
+    }
+
+    /// Where the project holds first, the hold on the tracking branch comes before anything the
+    /// claim makes, and settles a race, so none follows; the PR goes on the `work`.
+    #[test]
+    fn a_hold_first_comes_before_anything_the_claim_makes() {
+        use Step::*;
+        assert_eq!(plan_for(false, false, false), plan(false, false), "the default is as before");
+        assert!(!crate::Defaults.claim_holds_first());
+        assert_eq!(plan_for(false, false, true), [Hold, Branch, Pr, Label, Comment, Events, FullGate, Report]);
+        assert_eq!(plan_for(true, true, true), [Hold, Label, Comment, Events, Report], "--no-mr --no-fullgate");
+        assert_eq!(work_event("pc-1", 73, Some(83)), ["work", "--agent", "pc-1", "--issue", "73", "--mr", "83"]);
+        assert_eq!(work_event("pc-1", 73, None), ["work", "--agent", "pc-1", "--issue", "73"], "a --no-mr claim");
+        let ev: Vec<&str> = ["work", "--agent", "pc-1", "--issue", "73", "--mr", "83"].to_vec();
+        assert!(event::parse(&P, &ev, None, || "pc".into()).is_ok_and(|e| e.is_some_and(|(_, e)| e.mr == Some(83))), "the writer takes it");
+    }
+
+    /// A claim plans the full gate's step, and says the gate runs first when it is due, only on
+    /// a machine that runs it: a consumer's Windows machines and a GPU project's GPU machines as
+    /// before, and not Swarm Core's own (`full_gate_capable` false), nor with `--no-fullgate`,
+    /// nor when the `_FULLGATE` variable can't be read.
+    #[test]
+    fn a_claim_says_the_full_gate_runs_only_where_it_does() {
+        use Step::*;
+        let steps = |no_fullgate, capable| plan_for(false, !plans_full_gate(no_fullgate, capable), true);
+        assert_eq!(steps(false, Ok(true)), [Hold, Branch, Pr, Label, Comment, Events, FullGate, Report], "a machine that runs it: as before");
+        assert_eq!(steps(false, Ok(false)), [Hold, Branch, Pr, Label, Comment, Events, Report], "one that doesn't: no step, no line");
+        assert_eq!(steps(true, Ok(true)), steps(false, Ok(false)), "--no-fullgate");
+        assert_eq!(steps(false, Err("SWARM_FULLGATE=maybe: expected on or off".into())), steps(false, Ok(false)));
+        let capable = |hooks: &dyn crate::Hooks| crate::fullgate::capable_by("SWARM_FULLGATE", None, || hooks.full_gate_capable());
+        assert_eq!(plans_full_gate(false, capable(&crate::Defaults)), cfg!(windows), "the default rule");
+        assert!(plans_full_gate(false, crate::fullgate::capable_by("SWARM_FULLGATE", Some("on"), || false)), "turned on by hand");
+        assert_eq!(full_gate_line(75, Some(85)), "claim: #75 is held (draft PR #85); the periodic full gate of main runs first when it is due");
+        assert_eq!(full_gate_line(75, None), "claim: #75 is held; the periodic full gate of main runs first when it is due", "--no-mr");
     }
 
     /// A full gate that finds main red releases the task's claim: its draft PR

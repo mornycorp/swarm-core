@@ -160,7 +160,8 @@ fn rerun_plan(enabled: bool, golden: &str, sub: &str, first: &Ran, head: &str, p
 /// timeline can tell a `ready` that ran everything from one that didn't.
 fn start_note(project: &crate::Project) -> String {
     match super::left_out(project) {
-        Some(left) => format!("ci --changed before submitting; batch proof: {left}"),
+        Some(left) if !left.is_empty() => format!("ci --changed before submitting; batch proof: {left}"),
+        Some(_) => "ci --changed before submitting; batch proof".to_owned(),
         None => "ci --changed before submitting".to_owned(),
     }
 }
@@ -238,6 +239,18 @@ mod tests {
 
     const HEAD: &str = "c89b857c7c9ce601a87162b88d8732b5ebc02506";
     const GOLDEN: &str = "swarm-engine::golden";
+
+    /// The gate's `sub.start` note names what the batch proof sets, and nothing when it sets
+    /// nothing (Swarm Core's own proof): no `batch proof: ` with an empty list.
+    #[test]
+    fn the_start_note_names_only_what_the_batch_proof_sets() {
+        use crate::project::Proof;
+        use crate::project::fixtures::{APP_SWARM, GPU_SWARM};
+        assert_eq!(start_note(&GPU_SWARM), "ci --changed before submitting; batch proof: GPU_SWARM_SKIP_GPU_TESTS=1");
+        let none = crate::Project { proof: Proof::Batch { ready_env: &[] }, ..GPU_SWARM };
+        assert_eq!(start_note(&none), "ci --changed before submitting; batch proof");
+        assert_eq!(start_note(&APP_SWARM), "ci --changed before submitting");
+    }
 
     /// `ci --changed`'s log where nextest failed `failed`, and the steps after `test` skipped.
     fn failed_log(failed: &[&str]) -> String {

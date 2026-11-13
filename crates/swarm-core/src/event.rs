@@ -18,7 +18,9 @@
 //!   [`Event::line`] writes them, whatever serde_json's features.
 //! - **How:** git plumbing, no checkout, index or ref of its own (so any checkout or worktree of
 //!   the clone can log while it works): read the branch, append, commit with `fast-import`, push. Nothing writes a local ref ([`fetch_tip`], [`commit`]),
-//!   so worktrees logging at once never race for one.
+//!   so worktrees logging at once never race for one. A claim that holds its issue here first
+//!   sends its event only onto the branch it judged ([`send_unless`], mornycorp/swarm-core#96):
+//!   a push that loses a race reads the branch and judges again, rather than appending.
 //! - **Never in the way:** each git call has a deadline; on any failure the event is queued in
 //!   the clone's git directory and sent with the next one, and the command still succeeds. Only a
 //!   malformed event (an unknown name, a missing issue, a field the reader would drop) is an
@@ -476,18 +478,76 @@ fn push(project: &Project, root: &Path, events: &[(String, String)]) -> Result<(
         // The branch as the remote has it now; none yet on a new remote. The commit fetches it
         // when the clone lacks it.
         let base = remote_tip(root, remote, &src)?;
-        let commit = commit(project, root, base.as_deref(), events)?;
-        #[cfg(test)]
-        tests::hook(tests::Point::Push, root);
-        // No hooks: a clone's pre-push hook is for its issue branches, and starting it costs a
-        // shell for every event.
-        match git(root, &["push", "--quiet", "--no-verify", remote, &format!("{commit}:{src}")], None, &[]) {
-            Ok(_) => return Ok(()),
-            Err(e) if e.contains("rejected") || e.contains("fetch first") || e.contains("non-fast-forward") || e.contains("stale info") => {
+        match push_on(project, root, base.as_deref(), events)? {
+            None => return Ok(()),
+            Some(e) => {
                 last = e;
                 backoff(attempt);
             }
-            Err(e) => return Err(e),
+        }
+    }
+    Err(format!("the tracking branch kept moving ({ATTEMPTS} tries): {last}"))
+}
+
+/// Commit `events` on `base` (the branch's tip as read; `None`: no branch yet) and push that commit
+/// as the branch, never forced: `None` when it landed, or git's refusal when the branch had moved
+/// on from `base` (another agent pushed first). Any other failure is an error.
+fn push_on(project: &Project, root: &Path, base: Option<&str>, events: &[(String, String)]) -> Result<Option<String>, String> {
+    let (remote, src) = (project.branches.remote, format!("refs/heads/{}", project.branches.tracking));
+    let commit = commit(project, root, base, events)?;
+    #[cfg(test)]
+    tests::hook(tests::Point::Push, root);
+    // No hooks: a clone's pre-push hook is for its issue branches, and starting it costs a
+    // shell for every event.
+    match git(root, &["push", "--quiet", "--no-verify", remote, &format!("{commit}:{src}")], None, &[]) {
+        Ok(_) => Ok(None),
+        Err(e) if e.contains("rejected") || e.contains("fetch first") || e.contains("non-fast-forward") || e.contains("stale info") => Ok(Some(e)),
+        Err(e) => Err(e),
+    }
+}
+
+/// What a conditional send ([`send_unless`]) makes of the tracking branch as it read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Append the event: as an answer, it landed on the branch it was read from.
+    Send,
+    /// Send nothing: the branch already says it (a claim run again by its own agent).
+    Skip,
+    /// Send nothing, because of this: someone else's event on the branch stands in the way.
+    Refuse(String),
+}
+
+/// Send `agent`'s event `line` only onto the tracking branch that `decide` judged
+/// (mornycorp/swarm-core#96): `decide` reads the branch at the tip it is given (`None`: no
+/// branch yet) and says whether to send. The push is never forced, so when another agent pushed
+/// between the read and the push git refuses it, and the branch is read and judged again: of two
+/// agents sending at once, one lands and the other is judged on the branch with the first's event
+/// on it. Unlike [`send`], nothing is queued: a send that can't be made is an error, for the
+/// caller to act on. The queue is left as it is.
+pub fn send_unless(
+    project: &Project,
+    root: &Path,
+    agent: &str,
+    line: &str,
+    decide: &dyn Fn(Option<&str>) -> Result<Verdict, String>,
+) -> Result<Verdict, String> {
+    check_id(agent)?;
+    let src = format!("refs/heads/{}", project.branches.tracking);
+    let events = [(agent.to_owned(), line.to_owned())];
+    let mut last = String::new();
+    for attempt in 0..ATTEMPTS {
+        // The tip, fetched: `decide` reads the branch's files from it.
+        let base = fetch_tip(root, project.branches.remote, &src)?;
+        match decide(base.as_deref())? {
+            Verdict::Send => {}
+            other => return Ok(other),
+        }
+        match push_on(project, root, base.as_deref(), &events)? {
+            None => return Ok(Verdict::Send),
+            Some(e) => {
+                last = e;
+                backoff(attempt);
+            }
         }
     }
     Err(format!("the tracking branch kept moving ({ATTEMPTS} tries): {last}"))
@@ -758,15 +818,15 @@ pub fn examples(project: &Project) -> Result<Vec<(String, String)>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::project::fixtures::{APP_SWARM, BOTH, GPU_SWARM};
     use std::cell::RefCell;
 
     /// Where a test can step in: a send has read the branch and committed, and is about to push
-    /// ([`push`]); a fetch has failed on a held ref and is about to wait and try again ([`fetch`]).
+    /// ([`push_on`]); a fetch has failed on a held ref and is about to wait and try again ([`fetch`]).
     #[derive(Clone, Copy, PartialEq, Debug)]
-    pub(super) enum Point {
+    pub(crate) enum Point {
         Push,
         Refetch,
     }
@@ -780,18 +840,18 @@ mod tests {
     /// Run `f` once, when this thread next reaches `point` in `repo`: how a test puts another
     /// agent's push between a send's read of the branch and its own push, every time, rather than
     /// racing threads until it happens.
-    fn at(point: Point, repo: &Path, f: impl FnOnce() + 'static) {
+    pub(crate) fn at(point: Point, repo: &Path, f: impl FnOnce() + 'static) {
         HOOKS.with(|h| h.borrow_mut().push((point, repo.to_owned(), Box::new(f))));
     }
 
     /// The hooks [`at`] set that haven't run.
-    fn pending() -> usize {
+    pub(crate) fn pending() -> usize {
         HOOKS.with(|h| h.borrow().len())
     }
 
     /// Called at `point` in `root`: runs the first hook set for it (which may send, reaching
     /// points of its own).
-    pub(super) fn hook(point: Point, root: &Path) {
+    pub(crate) fn hook(point: Point, root: &Path) {
         let f = HOOKS.with(|h| {
             let mut h = h.borrow_mut();
             let i = h.iter().position(|(p, r, _)| *p == point && r == root)?;

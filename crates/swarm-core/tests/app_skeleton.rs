@@ -451,14 +451,28 @@ fn the_examples_checks_pass_with_no_app_and_hold_an_app_to_the_skeletons_scans()
 
 /// A commit of this checkout's files (tracked, or untracked and not ignored, as they are on disk) in
 /// a temporary git repository: Swarm Core the new repo pins. Only what a build of Swarm Core
-/// reads (`crates/`, `docs/`, the workspace manifest and lock, the style files): CI keeps its cargo
-/// home inside the checkout, untracked, and it must not be copied. Its path and whole commit id.
+/// reads (`crates/`, `docs/`, the workspace manifest and lock, the style files, and `xtask/`, a member
+/// the manifest names): CI keeps its cargo home inside the checkout, untracked, and it must not be
+/// copied. Its path and whole commit id.
 fn snapshot(name: &str) -> (PathBuf, String) {
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     let listed = process::git(here, &["rev-parse", "--show-toplevel"], None, &[]).unwrap();
     let top = PathBuf::from(listed.trim());
-    let listing =
-        ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "crates", "docs", "Cargo.toml", "Cargo.lock", "rustfmt.toml", "clippy.toml"];
+    let listing = [
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "crates",
+        "docs",
+        "xtask",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rustfmt.toml",
+        "clippy.toml",
+    ];
     let files = process::git(&top, &listing, None, &[]).unwrap();
     let copy = temp_dir(&format!("app-e2e-core-{name}"));
     for file in files.split('\0').filter(|f| !f.is_empty() && top.join(f).is_file()) {

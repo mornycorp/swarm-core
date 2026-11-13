@@ -107,8 +107,10 @@ fn running(status: Option<&str>) -> bool {
     matches!(status, Some("pending" | "expected"))
 }
 
-/// The PRs an agent's tracking events name: every `claim` and `submit` with an `mr` (the PR's
-/// number), less those of issues it later `release`d.
+/// The PRs an agent's tracking events name: every `claim`, `work` and `submit` with an `mr` (the
+/// PR's number), less those of issues it later `release`d. A claim whose hold went on the tracking
+/// branch first names its PR on its `work` (mornycorp/swarm-core#96); a `work` a send-back logs
+/// names a PR the agent's claim did.
 pub fn agent_mrs(jsonl: &str) -> BTreeSet<u64> {
     let mut by_issue: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
     let mut mrs = BTreeSet::new();
@@ -117,7 +119,7 @@ pub fn agent_mrs(jsonl: &str) -> BTreeSet<u64> {
         let issue = v.get("issue").and_then(Value::as_u64);
         let mr = v.get("mr").and_then(Value::as_u64);
         match (v.get("event").and_then(Value::as_str), issue, mr) {
-            (Some("claim" | "submit"), _, Some(mr)) => {
+            (Some("claim" | "work" | "submit"), _, Some(mr)) => {
                 mrs.insert(mr);
                 if let Some(i) = issue {
                     by_issue.entry(i).or_default().insert(mr);
@@ -693,6 +695,10 @@ not json
 {"t":"x","event":"work","issue":12}"#;
         assert_eq!(agent_mrs(jsonl).into_iter().collect::<Vec<_>>(), [100, 102]);
         assert_eq!(agent_issues(jsonl), [10, 12], "#277: the issues whose needs it watches");
+        // A claim held on the tracking branch first names its PR on its `work`.
+        let held = format!("{jsonl}\n{{\"t\":\"x\",\"event\":\"claim\",\"issue\":13}}\n{{\"t\":\"x\",\"event\":\"work\",\"issue\":13,\"mr\":103}}");
+        assert_eq!(agent_mrs(&held).into_iter().collect::<Vec<_>>(), [100, 102, 103]);
+        assert_eq!(agent_issues(&held), [10, 12, 13]);
         let many: String = (1..=80).map(|i| format!("{{\"event\":\"claim\",\"issue\":{i}}}\n")).collect();
         let newest = agent_issues(&format!("{many}{{\"event\":\"claim\",\"issue\":3}}"));
         assert_eq!((newest.len(), newest.first(), newest.last()), (MAX_CLAIMED, Some(&32), Some(&3)), "the newest, a reclaim counting as new");
