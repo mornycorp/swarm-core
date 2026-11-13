@@ -47,7 +47,7 @@ pub struct Project {
     /// The smoke's golden tests' binary, as nextest names it (`ci --smoke`'s `golden` step): a
     /// rerun of a failed golden test runs it alone (`swarm-engine::golden`).
     pub golden_binary: &'static str,
-    /// What proves a change before it merges: each MR's own `ready`, or the coordinator's gate of
+    /// What proves a change before it merges: each PR's own `ready`, or the coordinator's gate of
     /// its batch (mornycorp/swarm-core#53).
     pub proof: Proof,
 }

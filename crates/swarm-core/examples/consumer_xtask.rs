@@ -58,7 +58,7 @@ pub const PROJECT: Project = Project {
     gate_tag: "",
     golden_binary: "my-engine::golden",
     // Each PR's `ready` runs everything; `Proof::Batch { ready_env: … }` when the coordinator's
-    // full gate proves each batch instead (cmaughan/swarm-foundation#16). CHANGE: if so.
+    // full gate proves each batch instead (mornycorp/swarm-core#53). CHANGE: if so.
     proof: Proof::Ready,
 };
 

@@ -298,7 +298,7 @@ pub fn coordinator_kind(needed: (Kind, String), forced: bool) -> (Kind, String) 
 
 /// The gate the coordinator runs under the project's `proof` (mornycorp/swarm-core#53):
 /// [`coordinator_kind`]'s under [`Proof::Ready`]; under [`Proof::Batch`] what needed the full
-/// gate (or is unsure) gets it, as the proof of every MR in the stack, whose own `ready` left
+/// gate (or is unsure) gets it, as the proof of every PR in the stack, whose own `ready` left
 /// part of `ci` out.
 pub fn coordinator_kind_for(proof: Proof, needed: (Kind, String), forced: bool) -> (Kind, String) {
     match (proof, needed) {
