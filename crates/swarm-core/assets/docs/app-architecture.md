@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** minor (one dispatch: a panic in a command's run is an `internal` error) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (the `sources` layer is `backends`, for reading and writing) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -44,8 +44,8 @@ Dependencies point down; a crate depends only on strictly lower layers.
 |---|---|---|---|
 | 0 | `model` | the types and parsers of everything that is read from outside: files, wire frames, user text. **Hostile input, no I/O.** | the standard library, `serde` |
 | 1 | `domain` | libraries that do the app's work (one crate per area). **No I/O:** what it needs from outside is handed to it by a layer above | model |
-| 2 | `sources` (optional) | where data comes from: files, git, the network, a device. **Every call has a deadline and a capped result**; a child process still goes through the process module | model, domain |
-| 3 | `engine` | the session, the command registry, the one dispatch | model, domain, sources |
+| 2 | `backends` (optional) | what the app reads from and writes to outside itself: files, git, the network, a device. **Every call has a deadline and a capped result**; a child process still goes through the process module | model, domain |
+| 3 | `engine` | the session, the command registry, the one dispatch | model, domain, backends |
 | 4 | `automation` | the transports: `serve`, the loopback socket, MCP | engine |
 | 5 | `ui` | the UI shell: toolkit code, drawing, input | engine |
 | 6 | `apps` | the binaries: the CLI and the windowed app | any lower layer |
@@ -58,13 +58,17 @@ beside it) is **only a `[dev-dependencies]` entry**, never a dependency of produ
   (`[package.metadata.swarm] layer = "engine"`), so there is no table to keep in step. It names
   the layer, never its number: the numbers above are only the order. (An app that keeps its
   layers in its xtask's table, `Hooks::layers`, is held to the same order from there.)
-- **`sources` is optional.** An app whose data comes from outside (it reads files, git, a
-  network service or a device) puts that reading in `sources` crates (`layer = "sources"`), so the
-  domain stays pure and every outside call has one home. Each call there has a deadline (a hung
-  server or a slow disk is a typed error, not a hang) and caps what it keeps (a huge answer is
-  `too_large`, never an allocation sized by the other side); what it reads is parsed by the model,
-  as hostile input. An app without outside data leaves the layer out, and the rest of the order
-  is the same.
+- **`backends` is optional.** An app that works with data outside itself (it reads or writes
+  files, git, a network service or a device) puts that in `backends` crates (`layer =
+  "backends"`), so the domain stays pure and every outside call, in either direction, has one
+  home. Each call there has a deadline (a hung server or a slow disk is a typed error, not a
+  hang) and caps what it keeps (a huge answer is `too_large`, never an allocation sized by the
+  other side); what it reads is parsed by the model, as hostile input. A write there is a
+  command's declared effect (`writes`, `network`, `device`), and is to what the person or
+  another system owns: an export, a document, a remote. The app's own state stays with the
+  state module and its one writer ([State on disk](#state-on-disk)). An app without outside
+  data leaves the layer out, and the rest of the order is the same. The layer was `sources`
+  until 2026-11-13; a manifest that still says so is read as `backends`.
 - **UI toolkits only in the UI layer** and the apps built on it (the windowed app). The CLI and
   every layer below never link one.
 - **Lints and headers.** `[lints] workspace = true` in every member; every crate root carries the
@@ -81,8 +85,8 @@ beside it) is **only a `[dev-dependencies]` entry**, never a dependency of produ
   config, never in a repo).
 
 **Check:** `layers` (`swarm_core::checks::layers`; its error names the file, the rule and the
-fix): the order, so a `domain` or `model` crate can't use a `sources` one. `review` for the rest:
-that `model` and `domain` do no I/O, and that each outside call in `sources` has its deadline and
+fix): the order, so a `domain` or `model` crate can't use a `backends` one. `review` for the rest:
+that `model` and `domain` do no I/O, and that each outside call in `backends` has its deadline and
 its cap.
 
 ## Every action is a command
@@ -554,6 +558,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Layers: the optional `sources` layer is `backends`, and it reads and writes the outside (a write there is a command's declared effect; the app's own state stays with the state module). A manifest that still says `sources` is read as `backends` (swarm-core#87) |
 | 2026-11-12 | minor | One dispatch's check: the conformance run holds a call cancelled before it runs to fail `cancelled`, on the surfaces an app can cancel a call through (swarm-core#61) |
 | 2026-11-12 | minor | One dispatch: a panic in a command's `run` is caught by the dispatch and returned as `internal`, on the wire form and the typed one, and the session goes on (swarm-core#52) |
 | 2026-11-12 | major | The contract, from swarm-foundation's: the layers (with the optional `sources`), every action a command (the spec, the id rule, the enabled check, the menu path and shortcut, the error), one dispatch (the JSON-lines frame, the socket's auth, MCP from the registry), the UI as a client (its state as data, what is drawn is a command's result, the theme and the catalog, pictures), and the robustness rules, each naming the check that holds it (swarm-core#47) |

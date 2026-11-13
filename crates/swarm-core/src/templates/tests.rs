@@ -100,7 +100,7 @@ fn the_app_templates_follow_the_contract() {
         let at: Vec<Option<usize>> =
             stack.iter().enumerate().map(|(n, l)| text.find(&format!("| {n} | `{l}`")).or_else(|| text.find(&format!("| {n} `{l}`")))).collect();
         assert!(at.iter().all(Option::is_some) && at.is_sorted(), "{doc}: the layers {stack:?}, numbered in order: {at:?}");
-        assert!(text.contains("`sources` (optional)"), "{doc}: `sources` is optional");
+        assert!(text.contains("`backends` (optional)"), "{doc}: `backends` is optional");
     }
     for heading in ["## Layers", "## How a command flows", "## Where state lives", "## Adding a command", "## Revision history"] {
         assert!(arch.contains(&format!("\n{heading}\n")), "docs/architecture.md: {heading}");

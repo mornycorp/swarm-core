@@ -14,14 +14,14 @@ lives, and how a new command is added. The rules every change keeps are the pinn
 ## Layers
 
 <!-- One row per crate, in the layer its manifest declares. Cut the layers this repo has no use
-     for (`sources` is optional: an app with no data from outside has none); the default map is
+     for (`backends` is optional: an app with no data outside itself has none); the default map is
      AGENTS.md §2. -->
 
 | Layer | Crate | What it holds |
 |---|---|---|
 | 0 `model` | <!-- `crates/model` --> | <!-- the types and parsers of what is read from outside --> |
 | 1 `domain` | <!-- one crate per area --> | <!-- what each does: no I/O --> |
-| 2 `sources` (optional) | <!-- `crates/<source>`, one crate per source or one for all --> | <!-- where data comes from (files, git, the network, a device): each call with a deadline and a cap --> |
+| 2 `backends` (optional) | <!-- `crates/<backend>`, one crate per backend or one for all --> | <!-- what it reads from and writes to outside itself (files, git, the network, a device): each call with a deadline and a cap --> |
 | 3 `engine` | <!-- `crates/engine` --> | the session, the command registry, the one dispatch |
 | 4 `automation` | <!-- `crates/automation` --> | `serve`, the loopback socket, MCP |
 | 5 `ui` | <!-- `crates/ui` --> | the UI shell |
