@@ -4,8 +4,9 @@
 //! ([`crate::templates`]) with it; **`--app --ui`** adds the UI shell and the windowed app
 //! ([`UI_FILES`]). It is the app's own once written.
 //!
-//! - **What it is:** `crates/model` (the id rule, a hostile-input parser), `crates/engine` (the
-//!   session, the typed registry, the one dispatch, `app.info`), `crates/automation` (the JSON-lines
+//! - **What it is:** `crates/model` (the id rule, a hostile-input parser), `crates/backends` (the
+//!   one layer that touches the outside: the process module, the atomic file writer and its capped
+//!   read), `crates/engine` (the session, the typed registry, the one dispatch, `app.info`), `crates/automation` (the JSON-lines
 //!   frame with the contract's caps, `serve`, the loopback control socket with its token and `auth`,
 //!   an MCP server generated from the registry), `apps/<cli>` (`run`, `commands`, `serve [--socket]`, `mcp`), `crates/testkit` (temp
 //!   dirs, hostile request lines; its tests run swarm-core's conformance run, a pinned `[dev-dependencies]` entry), plus `rustfmt.toml` (`clippy.toml` is the
@@ -61,15 +62,29 @@ pub const TEST_FILES: &[&str] = crate::checks::TEST_FILES;
 /// The source files of the app's crates and binaries, in the skeleton's layout.
 pub const SOURCES: &[&str] = &["crates/**/*.rs", "apps/**/*.rs"];
 
-/// The skeleton's state module: the one atomic writer, which the `file-writes` scan leaves out.
-pub const STATE_MODULE: &str = "crates/engine/src/state.rs";
-
-/// The app's own sources: its crates but the testkit (whose temp dirs are its job), and its binaries.
-pub const APP_SOURCES: &[&str] = &["crates/model/**/*.rs", "crates/engine/**/*.rs", "crates/automation/**/*.rs", "apps/**/*.rs"];
+/// The skeleton's backends crate (mornycorp/swarm-core#91): the one layer that touches the
+/// outside, with the one process starter and the one atomic file writer.
+pub const BACKENDS: &[&str] = &["crates/backends/**/*.rs"];
 
 /// The skeleton's process module: the one place it starts another program, which the
-/// `process-module` scan leaves out.
-pub const PROCESS_MODULE: &str = "crates/engine/src/process.rs";
+/// `process-module` scan leaves out. Also in the backends crate, a program starts only here.
+pub const PROCESS_MODULE: &str = "crates/backends/src/process.rs";
+
+/// What the `file-writes` scan leaves out of [`SOURCES`]: the backends crate (it is what writes),
+/// the testkit (temp dirs are its job) and the UI crate ([`UI_SCANS`] holds it, with its own rule).
+/// Every other crate is read, one the app adds later too: a further backends crate is added here
+/// by the app's own scans.
+pub const FILE_WRITERS: &[&str] = &["crates/backends/**/*.rs", "crates/testkit/**/*.rs", "crates/ui/**/*.rs"];
+
+/// An earlier skeleton's layout, where the engine held both modules: [`scans_at`] reads an app
+/// that still has it ([`has_backends`] says no) with [`EARLIER_SCANS`], so a bump fails nothing.
+pub const STATE_MODULE: &str = "crates/engine/src/state.rs";
+
+/// The earlier layout's process module, in the engine.
+pub const ENGINE_PROCESS_MODULE: &str = "crates/engine/src/process.rs";
+
+/// The earlier layout's sources: its crates but the testkit, and its binaries.
+pub const APP_SOURCES: &[&str] = &["crates/model/**/*.rs", "crates/engine/**/*.rs", "crates/automation/**/*.rs", "apps/**/*.rs"];
 
 /// The scans of docs/app-architecture.md ([`crate::checks::scan`]) pointed at the skeleton's files:
 /// a consumer's [`Hooks::scans`] returns them (`skeleton::scans_at(root)`) and adds what its app
@@ -78,18 +93,31 @@ pub const PROCESS_MODULE: &str = "crates/engine/src/process.rs";
 pub const SCANS: &[Scan] = &[
     Scan::process_command().files(SOURCES).except(&[PROCESS_MODULE]).test_files(TEST_FILES),
     Scan::value_reads().files(&["crates/automation/**/*.rs", "apps/**/*.rs"]).test_files(TEST_FILES),
-    Scan::command_spec().files(SOURCES).test_files(TEST_FILES).allowing(&[Allowed {
-        file: "crates/engine/src/registry.rs",
-        count: 1,
-        reason: "the typed adapter: `Registry::register` is the one place a command's spec is built",
-    }]),
+    Scan::command_spec().files(SOURCES).test_files(TEST_FILES).allowing(&[REGISTRY]),
     Scan::real_config_dir().files(SOURCES).test_files(TEST_FILES),
-    Scan::file_writes().files(APP_SOURCES).except(&[STATE_MODULE]).test_files(TEST_FILES).allowing(&[Allowed {
-        file: "crates/automation/src/token.rs",
-        count: 3,
-        reason: "the control socket's token file: a secret, not state; made by an exclusive create with its mode, then renamed into place",
-    }]),
+    Scan::file_writes().files(SOURCES).except(FILE_WRITERS).test_files(TEST_FILES).allowing(&[TOKEN_FILE]),
 ];
+
+/// The one write outside the backends crate: the control socket's token.
+const TOKEN_FILE: Allowed = Allowed {
+    file: "crates/automation/src/token.rs",
+    count: 3,
+    reason: "the control socket's token file: a secret, not state; made by an exclusive create with its mode, then renamed into place",
+};
+
+/// [`SCANS`] for an app made from a skeleton before mornycorp/swarm-core#91, whose engine holds
+/// the process module and the atomic writer: the same rules, at that layout's paths.
+pub const EARLIER_SCANS: &[Scan] = &[
+    Scan::process_command().files(SOURCES).except(&[ENGINE_PROCESS_MODULE]).test_files(TEST_FILES),
+    Scan::value_reads().files(&["crates/automation/**/*.rs", "apps/**/*.rs"]).test_files(TEST_FILES),
+    Scan::command_spec().files(SOURCES).test_files(TEST_FILES).allowing(&[REGISTRY]),
+    Scan::real_config_dir().files(SOURCES).test_files(TEST_FILES),
+    Scan::file_writes().files(APP_SOURCES).except(&[STATE_MODULE]).test_files(TEST_FILES).allowing(&[TOKEN_FILE]),
+];
+
+/// The typed adapter, the one place a command's spec is built.
+const REGISTRY: Allowed =
+    Allowed { file: "crates/engine/src/registry.rs", count: 1, reason: "the typed adapter: `Registry::register` is the one place a command's spec is built" };
 
 /// The UI shell's theme module: its colour tokens, the one place a colour is made.
 pub const UI_THEME: &str = "crates/ui/src/theme.rs";
@@ -127,7 +155,12 @@ pub const UI_LOOK_RULES: &[&str] = &["ui-colours", "ui-strings"];
 /// The skeleton's scans for an app with or without the UI shell (`skeleton::scans(false)`, or `true`
 /// once `init --app --ui` has been run). [`scans_at`] picks for the workspace as it is.
 pub fn scans(ui: bool) -> Vec<Scan> {
-    let mut all = SCANS.to_vec();
+    with_ui(SCANS, ui)
+}
+
+/// `base` with the UI crate's scans when the app has one.
+fn with_ui(base: &[Scan], ui: bool) -> Vec<Scan> {
+    let mut all = base.to_vec();
     if ui {
         all.extend_from_slice(UI_SCANS);
     }
@@ -140,6 +173,13 @@ pub fn scans(ui: bool) -> Vec<Scan> {
 /// xtask serves a repo with no app (a library, a tooling repo) and the same repo once it has one.
 pub fn is_app(root: &Path) -> bool {
     root.join("crates/engine/Cargo.toml").is_file()
+}
+
+/// Whether the app at `root` has the backends crate (`crates/backends/Cargo.toml`): an app from a
+/// skeleton before mornycorp/swarm-core#91 has none, and keeps its process module and its writer
+/// in the engine until it moves them.
+pub fn has_backends(root: &Path) -> bool {
+    is_app(root) && root.join("crates/backends/Cargo.toml").is_file()
 }
 
 /// Whether the app at `root` has the UI shell (`init --app --ui`): `crates/ui/Cargo.toml`.
@@ -156,7 +196,7 @@ pub fn scans_at(root: &Path) -> Vec<Scan> {
     if !is_app(root) {
         return Vec::new();
     }
-    let mut all = scans(has_ui(root));
+    let mut all = with_ui(if has_backends(root) { SCANS } else { EARLIER_SCANS }, has_ui(root));
     if !root.join(UI_CATALOG).is_file() {
         all.retain(|scan| !UI_LOOK_RULES.contains(&scan.rule));
     }
@@ -183,6 +223,12 @@ pub const FILES: &[Asset] = &[
     Asset { path: "crates/automation/src/socket/conn.rs", text: include_str!("../templates/app/crates/automation/src/socket/conn.rs") },
     Asset { path: "crates/automation/src/socket/tests.rs", text: include_str!("../templates/app/crates/automation/src/socket/tests.rs") },
     Asset { path: "crates/automation/src/token.rs", text: include_str!("../templates/app/crates/automation/src/token.rs") },
+    Asset { path: "crates/backends/Cargo.toml", text: include_str!("../templates/app/crates/backends/Cargo.toml.tmpl") },
+    Asset { path: "crates/backends/src/cancel.rs", text: include_str!("../templates/app/crates/backends/src/cancel.rs") },
+    Asset { path: "crates/backends/src/error.rs", text: include_str!("../templates/app/crates/backends/src/error.rs") },
+    Asset { path: "crates/backends/src/files.rs", text: include_str!("../templates/app/crates/backends/src/files.rs") },
+    Asset { path: "crates/backends/src/lib.rs", text: include_str!("../templates/app/crates/backends/src/lib.rs") },
+    Asset { path: "crates/backends/src/process.rs", text: include_str!("../templates/app/crates/backends/src/process.rs") },
     Asset { path: "crates/engine/Cargo.toml", text: include_str!("../templates/app/crates/engine/Cargo.toml.tmpl") },
     Asset { path: "crates/engine/src/call.rs", text: include_str!("../templates/app/crates/engine/src/call.rs") },
     Asset { path: "crates/engine/src/commands.rs", text: include_str!("../templates/app/crates/engine/src/commands.rs") },
@@ -190,11 +236,9 @@ pub const FILES: &[Asset] = &[
     Asset { path: "crates/engine/src/lib.rs", text: include_str!("../templates/app/crates/engine/src/lib.rs") },
     Asset { path: "crates/engine/src/lock.rs", text: include_str!("../templates/app/crates/engine/src/lock.rs") },
     Asset { path: "crates/engine/src/menu.rs", text: include_str!("../templates/app/crates/engine/src/menu.rs") },
-    Asset { path: "crates/engine/src/process.rs", text: include_str!("../templates/app/crates/engine/src/process.rs") },
     Asset { path: "crates/engine/src/registry.rs", text: include_str!("../templates/app/crates/engine/src/registry.rs") },
     Asset { path: "crates/engine/src/session.rs", text: include_str!("../templates/app/crates/engine/src/session.rs") },
     Asset { path: "crates/engine/src/spec.rs", text: include_str!("../templates/app/crates/engine/src/spec.rs") },
-    Asset { path: "crates/engine/src/state.rs", text: include_str!("../templates/app/crates/engine/src/state.rs") },
     Asset { path: "crates/engine/src/theme.rs", text: include_str!("../templates/app/crates/engine/src/theme.rs") },
     Asset { path: "crates/engine/src/theme/tests.rs", text: include_str!("../templates/app/crates/engine/src/theme/tests.rs") },
     Asset { path: "crates/engine/src/ui.rs", text: include_str!("../templates/app/crates/engine/src/ui.rs") },

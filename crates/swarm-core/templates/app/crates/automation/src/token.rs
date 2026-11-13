@@ -20,7 +20,7 @@
 //!   regular file, yours and private), and never makes or replaces a file.
 //! - **The variable stays in the environment.** `std::env::remove_var` is `unsafe` in edition 2024
 //!   and this crate forbids `unsafe`, so [`ENV`] is not removed after it is read, and a child
-//!   process would inherit it. So the engine's process module, the one place a child is started
+//!   process would inherit it. So the backends layer's process module, the one place a child is started
 //!   (docs/app-architecture.md › Never hang on another program), starts every child without it
 //!   (`process::TOKEN_ENV`, this same name: a test here holds the two together).
 //! - **It is never shown.** [`Token`]'s `Debug` is redacted, no error here repeats a token's value,
@@ -350,7 +350,7 @@ mod tests {
     /// child's environment.
     #[test]
     fn the_process_module_removes_this_variable_from_a_child() {
-        assert_eq!(ENV, {{crate_prefix_ident}}engine::process::TOKEN_ENV);
+        assert_eq!(ENV, {{crate_prefix_ident}}backends::process::TOKEN_ENV);
     }
 
     /// `text` in a file at `path`, private on Unix as a token file must be.

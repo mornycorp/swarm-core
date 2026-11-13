@@ -48,12 +48,20 @@ name = "my-automation"
 version = "0.1.0"
 dependencies = [
  "getrandom",
+ "my-backends",
  "my-engine",
  "my-model",
  "my-testkit",
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "my-backends"
+version = "0.1.0"
+dependencies = [
+ "my-testkit",
 ]
 
 [[package]]
@@ -71,6 +79,7 @@ dependencies = [
 name = "my-engine"
 version = "0.1.0"
 dependencies = [
+ "my-backends",
  "my-model",
  "my-testkit",
  "schemars",

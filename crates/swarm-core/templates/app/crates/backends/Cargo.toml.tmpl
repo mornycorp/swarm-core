@@ -1,0 +1,15 @@
+[package]
+name = "{{crate_prefix}}backends"
+description = "{{product}}: what touches the outside: the one process starter, the one file writer and its capped read"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.swarm]
+layer = "backends"
+
+[dev-dependencies]
+{{crate_prefix}}testkit = { path = "../testkit" }
+
+[lints]
+workspace = true

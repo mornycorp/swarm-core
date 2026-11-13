@@ -94,13 +94,13 @@ fn the_app_templates_follow_the_contract() {
     }
     let arch = text("docs/architecture.md");
     // Every layer of the check's stack, numbered in its order, in the contract's table and both
-    // maps; the optional one says so .
+    // maps; `backends` is where the process module and the file writer live (#91).
     let stack = crate::checks::Layers::STANDARD.stack;
     for (doc, text) in [("the contract", contract.as_str()), ("AGENTS.md §2", agents.as_str()), ("docs/architecture.md", arch.as_str())] {
         let at: Vec<Option<usize>> =
             stack.iter().enumerate().map(|(n, l)| text.find(&format!("| {n} | `{l}`")).or_else(|| text.find(&format!("| {n} `{l}`")))).collect();
         assert!(at.iter().all(Option::is_some) && at.is_sorted(), "{doc}: the layers {stack:?}, numbered in order: {at:?}");
-        assert!(text.contains("`backends` (optional)"), "{doc}: `backends` is optional");
+        assert!(!text.contains("`backends` (optional)") && text.contains("process module"), "{doc}: `backends` holds the process module");
     }
     for heading in ["## Layers", "## How a command flows", "## Where state lives", "## Adding a command", "## Revision history"] {
         assert!(arch.contains(&format!("\n{heading}\n")), "docs/architecture.md: {heading}");

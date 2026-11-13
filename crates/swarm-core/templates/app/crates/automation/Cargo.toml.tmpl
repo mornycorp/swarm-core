@@ -17,6 +17,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The process module's name for the token, which a test here holds to this crate's.
+{{crate_prefix}}backends = { path = "../backends" }
 {{crate_prefix}}testkit = { path = "../testkit" }
 # The socket's tests register a slow command of their own (the registry's schemas come from its types).
 schemars = { workspace = true }

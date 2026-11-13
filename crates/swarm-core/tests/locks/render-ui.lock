@@ -1177,6 +1177,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "my-automation",
+ "my-backends",
  "my-engine",
  "my-testkit",
  "my-ui",
@@ -1187,12 +1188,20 @@ name = "my-automation"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "my-backends",
  "my-engine",
  "my-model",
  "my-testkit",
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "my-backends"
+version = "0.1.0"
+dependencies = [
+ "my-testkit",
 ]
 
 [[package]]
@@ -1210,6 +1219,7 @@ dependencies = [
 name = "my-engine"
 version = "0.1.0"
 dependencies = [
+ "my-backends",
  "my-model",
  "my-testkit",
  "schemars",

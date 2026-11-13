@@ -170,9 +170,35 @@ impl fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
+/// A backend's failure, as a caller sees it: its kind's code, its message and its remediation.
+/// What couldn't be done there (a deadline, the disk) is `internal`.
+impl From<{{crate_prefix_ident}}backends::BackendError> for CommandError {
+    fn from(e: {{crate_prefix_ident}}backends::BackendError) -> CommandError {
+        use {{crate_prefix_ident}}backends::Kind;
+        match e.kind {
+            Kind::NotFound => CommandError::not_found(e.message, e.remediation),
+            Kind::TooLarge => CommandError::too_large(e.message, e.remediation),
+            Kind::Cancelled => CommandError::cancelled(),
+            Kind::Failed => CommandError::internal(e.message),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backends_failure_keeps_its_kind_message_and_remediation() {
+        use {{crate_prefix_ident}}backends::BackendError;
+        let e = CommandError::from(BackendError::too_large("the file is over 10 bytes", "delete it"));
+        assert_eq!((e.code, e.message.as_str(), e.remediation.as_str()), (ErrorCode::TooLarge, "the file is over 10 bytes", "delete it"));
+        assert_eq!(CommandError::from(BackendError::not_found("no such program", "install it")).code, ErrorCode::NotFound);
+        assert_eq!(CommandError::from(BackendError::cancelled()).code, ErrorCode::Cancelled);
+        let e = CommandError::from(BackendError::failed("the disk refused"));
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert!(!e.remediation.is_empty());
+    }
 
     #[test]
     fn a_remediation_is_never_empty() {

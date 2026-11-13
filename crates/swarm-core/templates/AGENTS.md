@@ -42,7 +42,7 @@ layers`, a step of `ci`, from each manifest's layer (`Hooks::architecture`) or f
 |---|---|---|
 | 0 `model` | `crates/model/` | The types and parsers of everything read from outside (files, wire frames, user text). Hostile input, no I/O |
 | 1 `domain` | `crates/<area>/` | The libraries that do {{product}}'s work, one crate per area. No I/O |
-| 2 `backends` (optional) | `crates/<backend>/` | What {{product}} reads from and writes to outside itself: files, git, the network, a device. Each call with a deadline and a capped result. Cut it if {{product}} touches nothing outside |
+| 2 `backends` | `crates/backends/`, and `crates/<backend>/` for each further one | The one layer that touches the outside. `crates/backends` holds the process module, the atomic file writer and its capped read; a further backend (git, the network, a device) is a module there or a crate of its own. Each call with a deadline and a capped result |
 | 3 `engine` | `crates/engine/` | The session, the command registry and the one dispatch |
 | 4 `automation` | `crates/automation/` | The transports: `serve`, the loopback socket, MCP. Thin adapters over the dispatch |
 | 5 `ui` | `crates/ui/` | The UI shell: toolkit code, drawing, input. A client of the engine, never a writer |
@@ -79,7 +79,7 @@ change. Each rule names where it is written down.
 5. **[Never crash](docs/app-architecture.md#never-crash).** A bad file, input or parameter is an
    error the user or agent can act on, never a panic. A crash's fix ships its regression test.
 6. **[Never hang on another program](docs/app-architecture.md#never-hang-on-another-program).**
-   Every child process starts in the process module, with deadlines, a capped output and its own
+   Every child process starts in the process module (`crates/backends`), with deadlines, a capped output and its own
    process group.
 7. **[Never hang on a lock](docs/app-architecture.md#never-hang-on-a-lock).** The app's own lock,
    never `std::sync::Mutex`; one lock read per statement.

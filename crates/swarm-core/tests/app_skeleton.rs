@@ -333,9 +333,9 @@ fn rendered_skeleton_passes(test: &str, ui: bool) {
     let report = checks::check(&app, &root).unwrap_or_else(|f| panic!("{f}"));
     println!("{report}");
     let (members, which) = if ui {
-        (7, "model, engine, automation, testkit, the CLI, the UI crate and the window")
+        (8, "model, backends, engine, automation, testkit, the CLI, the UI crate and the window")
     } else {
-        (5, "model, engine, automation, testkit and the CLI")
+        (6, "model, backends, engine, automation, testkit and the CLI")
     };
     assert_eq!(report.layers.as_ref().map(|l| l.members), Some(members), "{which}");
     the_checks_catch_what_they_should(&app, &root);
@@ -438,7 +438,7 @@ fn the_examples_checks_pass_with_no_app_and_hold_an_app_to_the_skeletons_scans()
     write(&repo, "Cargo.toml", &with_the_crates(&guide, &manifest));
     assert!(skeleton::is_app(&repo) && !skeleton::has_ui(&repo));
     let report = checks::check(&app, &repo).unwrap_or_else(|f| panic!("the app:\n{f}"));
-    assert_eq!((report.layers.as_ref().map(|l| l.members), report.scan.rules.len()), (Some(6), skeleton::SCANS.len()), "the skeleton's scans: {report}");
+    assert_eq!((report.layers.as_ref().map(|l| l.members), report.scan.rules.len()), (Some(7), skeleton::SCANS.len()), "the skeleton's scans: {report}");
     let found = found_after(&app, &repo, "crates/automation/src/serve.rs", |text| format!("fn reads(v: serde_json::Value) {{ let _ = v[\"k\"]; }}\n{text}"));
     assert!(found.contains("[value-reads]"), "the app is held to them: {found}");
 
