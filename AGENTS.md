@@ -32,8 +32,11 @@ what it serves and how a consumer wires it in; the swarm protocol
   placeholders for what differs (`assets::render`), and add a file to `src/assets/list.rs` (the
   test `every_file_under_assets_is_shipped` says when the list and the directory differ). The
   skills under `.claude/skills/` are copied as they are, but `add-command`, a template.
-- **The explainer** (`docs/explainer/app-architecture.html`) is a page for people: the app
-  architecture at a glance. Don't read it to learn the rules: the contract and the skeleton are
+- **The architectural substrate** is the name for the way this crate defines an app's
+  architecture: the contract (`assets/docs/app-architecture.md`), the skeleton that implements
+  it and the checks that hold it. Call it that in issues, PRs and docs.
+- **The explainer** (`docs/explainer/app-architecture.html`) is a page for people: the
+  architectural substrate at a glance. Don't read it to learn the rules: the contract and the skeleton are
   the source. A change to the contract's layers or rules, the checks that hold them, the list of
   commands or the skeleton's theme colours updates the page in the same PR, so it never says
   what the code doesn't.
