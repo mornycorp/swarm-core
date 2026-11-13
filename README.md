@@ -14,44 +14,15 @@ swarm-core = { git = "https://github.com/mornycorp/swarm-core.git", rev = "<sha>
 
 `cargo xtask swarm-core bump` in a consumer moves the pin to this repo's `main`.
 
-**Renamed from swarm-foundation** (2026-10-30). A consumer pinned to `swarm-foundation` moves in
-one PR: the workspace dependency becomes `swarm-core` at this repo's URL (and its `[patch]` in any
-user-level cargo config), `swarm_foundation::` becomes `swarm_core::`, `cargo xtask foundation`
-becomes `cargo xtask swarm-core` (its gate's `sync-assets --check` among them),
-`docs/foundation-assets.md` is deleted (`sync-assets` writes `docs/swarm-core-assets.md`), and
-`docs/development.md`'s "The swarm foundation" section becomes "Swarm Core", which `layers`
-names. Issue references `f#n` become `sc#n`.
+**Earlier names.** Until 2026-10-30 this was `swarm-foundation`, on GitLab; the repository is now
+`mornycorp/swarm-core`, on GitHub through `gh`. The steps a consumer took to move are in this
+file's git history. Two traces remain: an event's `mr` field in the tracking format holds the
+PR's number, and issue numbers up to 20 in these docs (`sc#7`, `sc#15`, …) are the GitLab
+project's, not GitHub's.
 
-**Moved from GitLab to GitHub** (2026-10-30). Every command now works on a GitHub repository
-through `gh`: issues, labels and comments for claims; draft pull requests; `ready` marks a PR
-ready for review; `prwatch` (was `mrwatch`) reads each PR's merge state, checks and comments;
-`land` merges with a merge commit, rebasing on the server only a PR that is `behind`. A consumer
-moves in the same PR as the rename:
-
-- its `Project` takes `github: GitHub { host, repo }` (was `gitlab: GitLab { host, id, path }`)
-  and `pr_template` (was `mr_template`, now `.github/pull_request_template.md`);
-- `cargo xtask mrwatch` becomes `prwatch`, `claim --no-mr` becomes `--no-pr`, and PRs are `#n`
-  (were `!n`) in every argument and line;
-- the assets' placeholders are `{{github.host}}` and `{{github.repo}}` (`gitlab.*` are gone); the
-  pinned `.gitlab/` templates become `.github/ISSUE_TEMPLATE/` and
-  `.github/pull_request_template.md`, and `scripts/gitlab-labels.sh` becomes
-  `scripts/github-labels.sh` (its project's own labels in `scripts/github-labels.project.sh`);
-- its CI becomes a GitHub Actions workflow (`cargo xtask swarm-core init` writes a starting one),
-  fetching this private repository with a read-only `SWARM_CORE_TOKEN` secret, and `main`'s
-  protection requires no status checks ([docs/new-swarm.md](docs/new-swarm.md) steps 7 and 8).
-
-The tracking format doesn't change: an event's `mr` field holds the PR's number. Issue numbers
-in this repo's docs before the move (`#7`, `sc#15`, …) are the GitLab project's.
-
-**Moved to mornycorp** (2026-10-30): the repository is `mornycorp/swarm-core`. A consumer changes
-its workspace dependency's `git` URL to `https://github.com/mornycorp/swarm-core.git` (and the
-`[patch."…"]` key in any user-level cargo config), bumps, and runs `sync-assets`; its CI's
-`insteadOf` line and `SWARM_CORE_TOKEN` (now a token on `mornycorp`) follow. GitHub redirects the
-old URL for now, but don't rely on it.
-
-**No GitHub Actions** (owner, 2026-11-05): CI is local, for the coordinator and every worker.
-`init` writes no workflow, `land` cancels no runs, and this repo has none either: a PR here lands
-on its local checks (below). A consumer deletes its `.github/workflows/` and turns Actions off.
+**No GitHub Actions:** CI is local, for the coordinator and every worker. `init` writes no
+workflow, `land` cancels no runs, and this repo has none either: a PR here lands on its local
+checks (below).
 
 **Starting a new swarm:** [docs/new-swarm.md](docs/new-swarm.md) walks a new repo through it from
 Swarm Core alone: the xtask that wires it in (from
