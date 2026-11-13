@@ -215,8 +215,8 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
         println!("ready: --no-ci: no ci --changed here; the submit says so, and the coordinator's gate runs it for this PR instead of the smoke");
         push(root)?;
     } else {
-        if let Some(left) = left_out(project) {
-            println!("ready: the batch proof: ci --changed with {left}; the coordinator's full gate runs the rest");
+        if let Some(line) = batch_line(project) {
+            println!("{line}");
         }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
         let set = std::env::var("CARGO_BUILD_JOBS").ok();
@@ -365,6 +365,15 @@ fn with_proof(project: &Project, ci: &mut Command) {
 pub(crate) fn left_out(project: &Project) -> Option<String> {
     let Proof::Batch { ready_env } = project.proof else { return None };
     Some(ready_env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "))
+}
+
+/// `ready`'s line under the batch proof: the variables its `ci --changed` runs with, when the
+/// proof sets any ([`left_out`]); a proof that sets none (this repo's own) names none
+/// (mornycorp/swarm-core#96). `None` under the ready proof.
+pub(crate) fn batch_line(project: &Project) -> Option<String> {
+    let with = left_out(project)?;
+    let with = if with.is_empty() { String::new() } else { format!(" with {with}") };
+    Some(format!("ready: the batch proof: ci --changed{with}; the coordinator's full gate runs the rest"))
 }
 
 /// The tree at `root`'s own xtask, built into `<target>/ready-xtask` (never over the running one),
@@ -866,6 +875,21 @@ mod tests {
         assert_eq!(left_out(&GPU_SWARM).as_deref(), Some("GPU_SWARM_SKIP_GPU_TESTS=1"));
         assert!(env(&APP_SWARM).is_empty());
         assert_eq!(left_out(&APP_SWARM), None);
+    }
+
+    /// `ready`'s batch-proof line lists the variables its `ci --changed` runs with, and a proof
+    /// that sets none (Swarm Core's own) lists nothing: no `with` and an empty list.
+    #[test]
+    fn the_batch_proofs_line_names_only_what_it_sets() {
+        use crate::project::fixtures::{APP_SWARM, GPU_SWARM};
+        assert_eq!(
+            batch_line(&GPU_SWARM).as_deref(),
+            Some("ready: the batch proof: ci --changed with GPU_SWARM_SKIP_GPU_TESTS=1; the coordinator's full gate runs the rest"),
+            "a proof that sets variables: the line as before"
+        );
+        let none = Project { proof: Proof::Batch { ready_env: &[] }, ..GPU_SWARM };
+        assert_eq!(batch_line(&none).as_deref(), Some("ready: the batch proof: ci --changed; the coordinator's full gate runs the rest"));
+        assert_eq!(batch_line(&APP_SWARM), None, "the ready proof: no line");
     }
 
     #[test]

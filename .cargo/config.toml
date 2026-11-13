@@ -1,0 +1,4 @@
+# Swarm Core's own swarm commands (mornycorp/swarm-core#96): `cargo xtask claim`, `ready`,
+# `event`, `prwatch`, `capacity`, `gate`, `land`, ... (`cargo xtask` lists them).
+[alias]
+xtask = "run -p xtask --"

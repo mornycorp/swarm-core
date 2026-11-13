@@ -105,6 +105,17 @@ pub trait Hooks {
         false
     }
 
+    /// Whether a claim holds its issue on the tracking branch before it makes anything else
+    /// (mornycorp/swarm-core#96, [`claim::hold`]): its `claim` event is pushed only onto the
+    /// tracking branch it read and found free, so of two claims of one issue at once one holds it
+    /// and the other, its push refused, reads the branch again and is refused naming the holder,
+    /// having made nothing. The PR then goes on the `work` event, and no race is run. The
+    /// default: no, as before (the branch, the PR, the label and the comment, then `claim` and
+    /// `work`, and a race the older PR or the earlier comment wins).
+    fn claim_holds_first(&self) -> bool {
+        false
+    }
+
     /// The project's own cause of a failed gate, read from its `log` before the machine's
     /// ([`gate::classify`]), such as `gpu` (the GPU or the desktop under load) and `python` (no
     /// Python for its oracle tests). The default: none.

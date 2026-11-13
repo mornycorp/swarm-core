@@ -1,0 +1,16 @@
+# `cargo xtask ci`'s test step (mornycorp/swarm-core#96), as the `ci` contract has it
+# (docs/ci-contract.md): the `ci` profile, and its junit file at `target/nextest/ci/junit.xml`, which
+# `gate` and `ready` keep beside their logs.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The gate's test step: run every test, so one failure doesn't hide the others, and name the
+# failures again at the end for `gate --rerun-failed` to read.
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "fail"
+
+[profile.ci.junit]
+path = "junit.xml"
