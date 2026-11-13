@@ -10,7 +10,7 @@ use eframe::egui;
 
 use {{crate_prefix_ident}}automation::control::{self, ControlArgs};
 use {{crate_prefix_ident}}engine::{AppInfo, Session, clip};
-use {{crate_prefix_ident}}ui::{Shell, Wake, views::views};
+use {{crate_prefix_ident}}ui::{Shell, Wake, theme, views::views};
 
 use crate::ui_state;
 
@@ -113,6 +113,8 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     };
     let ui_session = Arc::clone(&session);
     let create: eframe::AppCreator<'_> = Box::new(move |cc| {
+        // The window is drawn in the theme's colours: the palette the swarm's tools share.
+        theme::apply(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let wake: Wake = Arc::new(move || ctx.request_repaint());
         // A `ui.set` from the socket repaints the window, so what an agent sets shows at once.

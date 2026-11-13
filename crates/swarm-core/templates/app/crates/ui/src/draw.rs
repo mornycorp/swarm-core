@@ -189,12 +189,14 @@ fn swatches(shown: &Shown, theme: &Theme, ui: &mut Ui) {
     }
 }
 
-/// A square of the swatch's colour in the window's look, and under it a range entry's number, on
-/// the entry made a background for text, or a token's value.
+/// A square of the swatch's colour in the window's look, edged in a range entry's border, and under
+/// it the entry's number, on the entry made a background for text, or a token's value.
 fn swatch(swatch: &Swatch, theme: &Theme, ui: &mut Ui) {
     ui.vertical(|ui| {
         let (square, _) = ui.allocate_exact_size(egui::Vec2::splat(SWATCH), egui::Sense::hover());
-        ui.painter().rect_filled(square, 0.0, theme.parse(swatch.colour.of(theme.look)));
+        let fill = theme.parse(swatch.colour.of(theme.look));
+        let edge = swatch.border.as_ref().map_or(egui::Stroke::NONE, |border| egui::Stroke::new(1.0, theme.parse(border.of(theme.look))));
+        ui.painter().rect(square, 0.0, fill, edge, egui::StrokeKind::Inside);
         match &swatch.number {
             Some(number) => {
                 let fill = theme.parse(number.behind_text.of(theme.look));

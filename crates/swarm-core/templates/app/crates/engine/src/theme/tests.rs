@@ -1,22 +1,80 @@
-//! The theme's values, measured: contrast (WCAG 2), how far apart a range's entries stay
-//! (CIEDE2000), and the pick's hash, pinned.
+//! The theme's values, measured: that they are the shared palette's, contrast (WCAG 2), how far apart a
+//! range's entries stay (CIEDE2000), and the pick's hash, pinned.
 
 use super::*;
 
 const LOOKS: [Look; 2] = [Look::Dark, Look::Light];
 
-/// The pairs a token is read in, each with the contrast it must reach in both looks: text tokens
-/// on the background, and strong text on the selection's fill.
-const PAIRS: [(Token, Token); 8] = [
-    (TEXT, BACKGROUND),
-    (STRONG, BACKGROUND),
-    (MUTED, BACKGROUND),
-    (ACCENT, BACKGROUND),
-    (SUCCESS, BACKGROUND),
-    (WARNING, BACKGROUND),
-    (ERROR, BACKGROUND),
-    (STRONG, SELECTION),
+// ---- The source: the shared palette's values -------------------------------------------------------
+
+/// The shared palette's tokens (`Tokens::DARK`, `Tokens::LIGHT`):
+/// the token here, the shared palette's name for it, and its dark and light values, copied from there.
+const SHARED_TOKENS: [(&str, &str, u32, u32); 18] = [
+    ("background", "bg", 0x353535, 0xefefef),
+    ("chrome", "chrome", 0x353535, 0xefefef),
+    ("panel", "panel", 0x353535, 0xefefef),
+    ("base", "base", 0x2a2a2a, 0xffffff),
+    ("alt_base", "alt_base", 0x303030, 0xf7f7f7),
+    ("header", "header", 0x3f3f3f, 0xcacaca),
+    ("frame", "frame", 0x424242, 0xababab),
+    ("border", "border", 0x424242, 0xababab),
+    ("text", "text", 0xfcfcfc, 0x000000),
+    ("muted", "text_dim", 0xa6a6a6, 0x666666),
+    ("selected_text", "selected_text", 0xfcfcfc, 0x000000),
+    ("link", "link", 0x4da6ff, 0x1f6fa8),
+    ("control", "control", 0x454545, 0xf7f7f7),
+    ("control_border", "control_border", 0x858585, 0x7a7a7a),
+    ("accent", "accent", 0x007acc, 0x2b78ae),
+    ("selection", "selection", 0x0070bb, 0xc1dcee),
+    ("warning", "warn", 0xff7f1c, 0x965c00),
+    ("error", "error", 0xff8a80, 0xb42318),
 ];
+
+/// The tokens the shared palette has none for: Swarm Core's own.
+const OUR_OWN: [&str; 2] = ["strong", "success"];
+
+/// The shared palette's `series`, dark then light: 7 colours, then the grey for none (`Tokens::issue`).
+const SHARED_SERIES: [[u32; 8]; 2] = [
+    [0x1b9e77, 0xd95f02, 0x7570b3, 0xe7298a, 0x66a61e, 0xe6ab02, 0xa6761d, 0x666666],
+    [0x66c2a5, 0xfc8d62, 0x8da0cb, 0xe78ac3, 0xa6d854, 0xffd92f, 0xe5c494, 0xb3b3b3],
+];
+
+/// The shared palette's marker palette, in its order: ColorBrewer Set1 with the shared orange, then grey.
+const MARKER_ORDER: [u32; 9] = [0xe41a1c, 0x377eb8, 0x4daf4a, 0x984ea3, 0xff7f1c, 0xffff33, 0xa65628, 0xf781bf, 0x999999];
+
+/// **Each colour is the shared palette's**, or Swarm Core's own where it has none: no token, series
+/// entry or marker is nudged away from it. A value that falls short of a minimum is kept and recorded
+/// in [`KEPT_SHORT`] instead.
+#[test]
+fn the_colours_are_the_shared_palettes() {
+    for token in TOKENS {
+        match SHARED_TOKENS.iter().find(|(name, ..)| *name == token.name) {
+            Some(&(_, theirs, dark, light)) => {
+                assert_eq!((token.dark, token.light), (Rgb::hex(dark), Rgb::hex(light)), "{} is the shared palette's {theirs}", token.name)
+            }
+            None => assert!(OUR_OWN.contains(&token.name), "{} is neither the shared palette's nor listed as Swarm Core's", token.name),
+        }
+    }
+    assert_eq!(SHARED_TOKENS.len() + OUR_OWN.len(), TOKENS.len(), "each listed token is a token");
+    for (look, theirs) in LOOKS.into_iter().zip(SHARED_SERIES) {
+        let series = SERIES.of(look);
+        let ours: Vec<Rgb> = series.entries().iter().copied().chain(series.none()).collect();
+        assert_eq!(ours, theirs.map(Rgb::hex), "{look:?}: the series, then none");
+        assert_eq!(MARKERS.of(look).entries(), MARKER_ORDER.map(Rgb::hex), "{look:?}: the markers, in the shared palette's order");
+    }
+}
+
+/// `darker` is the shared palette's (`(f32::from(v) * 0.8) as u8` a channel), on every channel value.
+#[test]
+fn darker_is_the_shared_palettes() {
+    for v in 0..=255u8 {
+        let theirs = (f32::from(v) * 0.8) as u8;
+        assert_eq!(darker(Rgb::new(v, v, v)), Rgb::new(theirs, theirs, theirs), "{v}");
+    }
+    assert_eq!(darker(Rgb::hex(0xFF7F1C)), Rgb::hex(0xCC6516));
+}
+
+// ---- Contrast -----------------------------------------------------------------------------------
 
 #[test]
 fn wcag_contrast_is_measured_as_the_standard_says() {
@@ -27,57 +85,161 @@ fn wcag_contrast_is_measured_as_the_standard_says() {
     assert!((Rgb::hex(0xFF0000).luminance() - 0.2126).abs() < 1e-9);
 }
 
-/// **Every semantic token reaches 4.5:1** where it is read, in both looks; every token is checked.
+/// The text tokens, and the surfaces each is read on (the shared palette's `tests/theme_contrast.rs`
+/// holds the same: text on every background).
+const TEXTS: [Token; 7] = [TEXT, STRONG, MUTED, LINK, SUCCESS, WARNING, ERROR];
+const SURFACES: [Token; 5] = [BACKGROUND, CHROME, PANEL, BASE, ALT_BASE];
+
+/// The other pairs a token is read in, with the contrast each needs: text on a header row, on a
+/// widget and on the selection (4.5:1), and the parts of the interface that carry no text on what
+/// they are drawn on (3:1).
+const PAIRS: [(Token, Token, f64); 7] = [
+    (TEXT, HEADER, TEXT_CONTRAST),
+    (STRONG, HEADER, TEXT_CONTRAST),
+    (TEXT, CONTROL, TEXT_CONTRAST),
+    (SELECTED_TEXT, SELECTION, TEXT_CONTRAST),
+    (CONTROL_BORDER, BACKGROUND, FILL_CONTRAST),
+    (CONTROL_BORDER, PANEL, FILL_CONTRAST),
+    (ACCENT, BACKGROUND, FILL_CONTRAST),
+];
+
+/// Lines with no minimum: decorative, as the shared palette says of them.
+const DECORATIVE: [Token; 2] = [FRAME, BORDER];
+
+/// A value kept although it falls short of a minimum where it is drawn: the shared palette's own, kept so the app looks like them, with the ratio it measures.
+struct Short {
+    /// The token's or range's name, and for a range the entry's index (`none` for its grey).
+    what: &'static str,
+    look: Look,
+    colour: u32,
+    ratio: f64,
+    why: &'static str,
+}
+
+/// Why each of the shared palette's fills is kept short of 3:1 against the background.
+const FILL: &str = "The shared palette's (ColorBrewer's) fill, as the swarm's tools draw it: kept so a series \
+                    or a mark is the same colour here as there. It is told apart from the background by its border \
+                    (darker) and its neighbours, and text on it is made a text background (behind_text), which reaches 4.5:1";
+const PASTEL: &str = "the shared palette's light series is ColorBrewer Set2, a pastel set made to carry black text, \
+                      every entry of it under 3:1 on the light background: kept, as FILL";
+const ACCENT_WHY: &str = "The shared accent blue: kept so the swarm's tools share one. It carries \
+                          nothing alone: the selection (selected_text 5.07:1) and control_border (3.32:1) do";
+
+/// **Every shortfall, with its measured ratio**: the shared palette's values that are under a minimum
+/// here, kept rather than nudged (none is nudged: `the_colours_are_the_shared_palettes`).
+const KEPT_SHORT: [Short; 21] = [
+    Short { what: "accent", look: Look::Dark, colour: 0x007ACC, ratio: 2.72, why: ACCENT_WHY },
+    Short { what: "series 2", look: Look::Dark, colour: 0x7570B3, ratio: 2.76, why: FILL },
+    Short { what: "series 3", look: Look::Dark, colour: 0xE7298A, ratio: 2.97, why: FILL },
+    Short { what: "series none", look: Look::Dark, colour: 0x666666, ratio: 2.14, why: FILL },
+    Short { what: "series 0", look: Look::Light, colour: 0x66C2A5, ratio: 1.86, why: PASTEL },
+    Short { what: "series 1", look: Look::Light, colour: 0xFC8D62, ratio: 2.00, why: PASTEL },
+    Short { what: "series 2", look: Look::Light, colour: 0x8DA0CB, ratio: 2.28, why: PASTEL },
+    Short { what: "series 3", look: Look::Light, colour: 0xE78AC3, ratio: 2.07, why: PASTEL },
+    Short { what: "series 4", look: Look::Light, colour: 0xA6D854, ratio: 1.45, why: PASTEL },
+    Short { what: "series 5", look: Look::Light, colour: 0xFFD92F, ratio: 1.20, why: PASTEL },
+    Short { what: "series 6", look: Look::Light, colour: 0xE5C494, ratio: 1.44, why: PASTEL },
+    Short { what: "series none", look: Look::Light, colour: 0xB3B3B3, ratio: 1.82, why: PASTEL },
+    Short { what: "markers 0", look: Look::Dark, colour: 0xE41A1C, ratio: 2.61, why: FILL },
+    Short { what: "markers 1", look: Look::Dark, colour: 0x377EB8, ratio: 2.83, why: FILL },
+    Short { what: "markers 3", look: Look::Dark, colour: 0x984EA3, ratio: 2.31, why: FILL },
+    Short { what: "markers 6", look: Look::Dark, colour: 0xA65628, ratio: 2.33, why: FILL },
+    Short { what: "markers 2", look: Look::Light, colour: 0x4DAF4A, ratio: 2.42, why: FILL },
+    Short { what: "markers 4", look: Look::Light, colour: 0xFF7F1C, ratio: 2.20, why: FILL },
+    Short { what: "markers 5", look: Look::Light, colour: 0xFFFF33, ratio: 1.07, why: FILL },
+    Short { what: "markers 7", look: Look::Light, colour: 0xF781BF, ratio: 2.06, why: FILL },
+    Short { what: "markers 8", look: Look::Light, colour: 0x999999, ratio: 2.48, why: FILL },
+];
+
+/// Measures `fg` on `bg` against `minimum`: a shortfall must be in [`KEPT_SHORT`] under `what`, with
+/// the ratio it measures (to the hundredth). Pushes what it found to `seen`.
+fn measure(what: &str, look: Look, fg: Rgb, bg: Rgb, minimum: f64, seen: &mut Vec<String>) {
+    let ratio = fg.contrast(bg);
+    if ratio >= minimum {
+        return;
+    }
+    let kept = KEPT_SHORT.iter().find(|s| s.what == what && s.look == look);
+    let Some(kept) = kept else { panic!("{what} ({look:?}) {} is {ratio:.2}:1, under {minimum}:1, and not in KEPT_SHORT", fg.to_hex()) };
+    assert_eq!(Rgb::hex(kept.colour), fg, "{what} ({look:?}): KEPT_SHORT records another colour");
+    assert!((kept.ratio - ratio).abs() < 0.005, "{what} ({look:?}): measured {ratio:.4}:1, recorded {}:1", kept.ratio);
+    assert!(!kept.why.is_empty());
+    seen.push(format!("{what} {look:?}"));
+}
+
+/// **Every token reaches its minimum** where it is read, in both looks (4.5:1 for text, 3:1 for a
+/// part of the interface), or is a recorded shortfall; every token is checked or said to be
+/// decorative.
 #[test]
-fn every_token_reaches_text_contrast_where_it_is_read() {
-    let mut report = Vec::new();
-    for (fg, bg) in PAIRS {
-        for look in LOOKS {
-            let ratio = fg.of(look).contrast(bg.of(look));
-            report.push(format!("{} on {} ({look:?}): {ratio:.2}", fg.name, bg.name));
-            assert!(ratio >= TEXT_CONTRAST, "{report:#?}");
+fn every_token_reaches_its_contrast_where_it_is_read() {
+    let mut seen = Vec::new();
+    for look in LOOKS {
+        for fg in TEXTS {
+            for bg in SURFACES {
+                measure(fg.name, look, fg.of(look), bg.of(look), TEXT_CONTRAST, &mut seen);
+            }
+        }
+        for (fg, bg, minimum) in PAIRS {
+            measure(fg.name, look, fg.of(look), bg.of(look), minimum, &mut seen);
         }
     }
-    let checked: Vec<&str> = PAIRS.iter().flat_map(|(fg, bg)| [fg.name, bg.name]).collect();
-    assert!(TOKENS.iter().all(|t| checked.contains(&t.name)), "each token is in a pair");
+    let checked: Vec<&str> =
+        TEXTS.iter().chain(&SURFACES).chain(&DECORATIVE).map(|t| t.name).chain(PAIRS.iter().flat_map(|(fg, bg, _)| [fg.name, bg.name])).collect();
+    assert!(TOKENS.iter().all(|t| checked.contains(&t.name)), "each token is checked, or decorative");
+    assert_eq!(seen, ["accent Dark"], "the token shortfalls kept");
     let mut names: Vec<&str> = TOKENS.iter().map(|t| t.name).collect();
     names.sort_unstable();
     names.dedup();
     assert_eq!(names.len(), TOKENS.len(), "token names are unique");
 }
 
-/// **Every range entry reaches 3:1** against the background as a fill, in both looks.
+/// A range's colours in `look` with what each is called in [`KEPT_SHORT`]: its entries by index,
+/// then its none.
+fn named(range: &Range, look: Look) -> Vec<(String, Rgb)> {
+    let shades = range.of(look);
+    let entries = shades.entries().iter().enumerate().map(|(i, &c)| (format!("{} {i}", range.name), c));
+    entries.chain(shades.none().map(|c| (format!("{} none", range.name), c))).collect()
+}
+
+/// **Every range entry reaches 3:1** against the background as a fill, in both looks, or is one of
+/// The shared palette's kept short and recorded; Swarm Core's own ranges have none short. Every
+/// record is used, so none outlives its colour.
 #[test]
-fn every_range_entry_reaches_fill_contrast() {
+fn every_range_entry_reaches_fill_contrast_or_is_recorded() {
+    let mut seen = Vec::new();
     for range in RANGES {
         for look in LOOKS {
-            for (i, entry) in range.of(look).entries().iter().enumerate() {
-                let ratio = entry.contrast(BACKGROUND.of(look));
-                assert!(ratio >= FILL_CONTRAST, "{} {look:?} entry {i} {}: {ratio:.2}:1", range.name, entry.to_hex());
+            for (what, colour) in named(&range, look) {
+                measure(&what, look, colour, BACKGROUND.of(look), FILL_CONTRAST, &mut seen);
             }
         }
     }
+    let kept_ranges: Vec<String> = KEPT_SHORT.iter().filter(|s| s.what != "accent").map(|s| format!("{} {:?}", s.what, s.look)).collect();
+    seen.sort();
+    let mut want = kept_ranges;
+    want.sort();
+    assert_eq!(seen, want, "every record in KEPT_SHORT is a shortfall that is there");
+    assert!(seen.iter().all(|s| s.starts_with(SERIES.name) || s.starts_with(MARKERS.name)), "only the shared palette's are kept short: {seen:?}");
 }
 
-/// **Text on a range entry is readable**: made a text background, every entry takes strong text at
-/// 4.5:1, with the lightness rule kept (at most 0.5 in dark, at least 0.5 in light) and its hue.
+/// **Text on a range entry is readable**: made a text background, every entry (and none) takes strong
+/// text at 4.5:1, with the lightness rule kept (at most 0.5 in dark, at least 0.5 in light) and its hue.
 #[test]
 fn strong_text_on_every_entry_made_a_text_background_reaches_text_contrast() {
     for range in RANGES {
         for look in LOOKS {
-            for (i, &entry) in range.of(look).entries().iter().enumerate() {
+            for (what, entry) in named(&range, look) {
                 let behind = behind_text(entry, look);
                 let ratio = behind.contrast(STRONG.of(look));
-                assert!(ratio >= TEXT_CONTRAST, "{} {look:?} entry {i} {} behind text {}: {ratio:.2}:1", range.name, entry.to_hex(), behind.to_hex());
+                assert!(ratio >= TEXT_CONTRAST, "{what} {look:?} {} behind text {}: {ratio:.2}:1", entry.to_hex(), behind.to_hex());
                 let (hue, _, lightness) = to_hsl(behind);
                 let in_rule = match look {
                     Look::Dark => lightness <= 0.5 + 1e-9,
                     Look::Light => lightness >= 0.5 - 1e-9,
                 };
-                assert!(in_rule, "{} {look:?} entry {i}: lightness {lightness}", range.name);
+                assert!(in_rule, "{what} {look:?}: lightness {lightness}");
                 let (was, _, _) = to_hsl(entry);
                 let turned = (hue - was).abs().min(1.0 - (hue - was).abs());
-                assert!(turned < 0.02, "{} {look:?} entry {i}: hue {was} became {hue}", range.name);
+                assert!(turned < 0.02, "{what} {look:?}: hue {was} became {hue}");
             }
         }
     }
@@ -90,13 +252,15 @@ fn strong_text_on_every_entry_made_a_text_background_reaches_text_contrast() {
 fn hsl_round_trips() {
     for range in RANGES {
         for look in LOOKS {
-            for &entry in range.of(look).entries() {
+            for (_, entry) in named(&range, look) {
                 let (h, s, l) = to_hsl(entry);
                 assert_eq!(from_hsl(h, s, l), entry);
             }
         }
     }
 }
+
+// ---- How far apart ------------------------------------------------------------------------------
 
 /// CIELAB (D65) of an sRGB colour.
 fn lab(c: Rgb) -> (f64, f64, f64) {
@@ -187,30 +351,42 @@ fn the_ranges_stay_distinguishable() {
 }
 
 #[test]
-fn the_ranges_are_8_16_and_32_and_16_is_the_start_of_32() {
+fn the_ranges_are_the_shared_palettes_two_then_swarm_cores_16_and_32() {
     for look in LOOKS {
-        assert_eq!([RANGE_8.of(look).len(), RANGE_16.of(look).len(), RANGE_32.of(look).len()], [8, 16, 32]);
+        let sizes = RANGES.map(|r| r.of(look).len());
+        assert_eq!(sizes, [7, 9, 16, 32]);
         assert_eq!(RANGE_16.of(look).entries(), &RANGE_32.of(look).entries()[..16]);
+        let series = SERIES.of(look);
+        let none = series.none().unwrap();
+        assert!(!series.entries().contains(&none), "{look:?}: none is no entry, so at and pick never give it");
+        assert_eq!([MARKERS, RANGE_16, RANGE_32].map(|r| r.of(look).none()), [None; 3], "{look:?}: only the series has a none");
     }
-    assert_eq!(RANGE_8.dark.entries().first(), Some(&Rgb::hex(0xE41A1C)), "Set1 as published");
+    assert_eq!(MARKERS.dark, MARKERS.light, "the markers are the same in both looks");
+    assert_eq!(MARKERS.dark.entries().first(), Some(&Rgb::hex(0xE41A1C)), "Set1, in the shared palette's order");
+    for range in RANGES {
+        let own = range.source.starts_with("Swarm Core's own");
+        assert_eq!(own, range.name == RANGE_16.name || range.name == RANGE_32.name, "{}: says whose it is", range.name);
+    }
 }
 
 /// **The pick is FNV-1a**, fixed: the known vectors, and known ids pinned to known indexes, so a
-/// change to the hash (or to how an id is written) fails here, not on someone's screen.
+/// change to the hash (or to how an id is written) fails here, not on someone's screen. The 16 and
+/// 32 ranges' pins are unchanged.
 #[test]
 fn the_pick_is_fnv1a_and_its_indexes_are_pinned() {
     assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325);
     assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c);
     assert_eq!(fnv1a("app.info"), 0xd2d7_7de3_5f3a_1e56);
-    let pinned: [(&str, [usize; 3]); 8] = [
-        ("", [5, 5, 5]),
-        ("a", [4, 12, 12]),
-        ("7", [6, 6, 22]),
-        ("42", [3, 3, 3]),
-        ("app.info", [6, 6, 22]),
-        ("frame.render", [0, 8, 24]),
-        ("Camera", [6, 14, 14]),
-        ("node/17", [6, 6, 6]),
+    // series (7), markers (9), range16, range32.
+    let pinned: [(&str, [usize; 4]); 8] = [
+        ("", [2, 5, 5, 5]),
+        ("a", [5, 7, 12, 12]),
+        ("7", [2, 2, 6, 22]),
+        ("42", [5, 1, 3, 3]),
+        ("app.info", [5, 8, 6, 22]),
+        ("frame.render", [2, 4, 8, 24]),
+        ("Camera", [2, 6, 14, 14]),
+        ("node/17", [3, 3, 6, 6]),
     ];
     for (id, indexes) in pinned {
         let got = RANGES.map(|r| r.dark.index_of(id));
@@ -226,6 +402,7 @@ fn the_pick_is_fnv1a_and_its_indexes_are_pinned() {
     assert_eq!(RANGE_32.light.index_of(42i32), 3);
 }
 
+/// `at(n)` takes numbers in order and wraps: the series' is the shared palette's `n % 7`.
 #[test]
 fn at_takes_numbers_in_order_and_wraps() {
     for range in RANGES {
@@ -238,8 +415,11 @@ fn at_takes_numbers_in_order_and_wraps() {
             assert_eq!(shades.at(u64::MAX), shades.at(u64::MAX % shades.len() as u64));
         }
     }
-    assert_eq!(Shades { entries: &[] }.at(3), NO_ENTRY, "an empty range gives grey, not a panic");
-    assert_eq!(Shades { entries: &[] }.index_of("x"), 0);
+    for n in 0..30u64 {
+        assert_eq!(SERIES.dark.at(n), Rgb::hex(SHARED_SERIES[0][(n % 7) as usize]), "issue {n}");
+    }
+    assert_eq!(Shades { entries: &[], none: None }.at(3), NO_ENTRY, "an empty range gives grey, not a panic");
+    assert_eq!(Shades { entries: &[], none: None }.index_of("x"), 0);
 }
 
 #[test]
@@ -251,7 +431,8 @@ fn a_colour_is_written_and_read_as_hex() {
     }
 }
 
-/// `ui.theme`'s answer is the palette: each token and each range entry, as `#RRGGBB`, in order.
+/// `ui.theme`'s answer is the palette: each token and each range entry (and none), as `#RRGGBB`, in
+/// order, each entry made a text background and given its border.
 #[test]
 fn the_data_is_the_palette() {
     let data = data();
@@ -259,14 +440,22 @@ fn the_data_is_the_palette() {
     let want: Vec<(&str, String, String)> = TOKENS.iter().map(|t| (t.name, t.dark.to_hex(), t.light.to_hex())).collect();
     assert_eq!(tokens, want);
     assert!(data.tokens.iter().all(|t| !t.meaning.is_empty()));
-    assert_eq!(data.ranges.iter().map(|r| (r.name.as_str(), r.size)).collect::<Vec<_>>(), [("range8", 8), ("range16", 16), ("range32", 32)]);
+    let sizes: Vec<(&str, u32)> = data.ranges.iter().map(|r| (r.name.as_str(), r.size)).collect();
+    assert_eq!(sizes, [("series", 7), ("markers", 9), ("range16", 16), ("range32", 32)]);
     for (got, range) in data.ranges.iter().zip(RANGES) {
         assert!(!got.source.is_empty() && !got.meaning.is_empty());
-        for (i, entry) in got.entries.iter().enumerate() {
+        let none = range.dark.none().zip(range.light.none());
+        assert_eq!(got.none.as_ref().map(|n| (n.index, Rgb::parse(&n.dark), Rgb::parse(&n.light))), none.map(|(d, l)| (got.size, Some(d), Some(l))));
+        for (i, entry) in got.entries.iter().chain(&got.none).enumerate() {
             assert_eq!(entry.index as usize, i);
+            let (dark, light) = (Rgb::parse(&entry.dark).unwrap(), Rgb::parse(&entry.light).unwrap());
+            assert_eq!(Rgb::parse(&entry.behind_text_dark), Some(behind_text(dark, Look::Dark)));
+            assert_eq!(Rgb::parse(&entry.behind_text_light), Some(behind_text(light, Look::Light)));
+            assert_eq!((Rgb::parse(&entry.border_dark), Rgb::parse(&entry.border_light)), (Some(darker(dark)), Some(darker(light))));
+        }
+        for (i, entry) in got.entries.iter().enumerate() {
             assert_eq!(Rgb::parse(&entry.dark), range.dark.entries().get(i).copied());
             assert_eq!(Rgb::parse(&entry.light), range.light.entries().get(i).copied());
-            assert_eq!(Rgb::parse(&entry.behind_text_light), range.light.entries().get(i).map(|&c| behind_text(c, Look::Light)));
         }
     }
 }

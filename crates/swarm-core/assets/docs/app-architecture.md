@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -458,11 +458,21 @@ words of the app's data (a command's title, a result's values) come from the reg
 commands as they are, and an id the toolkit keeps state under is a typed salt (an enum's
 variant), never a string.
 
+**The skeleton's colours are the palette the swarm's tools share**, so an app built on Swarm
+Core looks like the swarm's other tools: its tokens are that palette's chrome (a dark look, and
+Qt Fusion's light palette as the light one), each under a name for what it means. An app may
+change them; the skeleton starts from the swarm's.
+
 **Categorical ranges** are the theme's colours for **identifiers**, where a colour tells things
 apart rather than saying what they mean: the rows of a timeline, the bars of a scrubber, a legend's
-entries, badges. The theme has ranges of a few sizes (the skeleton's: 8, 16 and 32 colours), each
-from a published palette chosen so its entries stay far apart (not an even cycle of hues), with a
-dark and a light version. **An identifier's colour comes from the range's `pick`**, a fixed and
+entries, badges. Each is from a published palette chosen so its entries stay far apart (not an even
+cycle of hues), with a dark and a light version. The skeleton's first two are the shared palette's:
+the **series** (ColorBrewer Dark2 dark, Set2 light: a number takes entry `n % 7`, and something
+with no number the series' grey, `none`) and the **markers** (ColorBrewer Set1 with the shared
+orange `#FF7F1C`, then grey, the same in both looks). Its **16 and 32 ranges are Swarm Core's
+own**, beyond those, for many identifiers side by side. A filled entry (a bar, a mark) is edged in
+its darker border (each channel × 0.8).
+**An identifier's colour comes from the range's `pick`**, a fixed and
 documented hash of the id (the skeleton's: FNV-1a over the id's text), never a colour made where it
 is drawn and never std's `DefaultHasher`, whose output can change: the same id gets the same colour
 on every run, surface and machine, and tests pin known ids to known entries. A number in order (a
@@ -472,8 +482,11 @@ it reads).
 
 The colours have their **contrast measured** (WCAG 2), in each look: a token read as text reaches
 4.5:1 against what it is drawn on, a range entry 3:1 against the background (a part of the
-interface), and text on an entry made a text background 4.5:1. A colour that falls short is nudged
-in the theme, and the theme says so beside it. **The theme is data a command returns**
+interface), and text on an entry made a text background 4.5:1. **A shortfall is never nudged
+silently**: a value the app takes from elsewhere (the skeleton's from the shared palette) that falls
+short is either kept, and the theme's tests record it with its measured ratio and why, or nudged and
+listed as a divergence from its source; a colour of the app's own that falls short is nudged, and the
+theme says so beside it. **The theme is data a command returns**
 (`ui.theme`: each token's name, meaning and value per look, each range's entries), so every
 surface can ask it, and a swatch view draws that answer like any other view.
 
@@ -492,8 +505,9 @@ automation and apps; `ui-colours` and `ui-strings`: a colour made, or a string l
 the UI crate's drawing code outside the theme and catalog modules, each file held to an allow-list
 that only ratchets down), `layers` (a toolkit only in the UI layer and the apps above it),
 `conformance` (`ui.inspect`, `ui.set` and `ui.theme` behave the same on every surface), the views'
-tests (what each drew equals its command's answer), the theme's tests (each token and range entry's
-contrast in both looks, the pick's pinned ids) and `review` (logic the UI computes that a lower
+tests (what each drew equals its command's answer), the theme's tests (each value against its
+source, each token and range entry's contrast in both looks with every shortfall kept recorded and
+its ratio, the pick's pinned ids) and `review` (logic the UI computes that a lower
 layer owns; UI state kept outside what `ui.inspect` returns; an identifier coloured other than by
 its range's `pick`; a UI change without its pictures).
 
@@ -590,6 +604,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): the skeleton's colours are the palette the swarm's tools share, so an app looks like them: its chrome tokens (surfaces, text, controls and highlights, states, each under a name for what it means), its series (Dark2 dark, Set2 light, `at(n)` as `n % 7` and a grey for none), its markers (Set1 with `#FF7F1C`, then grey) and its darker border for a filled entry; the 16 and 32 ranges are Swarm Core's own beyond them; a value taken from elsewhere that falls short of a contrast minimum is kept and recorded with its measured ratio, or nudged and listed as a divergence, never nudged silently (mornycorp/swarm-core#100). |
 | 2026-11-13 | minor | State on disk: the skeleton's one writer also makes a private file and one that is never written over what is there, so the control socket's token goes through it and no file write is allow-listed; a backend's `Failed` (a deadline, a refusing disk) reaches a caller as `unavailable`, not `internal` (swarm-core#94) |
 | 2026-11-13 | minor | Layers: only `backends` touches the outside. The process module and the one atomic file writer live there (the skeleton's `crates/backends`), so a backend can start a program or write a file through the same two modules; the engine keeps what is stored and when, and turns a backend's error into the command's. The layer is always there; a further backend is the app's choice. The `file-writes` scan reads every crate outside the layer (swarm-core#91) |
 | 2026-11-13 | minor | One dispatch: MCP runs on a session of its own or attached to a running app's control socket (`{{cli}} mcp --attach <port> [--token-file <path>]`), one MCP adapter over a seam of two calls, with the same answers and the same consent rule (a command whose effects need consent is `consent_required` even on a socket started with `--yes`); The JSON-lines frame: a spec in `commands` carries its effects, and a client counts any effect that isn't `false` as needing consent; the check adds the surface test that compares `mcp --attach` with `mcp` (swarm-core#89) |

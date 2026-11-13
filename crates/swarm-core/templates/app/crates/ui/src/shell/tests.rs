@@ -241,27 +241,34 @@ fn drawn(shell: &mut Shell) -> Vec<String> {
     drawn_in(shell, egui::Theme::Dark).texts
 }
 
-/// What a frame drew: its texts, and the fills of its rectangles, in the order they are painted.
+/// What a frame drew: its texts, and the fills and edges of its rectangles, in the order they are
+/// painted.
 #[derive(Debug, Default)]
 struct Drawn {
     texts: Vec<String>,
     fills: Vec<egui::Color32>,
+    edges: Vec<egui::Color32>,
 }
 
 impl Drawn {
     fn walk(&mut self, shape: &egui::Shape) {
         match shape {
             egui::Shape::Text(text) => self.texts.push(text.galley.text().to_owned()),
-            egui::Shape::Rect(rect) => self.fills.push(rect.fill),
+            egui::Shape::Rect(rect) => {
+                self.fills.push(rect.fill);
+                self.edges.push(rect.stroke.color);
+            }
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| self.walk(s)),
             _ => {}
         }
     }
 }
 
-/// What a frame of `shell` draws in egui's `look` (dark or light). Two frames, as [`drawn`].
+/// What a frame of `shell` draws in egui's `look` (dark or light), styled in the theme as the window
+/// is. Two frames, as [`drawn`].
 fn drawn_in(shell: &mut Shell, look: egui::Theme) -> Drawn {
     let ctx = egui::Context::default();
+    crate::theme::apply(&ctx);
     ctx.set_theme(look);
     let mut out = Drawn::default();
     for _ in 0..2 {
@@ -292,8 +299,9 @@ fn the_view_draws_app_infos_result() {
 
 /// **The swatch view draws `ui.theme`'s answer**, in each look: each token's name, meaning and value
 /// in that order, with a square of the value; each range's name, size, meaning and source, then its
-/// entries' indexes in order, each entry a square of its colour and its index on the entry made a
-/// text background. Every colour is the answer's: the view names none.
+/// entries' indexes in order (and `none` after them, where the range has one), each entry a square
+/// of its colour edged in its border and its index on the entry made a text background. Every colour
+/// is the answer's: the view names none.
 #[test]
 fn the_swatch_view_draws_ui_themes_answer() {
     let session = Arc::new(Session::new(app()).unwrap());
@@ -305,6 +313,7 @@ fn the_swatch_view_draws_ui_themes_answer() {
         let frame = drawn_in(&mut shell, egui_look);
         let theme = Theme::in_look(look);
         let filled = |hex: &str| Rgb::parse(hex).is_some() && frame.fills.contains(&theme.parse(hex));
+        let edged = |hex: &str| Rgb::parse(hex).is_some() && frame.edges.contains(&theme.parse(hex));
         let from = |first: &str| frame.texts.iter().position(|t| t == first).map(|at| frame.texts[at..].to_vec()).unwrap_or_default();
         for token in &answer.tokens {
             let value = if look == Look::Dark { &token.dark } else { &token.light };
@@ -314,10 +323,15 @@ fn the_swatch_view_draws_ui_themes_answer() {
         for range in &answer.ranges {
             let mut want = vec![range.name.clone(), catalog::range_size(range.size), range.meaning.clone(), catalog::source(&range.source)];
             want.extend(range.entries.iter().map(|e| e.index.to_string()));
+            want.extend(range.none.iter().map(|_| catalog::NONE.to_owned()));
             assert!(from(&range.name).starts_with(&want), "{look:?} {}: {:?}", range.name, frame.texts);
-            for entry in &range.entries {
-                let (colour, behind) = if look == Look::Dark { (&entry.dark, &entry.behind_text_dark) } else { (&entry.light, &entry.behind_text_light) };
+            for entry in range.entries.iter().chain(&range.none) {
+                let (colour, behind, border) = match look {
+                    Look::Dark => (&entry.dark, &entry.behind_text_dark, &entry.border_dark),
+                    Look::Light => (&entry.light, &entry.behind_text_light, &entry.border_light),
+                };
                 assert!(filled(colour) && filled(behind), "{look:?} {} entry {}: {colour} and {behind}", range.name, entry.index);
+                assert!(edged(border), "{look:?} {} entry {}: edged in {border}", range.name, entry.index);
             }
         }
     }

@@ -24,7 +24,8 @@
 //! - **Colours from the theme, words from the catalog** ([`theme`], [`catalog`]): drawing code makes
 //!   no colour and writes no word, so a theme or a rewording changes one file. An identifier's
 //!   colour (a row, a bar, a badge) is a categorical range's pick (`theme.range16.pick(id)`), the
-//!   same on every run; the swatch view (`ui.theme`, View › Theme) shows every token and range.
+//!   same on every run; the swatch view (`ui.theme`, View › Theme) shows every token and range. The
+//!   colours are the palette the swarm's tools share, and `theme::apply` styles egui in them.
 //! - **It never writes a file and never starts a program.** A button that does something calls a
 //!   command whose effects say so, and the user's consent (a checkbox) is what lets it run.
 //!   `scan` holds the crate to this and to the theme and the catalog (`skeleton::UI_SCANS`).
