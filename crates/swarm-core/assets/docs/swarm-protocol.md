@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-13 · **Change:** minor (what proves a change: the ready proof or the batch proof, a project setting, sc#53) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-13 · **Change:** minor (corrections: a link, the earlier tracker's issue numbers, any number of swarms) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -13,7 +13,9 @@ repo's `cargo xtask`. This repo's own parts (what each machine needs, its capabi
 kinds, what its CI runs) are in [swarm.md](swarm.md), and the rules every agent follows in
 [`AGENTS.md`](../AGENTS.md).
 
-Issue numbers name their project: `sc#n` is mornycorp/swarm-core's issue n. This repo's own issues are
+Issue numbers name their project: `sc#n` is mornycorp/swarm-core's issue n; a number up to 20
+(`sc#3` to `sc#20`) is its earlier tracker's, from before 2026-10-30, and names no GitHub issue.
+This repo's own issues are
 [{{github.repo}}](https://{{github.host}}/{{github.repo}}/issues).
 
 ## Roles
@@ -78,9 +80,9 @@ The owner's directions and the swarms' lessons that hold for every agent, coordi
 [development.md › How many builds at once](development.md#how-many-builds-at-once)): at most
 **three workers per swarm** on the owner's desktop (32 GB; it runs two builds well and fails at
 four), plus other machines' own. The coordinator starts a new worker only while
-`cargo xtask capacity` shows room for another build, its own gate counted. The two swarms share
-that desktop: `capacity` counts every `cargo` and `rustc` on the machine, either swarm's, so it
-arbitrates between them.
+`cargo xtask capacity` shows room for another build, its own gate counted. Swarms that
+share a machine share its room: `capacity` counts every `cargo` and `rustc` on the machine,
+any swarm's, so it arbitrates between them.
 
 Each worker is a fresh agent session in its **own working copy** (an extra clone, or a
 `git worktree` where the project keeps them, such as `git worktree add ../{{project}}-<name> main`;
@@ -234,7 +236,7 @@ request. Always pass `--repo {{github.repo}}` to gh.
      issue is held while it runs (below). It prints the branch and PR, and switches the worktree
      it ran in to the branch when that worktree is clean and isn't the primary checkout (`--no-switch` to stay; otherwise it says how). `--slug` names the branch; run it again to
      finish a claim that failed half way. It notes the open needs of the issue it claims
-     ([Watching your PRs](#watching-your-mrs)).
+     ([Watching your PRs](#watching-your-prs)).
    - **Then the periodic full gate** (owner, 2026-10-22): on a machine with the
      `full-gate` capability ([swarm.md › Capabilities](swarm.md#capabilities)), once it holds the
      issue, it runs the full gate of `main` when it is due (`main` moved since the last
@@ -371,7 +373,7 @@ request. Always pass `--repo {{github.repo}}` to gh.
    issue, and the coordinator removes its label (`cargo xtask tidy <n>`). From your first
    submit, watch your PRs with `cargo xtask prwatch --agent <id>` (`--once` on every wake) and act
    at once: a merged base means rebasing what is stacked on it
-   ([Watching your PRs](#watching-your-mrs)).
+   ([Watching your PRs](#watching-your-prs)).
 6. **Give up cleanly.** Comment what you learned, remove `status::in-progress`, close the draft
    PR. A claim with no activity for 24 hours (no events on the issue, no claim comment, no new
    commits) may be taken over (step 3).
@@ -580,7 +582,7 @@ worktree of its own, where that speeds it up on its machine (owner, 2026-10-18).
   about one per 8 free cores (a running build holds 8) and 5 GB of free memory, at most 3, and
   none with under 20 GB of disk free or a figure it couldn't read; each number is printed with
   its basis. A machine unlike the owner's desktop sets its own 8 and 5 with
-  `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` (whole numbers, read by both swarms): on
+  `SWARM_CORES_PER_BUILD` and `SWARM_GB_PER_BUILD` (whole numbers, read by every swarm): on
   2026-10-30 a 12-core Mac took one build by the 8, and a gate waited 35 minutes behind a worker
   that was only editing between builds. The 5 GB is measured ([development.md › How many builds at once](development.md#how-many-builds-at-once)): on the
   owner's 32 GB desktop, two gates at once passed and four filled the memory and failed. It
@@ -928,7 +930,7 @@ On each finished pull request:
    or `session.stop` (or naming the logger itself), `--reason duplicate` anywhere but `release` or
    `session.stop`, `--model` or `--effort` anywhere but `session.start` or `sub.start`, an
    `--effort` other than `low`, `medium`, `high`, `xhigh` or `max`, ids that aren't letters, digits, `-`, `_`, `.`, and a flag given twice.
-9. **Keep the two swarms in step** (owner, 2026-10-18; Swarm Core): the swarms
+9. **Keep the swarms in step** (owner, 2026-10-18; Swarm Core): the swarms
    that share Swarm Core write one tracking format and share one process.
    - **What Swarm Core holds changes there once**: its commands, the tracking
      format (`docs/tracking-format.md`, the contract), this protocol and the other pinned assets
@@ -1266,7 +1268,7 @@ swarm.md says which):
 
 ## The periodic full gate
 
-The owner's direction, 2026-10-22, for both swarms: **unload the
+The owner's direction, 2026-10-22, for every swarm: **unload the
 coordinator.** It merges after the [smoke](#the-coordinators-loop) (step 3), and the whole
 `cargo xtask ci` moves to a periodic full gate of `main`, run by whichever agent with the
 [`full-gate` capability](swarm.md#capabilities) is about to claim a task when `main` has gone
@@ -1434,6 +1436,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Corrections: the two links to Watching your PRs resolve; `sc#3` to `sc#20` are the earlier tracker's numbers; "both swarms" reads as any number of them |
 | 2026-11-13 | minor | What proves a change (new): a project's `Project::proof`. The ready proof (each PR's `ready` runs everything; the coordinator smokes; what every swarm ran until now) or the batch proof (`ready` runs without the project's `ready_env` tests; the coordinator's gate of a stack that needs it is the full gate, and a landed one verifies `main`). Starting a worker, Picking work › Finish, the coordinator's step 3 and the periodic full gate's passes say what each means (sc#53) |
 | 2026-11-13 | minor | The coordinator's loop › land: `land` assumes `main` requires no up-to-date branches, as `docs/new-swarm.md` sets it up; a PR stacked on one the server rebased then merges as gated (sc#38) |
 | 2026-11-12 | minor | The gate daemon: a bisection's last suspect is gated alone before it is sent back, and nobody is when it passes too; the off switch is read before each gate; `--retry <pr>` forgets what it kept of one PR; a second daemon in a worktree is refused; GitHub's conflict flag is only where to look, and a conflict `stack` resolves is gated; `main` failing on the gating machine files a `main-red` issue; a PR it can't put back to draft is held; three gates in a row that don't run set the switch (sc#45) |
