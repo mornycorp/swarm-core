@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use {{crate_prefix_ident}}automation::attach::{self, AttachArgs, Attached};
 use {{crate_prefix_ident}}automation::control::{self, ControlArgs};
 use {{crate_prefix_ident}}automation::{Options, commands_json, enabled_json, mcp, serve};
 use {{crate_prefix_ident}}engine::{AppInfo, CallOpts, Caller, CommandError, CommandSpec, Session, clip};
@@ -19,13 +20,19 @@ const USAGE: &str = "usage:
   serve --socket [--yes] [--token-file <path>] [--port <n>]
                                  the same frames on a loopback socket (127.0.0.1), until stdin closes
   mcp                            an MCP server on stdin and stdout
+  mcp --attach <port> [--token-file <path>]
+                                 the same MCP server, its commands run on the running app whose
+                                 control socket is on 127.0.0.1:<port> (its window, or `serve --socket`)
   help | version
 
 A command id is <area>.<name> (`commands` lists them). A command with an effect needs --yes.
 The socket needs a token: {{env}}_CONTROL_TOKEN, or --token-file <path> in a directory only you can
 read. A missing file is made there; on Unix it is 0600, and an existing one must be yours and 0600.
 On Windows, where the file gets its directory's permissions, a new token is written at every start
-(an existing file is never trusted): read it after the line below. It prints one JSON line when it listens: {\"listening\": \"127.0.0.1:<port>\", \"token\": ...}.";
+(an existing file is never trusted): read it after the line below. It prints one JSON line when it listens: {\"listening\": \"127.0.0.1:<port>\", \"token\": ...}.
+`mcp --attach` takes that port and the same token ({{env}}_CONTROL_TOKEN, or --token-file naming the
+app's file, which it only reads), and never consents: a command with an effect is consent_required
+on it, as on `mcp`, even when the app's socket has --yes.";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -35,7 +42,7 @@ enum Invocation<'a> {
     Enabled,
     Serve { yes: bool },
     Socket { control: ControlArgs },
-    Mcp,
+    Mcp { attach: Option<AttachArgs> },
     Help,
     Version,
 }
@@ -45,6 +52,9 @@ fn parse(args: &[String]) -> Result<Invocation<'_>, String> {
     let Some((command, rest)) = args.split_first() else { return Ok(Invocation::Help) };
     if command == "serve" {
         return parse_serve(rest);
+    }
+    if command == "mcp" {
+        return parse_mcp(rest);
     }
     let flags: Vec<&str> = rest.iter().map(String::as_str).filter(|a| a.starts_with("--")).collect();
     let words: Vec<&str> = rest.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
@@ -62,10 +72,9 @@ fn parse(args: &[String]) -> Result<Invocation<'_>, String> {
         ("run", [id, params]) => Ok(Invocation::Run { id, params: Some(params), yes }),
         ("commands", []) => Ok(Invocation::Commands { json }),
         ("enabled", []) => Ok(Invocation::Enabled),
-        ("mcp", []) => Ok(Invocation::Mcp),
         ("help" | "--help" | "-h", _) => Ok(Invocation::Help),
         ("version" | "--version", _) => Ok(Invocation::Version),
-        ("run" | "commands" | "enabled" | "mcp", _) => Err(format!("`{command}` was given arguments it doesn't take")),
+        ("run" | "commands" | "enabled", _) => Err(format!("`{command}` was given arguments it doesn't take")),
         (other, _) => Err(format!("no command `{}`", clip(other))),
     }
 }
@@ -82,6 +91,17 @@ fn parse_serve(rest: &[String]) -> Result<Invocation<'static>, String> {
         [] => Ok(Invocation::Serve { yes: false }),
         ["--yes"] => Ok(Invocation::Serve { yes: true }),
         _ => Err("`serve` takes --yes; with --socket it takes --yes, --token-file <path> and --port <n>".to_owned()),
+    }
+}
+
+/// `mcp`: on a session of its own, or with `--attach <port>` on a running app's (the flags are
+/// [`attach::parse`]'s).
+fn parse_mcp(rest: &[String]) -> Result<Invocation<'static>, String> {
+    let words: Vec<&str> = rest.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        [] => Ok(Invocation::Mcp { attach: None }),
+        _ if words.contains(&"--attach") => attach::parse(&words).map(|args| Invocation::Mcp { attach: Some(args) }),
+        _ => Err("`mcp` takes --attach <port> [--token-file <path>], or nothing".to_owned()),
     }
 }
 
@@ -153,7 +173,12 @@ fn execute(invocation: Invocation<'_>, session: &Arc<Session>, input: impl BufRe
         Invocation::Enabled => Ok(writeln!(out, "{}", pretty(&enabled_json(session)?)?)?),
         Invocation::Serve { yes } => Ok(serve::serve(session, input, out, &Options { consent: yes })?),
         Invocation::Socket { control } => serve_socket(session, &control, input, out),
-        Invocation::Mcp => Ok(mcp::serve(session, input, out, &Options::default())?),
+        Invocation::Mcp { attach: None } => Ok(mcp::serve(session, input, out, &Options::default())?),
+        // MCP's client has granted nothing: `Config::new` gives no consent, whatever the app's socket has.
+        Invocation::Mcp { attach: Some(args) } => {
+            let mut attached = Attached::new(attach::Config::new(&args, session.app().clone()));
+            Ok(mcp::serve_on(&mut attached, input, out)?)
+        }
         Invocation::Help => Ok(writeln!(out, "{USAGE}")?),
         Invocation::Version => Ok(writeln!(out, "{} {}", session.app().name, session.app().version)?),
     }
@@ -305,6 +330,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mcp_attach_needs_a_token_and_answers_a_closed_port_with_how_to_start_the_app() {
+        if std::env::var_os({{crate_prefix_ident}}automation::token::ENV).is_some() {
+            return;
+        }
+        let (code, out, err) = cli(&["mcp", "--attach", "4000"], "");
+        assert_eq!((code, out.as_str()), (2, ""));
+        assert!(err.contains("--token-file") && err.contains("usage:"), "{err}");
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port().to_string();
+        let dir = {{crate_prefix_ident}}testkit::temp_dir("cli-mcp-attach").unwrap();
+        let file = dir.join("control.token");
+        std::fs::write(&file, "test-token-not-real-0123456789\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        let call = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"app-info\"}}\n";
+        let (code, out, err) = cli(&["mcp", "--attach", &port, "--token-file", &file.to_string_lossy()], call);
+        assert_eq!((code, err.as_str()), (0, ""), "a closed port is an MCP answer, not a crash");
+        let reply: Value = serde_json::from_str(out.trim()).unwrap();
+        assert_eq!(reply["error"]["data"]["code"], "unavailable", "{reply}");
+        assert!(reply["error"]["data"]["remediation"].as_str().is_some_and(|r| r.contains("--socket")), "{reply}");
+        assert!(!out.contains("not-real"), "the token is never shown: {out}");
+    }
+
     /// An argument the OS gives that isn't Unicode: on Unix a byte that isn't UTF-8, on Windows a lone
     /// surrogate.
     fn not_unicode() -> OsString {
@@ -329,7 +377,9 @@ mod tests {
 
     #[test]
     fn wrong_use_is_exit_code_2_with_the_usage() {
-        for args in [&["run"][..], &["run", "a.b", "{}", "extra"], &["serve", "--json"], &["frobnicate"], &["commands", "x"]] {
+        let mcp_wrong: [&[&str]; 5] =
+            [&["mcp", "x"], &["mcp", "--attach"], &["mcp", "--attach", "0"], &["mcp", "--attach", "x", "--token-file", "t"], &["mcp", "--token-file", "t"]];
+        for args in [&["run"][..], &["run", "a.b", "{}", "extra"], &["serve", "--json"], &["frobnicate"], &["commands", "x"]].into_iter().chain(mcp_wrong) {
             let (code, out, err) = cli(args, "");
             assert_eq!((code, out.as_str()), (2, ""), "{args:?}");
             assert!(err.contains("usage:"), "{args:?}: {err}");

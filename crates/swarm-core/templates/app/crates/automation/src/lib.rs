@@ -6,7 +6,10 @@
 //! - [`serve`]: JSON lines on stdio, the frame of the contract ([`frame`]).
 //! - [`mcp`]: an MCP server (`initialize`, `tools/list`, `tools/call`) whose tools are generated
 //!   from the registry: a tool per command, its `inputSchema` the command's params schema, its name
-//!   by the id rule.
+//!   by the id rule. It answers through a small seam ([`mcp::Backend`]: list the specs, call one)
+//!   with two sides: a session of its own (`{{cli}} mcp`), or ([`attach`]) a running app's session
+//!   over that app's control socket (`{{cli}} mcp --attach <port>`), with the same answers and the
+//!   same consent rule.
 //! - [`socket`]: the loopback control socket, the same frames over TCP on `127.0.0.1` with `auth`
 //!   first ([`token`]: where the token comes from, kept private and compared in constant time). It
 //!   answers through the same function as `serve`, so it is one more adapter, not another dispatch.
@@ -20,6 +23,7 @@
 #![warn(clippy::cognitive_complexity, clippy::too_many_lines)]
 #![cfg_attr(test, allow(clippy::cognitive_complexity, clippy::too_many_lines))]
 
+pub mod attach;
 pub mod control;
 pub mod frame;
 pub mod limits;

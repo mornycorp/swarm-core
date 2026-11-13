@@ -170,6 +170,8 @@ pub const FILES: &[Asset] = &[
     Asset { path: "apps/{{cli}}/src/main.rs", text: include_str!("../templates/app/apps/{{cli}}/src/main.rs") },
     Asset { path: "apps/{{cli}}/tests/surfaces.rs", text: include_str!("../templates/app/apps/{{cli}}/tests/surfaces.rs") },
     Asset { path: "crates/automation/Cargo.toml", text: include_str!("../templates/app/crates/automation/Cargo.toml.tmpl") },
+    Asset { path: "crates/automation/src/attach.rs", text: include_str!("../templates/app/crates/automation/src/attach.rs") },
+    Asset { path: "crates/automation/src/attach/tests.rs", text: include_str!("../templates/app/crates/automation/src/attach/tests.rs") },
     Asset { path: "crates/automation/src/control.rs", text: include_str!("../templates/app/crates/automation/src/control.rs") },
     Asset { path: "crates/automation/src/frame.rs", text: include_str!("../templates/app/crates/automation/src/frame.rs") },
     Asset { path: "crates/automation/src/lib.rs", text: include_str!("../templates/app/crates/automation/src/lib.rs") },

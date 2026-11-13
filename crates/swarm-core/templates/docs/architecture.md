@@ -64,6 +64,13 @@ Every surface is a thin adapter over one dispatch:
    `bad_params` the `key`), goes back through the surface's framing. A surface never inspects a
    command's result and never names a command.
 
+MCP runs on a session of its own (`{{cli}} mcp`) or attached to the app that is already running
+(`{{cli}} mcp --attach <port> [--token-file <path>]`): its calls then go to that app's session over
+its control socket (the window's `--socket`, or `{{cli}} serve --socket`), so an agent drives the
+window a person has open. The tools and the answers are the same either way, and so is consent: MCP
+grants none, so a command with an effect is `consent_required` on it even when the socket was
+started with `--yes`.
+
 <!-- The app's own part: its requirements (what `Requirement` holds), its extra error codes, how
      long-running commands report progress, anything a surface does beyond framing. -->
 
