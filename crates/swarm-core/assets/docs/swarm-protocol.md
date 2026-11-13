@@ -704,7 +704,11 @@ On each finished pull request:
       stops it before the merge;
    4. it waits until the PR is mergeable; one `behind` `main` is rebased on the server, and a
       branch the server can't rebase (merge commits), or one `stack` merged its base into, gets
-      `main` merged in and pushed instead (semi-linear history needs `main`'s head);
+      `main` merged in and pushed instead (semi-linear history needs `main`'s head). It assumes
+      `main` doesn't require branches to be up to date (no required status checks), so a PR
+      stacked on one the server rebased merges as it was gated: git takes the base's two copies
+      as one change. A rule that requires up-to-date branches would make GitHub report `behind`
+      there, and the server's rebase of such a PR is untested (sc#38);
    5. it merges with a merge commit at the head it saw, asking again while GitHub refuses (three
       tries), with
       `[skip ci]` in the merge commit when every file the PR changes is Markdown. Before each
@@ -1381,6 +1385,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | The coordinator's loop › land: `land` assumes `main` requires no up-to-date branches, as `docs/new-swarm.md` sets it up; a PR stacked on one the server rebased then merges as gated (sc#38) |
 | 2026-11-12 | minor | The gate daemon: a bisection's last suspect is gated alone before it is sent back, and nobody is when it passes too; the off switch is read before each gate; `--retry <pr>` forgets what it kept of one PR; a second daemon in a worktree is refused; GitHub's conflict flag is only where to look, and a conflict `stack` resolves is gated; `main` failing on the gating machine files a `main-red` issue; a PR it can't put back to draft is held; three gates in a row that don't run set the switch (sc#45) |
 | 2026-11-12 | minor | The gate daemon (new): `cargo xtask gate --daemon` runs steps 2 and 3 of the coordinator's loop on the gating machine: pauses on its switch or an open `main-red` issue; flags a ready PR that conflicts with `main` once per head; stacks in dependency order with rerere off, dropping a conflict and what is stacked on it; folds newly ready PRs in while the gate waits for room and never kills a gate; lands what didn't change during the gate; drops the PR a failure points at (back to draft, the log's excerpt in a comment) or bisects, keeping its suspects; where the project turns it on (`Hooks::verify_main`) runs a stack's failed tests alone on `main` before blaming a PR. `--status`, `--stop`, `--resume`; what stays with the coordinator. A daemon gate's failure is a send-back only of what its `sendback` names (sc#44) |
 | 2026-11-12 | minor | Where the project turns it on (`Hooks::gate_priority`, off by default: no change), a gate has priority over workers' builds: `gate --wait` waits for room at most 2 minutes, then goes ahead of the running builds (a disk under the floor still waits, then refuses); while a gate holds the machine-wide gate lock, `capacity` reserves a build for it (but for the gate's own check), so helpers and anything asking `capacity` yield, and `ready` waits before each `ci`, before its test-run slot, while there is no room beside it, saying `a gate has priority` (at most 30 minutes) (sc#41) |
