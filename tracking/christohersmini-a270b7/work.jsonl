@@ -1,1 +1,2 @@
 {"effort":"low","event":"session.start","format":3,"machine":"christohersmini","model":"claude-opus-5-5","name":"coordinator","role":"coordinator","t":"2026-11-13T14:32:20Z"}
+{"event":"sub.start","name":"gate","note":"#101 skeleton theme palette; capacity=3 free=9.9; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-101","t":"2026-11-13T17:11:51Z"}
