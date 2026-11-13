@@ -13,6 +13,7 @@
 //! With `--socket` the app also serves the loopback control socket (`{{cli}} serve --socket` has the
 //! same flags and the same token rules), so an agent or a test drives the running app, and what it
 //! does shows in the window. It prints the start-up line (the address, where the token is) on stderr.
+//! An agent that speaks MCP attaches with `{{cli}} mcp --attach <port>` and the same token.
 //!
 //! The UI's state (which command's view is open, whether the list is shown) is the session's:
 //! `ui.inspect` and `ui.set` read and set it over the socket as the window's clicks do, and with

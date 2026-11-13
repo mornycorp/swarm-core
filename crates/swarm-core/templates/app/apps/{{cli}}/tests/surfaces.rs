@@ -18,10 +18,17 @@
 //! **Each call is made on a fresh session** ([`App::call`]), the socket's too: a server is started for
 //! the call and stopped after it, so a command that changes the session (`ui.set`) never changes what
 //! the next call sees on one surface and not on the others.
+//!
+//! **MCP attached to a running app** (`{{cli}} mcp --attach <port>`) is MCP too, answering through the
+//! app's socket: [`mcp_attached_to_a_running_app_gives_the_answers_mcp_gives`] sends every command the
+//! same messages through it and through `{{cli}} mcp`, and holds the replies to be the same, line for
+//! line, with one exception: a command whose effects need consent is refused `consent_required` before
+//! the app sees it, so a call of it that the app would refuse anyway (bad params, disabled) may be
+//! refused for consent instead. Neither runs it.
 
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -326,6 +333,78 @@ fn the_binary_serves_the_control_socket_until_its_stdin_closes() {
         std::thread::sleep(Duration::from_millis(20));
     };
     assert!(status.success(), "{status}");
+}
+
+/// A token file holding [`TOKEN`], as the app writes one (private on Unix, as a client reads one).
+fn token_file(name: &str) -> PathBuf {
+    let file = {{crate_prefix_ident}}testkit::temp_dir(name).unwrap().join("control.token");
+    std::fs::write(&file, format!("{TOKEN}\n")).unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    file
+}
+
+/// MCP messages for every command (no params, empty, an unknown key, not an object, and every
+/// adversarial value), tools that are no command, and a request over the cap, each with an id: the
+/// messages, and which of them call a command whose effects need consent with params the app refuses
+/// even with consent.
+fn mcp_script() -> (Vec<String>, Vec<usize>) {
+    let mut messages = vec![
+        json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+    ];
+    let mut refused_anyway = Vec::new();
+    let mut cases = vec![json!({}), Value::Null, json!({"conformance_unknown": 1}), json!(5)];
+    cases.extend(conformance::adversarial_params());
+    let call = |at: usize, name: &str, arguments: &Value| {
+        json!({"jsonrpc": "2.0", "id": at, "method": "tools/call", "params": {"name": name, "arguments": arguments}}).to_string()
+    };
+    for spec in session().commands() {
+        for params in &cases {
+            let at = messages.len();
+            if spec.effects.needs_consent() && session().call(spec.id, params.clone(), &CallOpts::new(Caller::Test).consenting()).is_err() {
+                refused_anyway.push(at);
+            }
+            messages.push(call(at, &spec.id.replace('.', "-"), params));
+        }
+    }
+    for name in ["app-nope", "app.info", ""] {
+        messages.push(call(messages.len(), name, &json!({})));
+    }
+    messages.push(call(messages.len(), "app-info", &json!({"conformance_padding": "a".repeat(conformance::REQUEST_CAP)})));
+    (messages, refused_anyway)
+}
+
+/// `{{cli}} mcp --attach` against a control socket on a session (started with consent, as
+/// `serve --socket --yes` is), and `{{cli}} mcp` on a session of its own, given the same messages: the
+/// same replies (results, failure codes, `unknown_command`, `bad_params`, `unavailable`, `too_large`),
+/// and a command whose effects need consent `consent_required` on both, the socket's consent
+/// notwithstanding. Both sessions start fresh and take the same calls in the same order.
+#[test]
+fn mcp_attached_to_a_running_app_gives_the_answers_mcp_gives() {
+    if std::env::var_os({{crate_prefix_ident}}automation::token::ENV).is_some() {
+        return; // the binary would take that token, not the test's
+    }
+    let (messages, refused_anyway) = mcp_script();
+    let stdin = format!("{}\n", messages.join("\n"));
+    let (code, direct, err) = cli(&["mcp"], &stdin);
+    assert_eq!(code, Some(0), "{err}");
+    let server = socket_server(true);
+    let (port, file) = (server.addr().port().to_string(), token_file("surfaces-mcp-attach"));
+    let (code, attached, err) = cli(&["mcp", "--attach", &port, "--token-file", &file.to_string_lossy()], &stdin);
+    assert_eq!(code, Some(0), "{err}");
+    let (direct, attached): (Vec<&str>, Vec<&str>) = (direct.lines().collect(), attached.lines().collect());
+    assert_eq!((direct.len(), attached.len()), (messages.len(), messages.len()), "a reply a message");
+    for (at, (want, got)) in direct.iter().zip(&attached).enumerate() {
+        let message: String = messages[at].chars().take(200).collect();
+        if refused_anyway.contains(&at) {
+            let (want, got): (Value, Value) = (serde_json::from_str(want).unwrap(), serde_json::from_str(got).unwrap());
+            assert_eq!((want["result"]["isError"].clone(), got["result"]["isError"].clone()), (json!(true), json!(true)), "{message}");
+            assert!(got["result"]["content"][0]["text"].as_str().is_some_and(|t| t.contains("\"consent_required\"")), "{message}: {got}");
+        } else {
+            assert_eq!(got, want, "{message}");
+        }
+    }
 }
 
 /// What a connection that sends a wrong token is told.

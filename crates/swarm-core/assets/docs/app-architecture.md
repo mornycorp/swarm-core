@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (the `sources` layer is `backends`, for reading and writing) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (one dispatch: MCP on its own session or attached to a running app's control socket, `{{cli}} mcp --attach <port>`; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -310,6 +310,19 @@ writes a reply. **Adding a command adds it to every surface**, with no edit to a
   registry discloses its tools by toolset, progressively, rather than all at once.
 - **MCP and consent.** A command whose effects need a consent returns `consent_required` until the
   call carries one; the MCP server sets it only from what its client has granted, never by default.
+- **MCP on its own session, or attached.** The MCP server runs on a session of its own
+  (`{{cli}} mcp`), or attached to an app that is already running (`{{cli}} mcp --attach <port>`):
+  its calls then go to that app's session over the app's loopback socket, as a frame client's do
+  (`auth`, `commands` once, then a request per call), so an agent works in the window a person has
+  open. It is the same MCP code over a seam of two calls (list the specs, call one), with **the
+  same answers** and **the same consent rule**: it names no command and grants no consent, so a
+  command whose effects need it is `consent_required` there even when the app's socket was started
+  with `--yes`. That is decided from the command's effects, as `commands` gives them, before the
+  call is sent, so the app never sees it (such a call that the app would refuse anyway, for its
+  params or because it is disabled, may then be `consent_required` rather than `bad_params` or
+  `unavailable`; it runs on neither). An app it can't reach, a wrong token or a connection that
+  drops is a JSON-RPC error with the code and a remediation; connecting and each reply have a
+  deadline, and a connection is made again at most once a call, never in a loop.
 - **Cancel.** A dropped connection, an idle timeout or the UI's cancel button sets the call's
   token; a slow `run` polls it and returns `cancelled`.
 
@@ -331,6 +344,10 @@ One JSON object per line, UTF-8, `\n`-terminated.
 - A reply is `{id, ok: true, result}` or `{id, ok: false, error, code}`: `error` is the failure's
   message, `code` its code, and `remediation` and `key` ride beside them when there are any. A
   line that isn't a request gets `{id: null, ok: false, …}` with `bad_params`.
+- **A spec in `commands` carries its effects** as `"effects": {"writes": false, "runs_code": false,
+  "network": false, "device": false}`. A client that decides consent from them (`mcp --attach`)
+  counts **any effect that isn't `false`**, and effects that are missing, as needing consent, so an
+  effect an app adds later is never read as none.
 - **The loopback socket's `auth`** comes first: `{"id": 0, "method": "auth", "params": {"token": "…"}}`.
   The token is read from a file made `0600` (or `{{env}}_CONTROL_TOKEN`), compared in constant
   time, and never logged. Anything but a good `auth` first gets `unauthenticated` and the
@@ -347,8 +364,10 @@ and with valid ones built from its params schema (which reach `run`), with conse
 command whose effects need it is `consent_required` without it, and on MCP even with it); it asks
 every command's enabled state on each surface that has the query and holds them to agree, and a
 disabled command's call to fail `unavailable` with its state's reason; it holds a call cancelled
-before it runs to fail `cancelled`; `scan` holds the transports
-to the registry (no command named in one).
+before it runs to fail `cancelled`; the app's surface test sends
+every command the same MCP messages through `mcp --attach` (on a socket started with consent) and
+through `mcp`, and holds the replies to be the same; `scan` holds the transports to the registry
+(no command named in one).
 
 ## The UI is a client
 
@@ -558,6 +577,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | One dispatch: MCP runs on a session of its own or attached to a running app's control socket (`{{cli}} mcp --attach <port> [--token-file <path>]`), one MCP adapter over a seam of two calls, with the same answers and the same consent rule (a command whose effects need consent is `consent_required` even on a socket started with `--yes`); The JSON-lines frame: a spec in `commands` carries its effects, and a client counts any effect that isn't `false` as needing consent; the check adds the surface test that compares `mcp --attach` with `mcp` (swarm-core#89) |
 | 2026-11-13 | minor | Layers: the optional `sources` layer is `backends`, and it reads and writes the outside (a write there is a command's declared effect; the app's own state stays with the state module). A manifest that still says `sources` is read as `backends` (swarm-core#87) |
 | 2026-11-12 | minor | One dispatch's check: the conformance run holds a call cancelled before it runs to fail `cancelled`, on the surfaces an app can cancel a call through (swarm-core#61) |
 | 2026-11-12 | minor | One dispatch: a panic in a command's `run` is caught by the dispatch and returned as `internal`, on the wire form and the typed one, and the session goes on (swarm-core#52) |

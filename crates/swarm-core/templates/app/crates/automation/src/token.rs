@@ -15,6 +15,9 @@
 //!   a client reads the token after the start-up line, every time. The new file has the ACL its
 //!   directory gives it: **keep it in a directory only you can read** (under your profile, such as
 //!   `%LOCALAPPDATA%`), not a shared one, or pass the token in the environment, which needs no file.
+//! - **A client only reads it.** `{{cli}} mcp --attach` ([`Token::read_existing`]) takes the
+//!   variable, else the file the app was started with, read as the server reads one (on Unix: a
+//!   regular file, yours and private), and never makes or replaces a file.
 //! - **The variable stays in the environment.** `std::env::remove_var` is `unsafe` in edition 2024
 //!   and this crate forbids `unsafe`, so [`ENV`] is not removed after it is read, and a child
 //!   process would inherit it. So the engine's process module, the one place a child is started
@@ -90,7 +93,8 @@ impl Token {
         random_hex(GENERATED_BYTES).map(Token)
     }
 
-    /// The token as a client sends it. Only the server's `auth` check and a test's client read it.
+    /// The token as a client sends it. Only `mcp --attach`'s `auth` ([`crate::attach`]) and a test's
+    /// client read it.
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -103,12 +107,8 @@ impl Token {
     /// The token the environment or `file` gives, and where it came from: [`ENV`] wins; else
     /// `file` gives it ([`Token::from_file`]); else `unavailable`, naming both.
     pub fn resolve(file: Option<&Path>) -> Result<(Token, Source), CommandError> {
-        match std::env::var(ENV) {
-            Ok(value) if !value.is_empty() => return Token::parse(&value).map(|t| (t, Source::Env)),
-            Ok(_) | Err(std::env::VarError::NotPresent) => {}
-            Err(std::env::VarError::NotUnicode(_)) => {
-                return Err(CommandError::unavailable(format!("{ENV} is not UTF-8"), format!("set {ENV} to a random ASCII string, or unset it")));
-            }
+        if let Some(token) = Token::from_env()? {
+            return Ok((token, Source::Env));
         }
         let Some(path) = file else {
             return Err(CommandError::unavailable(
@@ -119,6 +119,38 @@ impl Token {
             ));
         };
         Token::from_file(path).map(|t| (t, Source::File(path.display().to_string())))
+    }
+
+    /// The token [`ENV`] holds: `None` when it is unset or empty.
+    fn from_env() -> Result<Option<Token>, CommandError> {
+        match std::env::var(ENV) {
+            Ok(value) if !value.is_empty() => Token::parse(&value).map(Some),
+            Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(CommandError::unavailable(format!("{ENV} is not UTF-8"), format!("set {ENV} to a random ASCII string, or unset it")))
+            }
+        }
+    }
+
+    /// Whether [`ENV`] is set (to anything but empty): a client then needs no token file.
+    pub fn in_env() -> bool {
+        std::env::var_os(ENV).is_some_and(|value| !value.is_empty())
+    }
+
+    /// The token a **client** sends (`{{cli}} mcp --attach`): [`ENV`] wins, else the token in `file`,
+    /// which the app made. It is only read, never created or replaced, and on Unix only when it is a
+    /// regular file that is the user's own and private, as the server reads one.
+    pub fn read_existing(file: Option<&Path>) -> Result<Token, CommandError> {
+        if let Some(token) = Token::from_env()? {
+            return Ok(token);
+        }
+        let Some(path) = file else {
+            return Err(CommandError::unavailable(
+                format!("no control token: {ENV} is not set and no token file was given"),
+                format!("set {ENV} to the app's token, or pass `--token-file <path>` naming the file the app was started with"),
+            ));
+        };
+        read_private(path)
     }
 
     /// The token in `path`. On Unix: read when the file exists (and is a regular file that is yours
