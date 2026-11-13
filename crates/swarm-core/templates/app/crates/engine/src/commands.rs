@@ -221,8 +221,10 @@ mod tests {
         assert_eq!(wire, serde_json::to_value(&typed).unwrap());
         assert_eq!(typed, theme::data());
         let error = typed.tokens.iter().find(|t| t.name == "error").unwrap();
-        assert_eq!((error.dark.as_str(), error.light.as_str()), ("#FE3017", "#E20C03"));
-        assert_eq!(wire["ranges"][2]["entries"][31]["index"], 31);
+        assert_eq!((error.dark.as_str(), error.light.as_str()), ("#FF8A80", "#B42318"), "the shared palette's");
+        assert_eq!(wire["ranges"][3]["entries"][31]["index"], 31);
+        assert_eq!((wire["ranges"][0]["name"].as_str(), wire["ranges"][0]["none"]["dark"].as_str()), (Some("series"), Some("#666666")));
+        assert!(wire["ranges"][1]["none"].is_null(), "the markers have no none");
         let e = session().call("ui.theme", json!({"look": "dark"}), &CallOpts::new(Caller::Test)).unwrap_err();
         assert_eq!((e.code, e.key.as_deref()), (ErrorCode::BadParams, Some("look")));
         let registry = registry().unwrap();

@@ -63,11 +63,14 @@ pub struct SwatchRow {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Swatch {
     pub colour: PerLook,
+    /// A range entry's border, which edges its square (`None`: a token, drawn without one).
+    pub border: Option<PerLook>,
     /// A range entry's number, written on its text background; `None`: a token, whose value is written.
     pub number: Option<Numbered>,
 }
 
-/// A range entry's index, and the entry made a background for text, on which the index is written.
+/// A range entry's index (or the catalog's word for none), and the entry made a background for text,
+/// on which the index is written.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Numbered {
     pub index: String,
@@ -99,7 +102,8 @@ fn show_info(session: &Session, opts: &CallOpts) -> Result<Shown, CommandError> 
 }
 
 /// `ui.theme`, the swatch view: each token a square with its name, meaning and value; each range a
-/// row of squares numbered by index, with its size, meaning and source.
+/// row of squares edged in their borders and numbered by index (then its none, where it has one),
+/// with its size, meaning and source.
 fn show_theme(session: &Session, opts: &CallOpts) -> Result<Shown, CommandError> {
     let theme = session.call_typed::<UiThemeCommand>(UiThemeParams::default(), opts)?;
     let tokens = theme.tokens.into_iter().map(token_row);
@@ -109,15 +113,18 @@ fn show_theme(session: &Session, opts: &CallOpts) -> Result<Shown, CommandError>
 
 fn token_row(token: TokenData) -> SwatchRow {
     let colour = PerLook { dark: token.dark, light: token.light };
-    SwatchRow { label: token.name, lines: vec![token.meaning], swatches: vec![Swatch { colour, number: None }] }
+    SwatchRow { label: token.name, lines: vec![token.meaning], swatches: vec![Swatch { colour, border: None, number: None }] }
 }
 
 fn range_row(range: RangeData) -> SwatchRow {
     let lines = vec![catalog::range_size(range.size), range.meaning, catalog::source(&range.source)];
-    SwatchRow { label: range.name, lines, swatches: range.entries.into_iter().map(entry).collect() }
+    let entries = range.entries.into_iter().map(|e| entry(e.index.to_string(), e));
+    let none = range.none.map(|e| entry(catalog::NONE.to_owned(), e));
+    SwatchRow { label: range.name, lines, swatches: entries.chain(none).collect() }
 }
 
-fn entry(entry: EntryData) -> Swatch {
+fn entry(index: String, entry: EntryData) -> Swatch {
     let behind_text = PerLook { dark: entry.behind_text_dark, light: entry.behind_text_light };
-    Swatch { colour: PerLook { dark: entry.dark, light: entry.light }, number: Some(Numbered { index: entry.index.to_string(), behind_text }) }
+    let border = Some(PerLook { dark: entry.border_dark, light: entry.border_light });
+    Swatch { colour: PerLook { dark: entry.dark, light: entry.light }, border, number: Some(Numbered { index, behind_text }) }
 }

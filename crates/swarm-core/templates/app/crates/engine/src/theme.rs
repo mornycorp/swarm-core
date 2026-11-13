@@ -1,22 +1,32 @@
 //! The theme as data (docs/app-architecture.md › The UI is a client, Colours from the theme): the
 //! colours the UI draws with, in a dark and a light look, kept here, below the toolkit, so
 //! `ui.theme` ([`crate::commands::UiThemeCommand`]) gives them to every surface and the UI crate's
-//! theme module turns them into the toolkit's colours. Two kinds:
+//! theme module turns them into the toolkit's colours.
 //!
-//! - **Tokens**, named for what a colour means ([`TOKENS`]: `error`, `selection`, `muted`, …). Each
-//!   is egui's own look, dark and light, or a nudge of it where egui's falls short of the contrast
-//!   text needs (4.5:1 against the background, WCAG 2's minimum for text); the nudge is said where
-//!   the value is.
-//! - **Categorical ranges** for identifiers ([`RANGES`]: 8, 16 and 32 colours) such as the rows of
-//!   a timeline, the bars of a scrubber, a legend's entries or badges. An identifier's colour comes
-//!   from the range: [`Shades::pick`] hashes it to an entry (FNV-1a, [`fnv1a`]), so the same id gets
-//!   the same colour on every run, surface and machine; [`Shades::at`] takes a number in order (a
-//!   series, a marker). Never a colour made where it is drawn. Each entry reaches 3:1 against the
-//!   background (WCAG 2's minimum for a part of the interface), and [`behind_text`] makes one a
-//!   text background on which [`STRONG`] text reaches 4.5:1.
+//! **The colours are the palette the swarm's tools share**, so an app built on Swarm Core looks
+//! like the swarm's other tools. The shared palette has a dark look and a light one (Qt Fusion's
+//! light palette), a series, markers and a `darker`. Three kinds:
 //!
-//! The values are tested (`theme/tests.rs`): every token's contrast, every entry's, the text on
-//! every entry, how far apart the entries of a range stay, and the hash's pins.
+//! - **Tokens**, named for what a colour means ([`TOKENS`]: `background`, `text`, `selection`,
+//!   `error`, …), each the shared palette's token of that meaning, its name beside it.
+//! - **The shared palette's ranges**: the [`SERIES`] (ColorBrewer Dark2 in the dark look, Set2 in the
+//!   light), whose `at(n)` is entry `n % 7` and whose [`Shades::none`] is the grey for something with
+//!   no number; and the [`MARKERS`] (ColorBrewer Set1 with the shared orange,
+//!   then grey, the same in both looks).
+//! - **Swarm Core's own ranges**, beyond the shared palette's ([`RANGE_16`], [`RANGE_32`]), for
+//!   many identifiers side by side.
+//!
+//! An identifier's colour comes from a range: [`Shades::pick`] hashes it to an entry (FNV-1a,
+//! [`fnv1a`]), so the same id gets the same colour on every run, surface and machine; [`Shades::at`]
+//! takes a number in order (a series, a marker). Never a colour made where it is drawn.
+//! [`behind_text`] makes an entry a text background on which [`STRONG`] text reaches 4.5:1, and
+//! [`darker`] (the shared palette's: each channel × 0.8) is the border a filled entry is outlined in.
+//!
+//! The values are tested (`theme/tests.rs`): that each is the shared palette's, every token's contrast
+//! where it is read, every entry's against the background, the text on every entry, how far apart the
+//! entries of a range stay, and the hash's pins. Where the shared palette's own value falls short of a
+//! minimum it is kept, not nudged, and the tests record it with its measured ratio and why
+//! (`KEPT_SHORT`); Swarm Core's own ranges are nudged where they fall short, and say so.
 
 use std::fmt::{self, Display, Write as _};
 
@@ -77,7 +87,7 @@ impl Rgb {
     }
 }
 
-/// The two looks a theme has: egui's dark and light.
+/// The two looks a theme has: dark (the shared palette's Dark) and light (Qt Fusion's light palette, its Light).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Look {
     Dark,
@@ -103,42 +113,92 @@ impl Token {
     }
 }
 
-// The tokens. Each is egui 0.37's `Visuals::dark()` and `Visuals::light()` (the UI crate's theme
-// tests hold them to it), or that nudged where it is short of 4.5:1 against `background`: CIELAB
-// lightness moved, its hue and chroma kept, to a little over 4.5:1. `selection` is a fill: the
-// text on it is `strong`, and that is what reaches 4.5:1.
+// The tokens: the shared palette's (`Tokens::DARK` and
+// `Tokens::LIGHT`), each under the name of its meaning, with the shared palette's own name
+// beside it. Two are Swarm Core's, where the shared palette has none: `strong` and `success`. The
+// tests hold every value to the shared palette's and measure each where it is read; the one that falls
+// short (`accent` in the dark look) is kept and recorded there.
 
-/// egui's `panel_fill`.
+/// The shared palette's `bg`: the window.
 pub const BACKGROUND: Token =
-    Token { name: "background", meaning: "What everything is drawn on: a panel's fill", dark: Rgb::hex(0x1B1B1B), light: Rgb::hex(0xF8F8F8) };
-/// egui's `text_color()`.
-pub const TEXT: Token = Token { name: "text", meaning: "Body text", dark: Rgb::hex(0x8C8C8C), light: Rgb::hex(0x505050) };
-/// egui's `strong_text_color()`.
+    Token { name: "background", meaning: "What everything is drawn on: a panel's fill", dark: Rgb::hex(0x353535), light: Rgb::hex(0xEFEFEF) };
+/// The shared palette's `chrome`.
+pub const CHROME: Token =
+    Token { name: "chrome", meaning: "The menu bar, the status bar and other chrome", dark: Rgb::hex(0x353535), light: Rgb::hex(0xEFEFEF) };
+/// The shared palette's `panel`.
+pub const PANEL: Token = Token { name: "panel", meaning: "Floating windows, dialogs and popups", dark: Rgb::hex(0x353535), light: Rgb::hex(0xEFEFEF) };
+/// The shared palette's `base`: where content sits.
+pub const BASE: Token = Token { name: "base", meaning: "Views: lists, tables and text fields", dark: Rgb::hex(0x2A2A2A), light: Rgb::hex(0xFFFFFF) };
+/// The shared palette's `alt_base`: alternate rows.
+pub const ALT_BASE: Token = Token { name: "alt_base", meaning: "Every other row of a list drawn on base", dark: Rgb::hex(0x303030), light: Rgb::hex(0xF7F7F7) };
+/// The shared palette's `header`: a header's fill.
+pub const HEADER: Token = Token { name: "header", meaning: "Table header rows and a ruler", dark: Rgb::hex(0x3F3F3F), light: Rgb::hex(0xCACACA) };
+/// The shared palette's `frame`: a frame's border. Decorative: no minimum.
+pub const FRAME: Token = Token { name: "frame", meaning: "Lines that frame views and panels", dark: Rgb::hex(0x424242), light: Rgb::hex(0xABABAB) };
+/// The shared palette's `border`. Decorative: no minimum.
+pub const BORDER: Token =
+    Token { name: "border", meaning: "Decorative lines: window frames and separators", dark: Rgb::hex(0x424242), light: Rgb::hex(0xABABAB) };
+/// The shared palette's `text`.
+pub const TEXT: Token = Token { name: "text", meaning: "Body text", dark: Rgb::hex(0xFCFCFC), light: Rgb::hex(0x000000) };
+/// Swarm Core's: white or black, what the shared palette's `text_on` puts on a data fill (it has no
+/// emphasised text of its own).
 pub const STRONG: Token = Token {
     name: "strong",
     meaning: "Emphasised text, and text on a range colour made a text background",
     dark: Rgb::hex(0xFFFFFF),
     light: Rgb::hex(0x000000),
 };
-/// egui's `weak_text_color()` as it shows on the background (`#5F5F5F` dark, 2.70:1; `#939393` light,
-/// 2.89:1), nudged to `#848484` (4.61:1) and `#707070` (4.66:1).
+/// The shared palette's `text_dim`.
 pub const MUTED: Token =
-    Token { name: "muted", meaning: "Text that matters less: a command the UI can't run here, a hint", dark: Rgb::hex(0x848484), light: Rgb::hex(0x707070) };
-/// egui's `hyperlink_color`; the light one (`#009BFF`, 2.77:1) nudged to `#0B74C0` (4.63:1).
-pub const ACCENT: Token = Token { name: "accent", meaning: "A link, or what draws the eye to an action", dark: Rgb::hex(0x5AAAFF), light: Rgb::hex(0x0B74C0) };
-/// egui's `selection.bg_fill`, a fill: `strong` text on it is 7.39:1 dark and 12.75:1 light.
+    Token { name: "muted", meaning: "Text that matters less: a command the UI can't run here, a hint", dark: Rgb::hex(0xA6A6A6), light: Rgb::hex(0x666666) };
+/// The shared palette's `selected_text`.
+pub const SELECTED_TEXT: Token = Token { name: "selected_text", meaning: "Text on the selection", dark: Rgb::hex(0xFCFCFC), light: Rgb::hex(0x000000) };
+/// The shared palette's `link`.
+pub const LINK: Token = Token { name: "link", meaning: "A link", dark: Rgb::hex(0x4DA6FF), light: Rgb::hex(0x1F6FA8) };
+/// The shared palette's `control`.
+pub const CONTROL: Token =
+    Token { name: "control", meaning: "The fill of a widget at rest: a button, a field", dark: Rgb::hex(0x454545), light: Rgb::hex(0xF7F7F7) };
+/// The shared palette's `control_border`.
+pub const CONTROL_BORDER: Token =
+    Token { name: "control_border", meaning: "The edge of a widget at rest: 3:1 on the background", dark: Rgb::hex(0x858585), light: Rgb::hex(0x7A7A7A) };
+/// The shared palette's `accent`: its accent blue. In the dark look it is 2.72:1 on the
+/// background, kept (the tests' `KEPT_SHORT` says why).
+pub const ACCENT: Token =
+    Token { name: "accent", meaning: "An accent that carries no text: what has focus, an outline", dark: Rgb::hex(0x007ACC), light: Rgb::hex(0x2B78AE) };
+/// The shared palette's `selection`, a fill: `selected_text` on it is 5.07:1 dark and 14.74:1 light.
 pub const SELECTION: Token =
-    Token { name: "selection", meaning: "What is selected: its fill, with strong text on it", dark: Rgb::hex(0x005C80), light: Rgb::hex(0x90D1FF) };
-/// egui's look has no success colour: its named greens, `Color32::LIGHT_GREEN` and `DARK_GREEN`.
+    Token { name: "selection", meaning: "What is selected: its fill, with selected_text on it", dark: Rgb::hex(0x0070BB), light: Rgb::hex(0xC1DCEE) };
+/// Swarm Core's: the shared palette has no success colour. egui's named greens,
+/// `Color32::LIGHT_GREEN` and `DARK_GREEN`, as before.
 pub const SUCCESS: Token = Token { name: "success", meaning: "Something that worked", dark: Rgb::hex(0x90EE90), light: Rgb::hex(0x006400) };
-/// egui's `warn_fg_color`; the light one (`#FF6400`, 2.79:1) nudged to `#C14B04` (4.62:1).
-pub const WARNING: Token = Token { name: "warning", meaning: "Something to look at that hasn't failed", dark: Rgb::hex(0xFF8F00), light: Rgb::hex(0xC14B04) };
-/// egui's `error_fg_color`, `#FF0000` in both looks (4.31:1 dark, 3.76:1 light), nudged to `#FE3017`
-/// (4.63:1) and `#E20C03` (4.61:1).
-pub const ERROR: Token = Token { name: "error", meaning: "A failure, or why a command can't run now", dark: Rgb::hex(0xFE3017), light: Rgb::hex(0xE20C03) };
+/// The shared palette's `warn`: the shared orange in the dark look.
+pub const WARNING: Token = Token { name: "warning", meaning: "Something to look at that hasn't failed", dark: Rgb::hex(0xFF7F1C), light: Rgb::hex(0x965C00) };
+/// The shared palette's `error`.
+pub const ERROR: Token = Token { name: "error", meaning: "A failure, or why a command can't run now", dark: Rgb::hex(0xFF8A80), light: Rgb::hex(0xB42318) };
 
-/// Every token, in the order `ui.theme` gives them.
-pub const TOKENS: [Token; 9] = [BACKGROUND, TEXT, STRONG, MUTED, ACCENT, SELECTION, SUCCESS, WARNING, ERROR];
+/// Every token, in the order `ui.theme` gives them: surfaces, text, controls and highlights, states.
+pub const TOKENS: [Token; 20] = [
+    BACKGROUND,
+    CHROME,
+    PANEL,
+    BASE,
+    ALT_BASE,
+    HEADER,
+    FRAME,
+    BORDER,
+    TEXT,
+    STRONG,
+    MUTED,
+    SELECTED_TEXT,
+    LINK,
+    CONTROL,
+    CONTROL_BORDER,
+    ACCENT,
+    SELECTION,
+    SUCCESS,
+    WARNING,
+    ERROR,
+];
 
 /// A categorical range: colours for identifiers, in each look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,10 +222,12 @@ impl Range {
     }
 }
 
-/// One look's colours of a range: what [`Shades::pick`] and [`Shades::at`] choose from.
+/// One look's colours of a range: what [`Shades::pick`] and [`Shades::at`] choose from, and the
+/// colour for none, where the range has one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shades {
     entries: &'static [Rgb],
+    none: Option<Rgb>,
 }
 
 /// What an empty range would give (none is): a mid grey, rather than a panic.
@@ -182,6 +244,12 @@ impl Shades {
 
     pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// The colour of something with no number or id (the series' grey: the shared palette's work with
+    /// no issue). Never one of the entries, so [`Shades::at`] and [`Shades::pick`] never give it.
+    pub const fn none(&self) -> Option<Rgb> {
+        self.none
     }
 
     /// The entry for the number `n`, in order: `n` modulo the range's size.
@@ -277,44 +345,61 @@ fn from_hsl(hue: f64, saturation: f64, lightness: f64) -> Rgb {
     Rgb::new(channel(0.0), channel(8.0), channel(4.0))
 }
 
-// The ranges. Each look's entries reach 3:1 against its background; the tests measure how far
-// apart they stay (CIEDE2000, at least 10 between any two entries and 15 between neighbours).
+/// A range entry's border, how a filled entry (a bar, a mark) is outlined: each channel × 0.8,
+/// rounded down (the shared palette's `darker`: the darker edge on its bars).
+pub fn darker(colour: Rgb) -> Rgb {
+    let channel = |c: u8| u8::try_from(u16::from(c) * 4 / 5).unwrap_or(c);
+    Rgb::new(channel(colour.r), channel(colour.g), channel(colour.b))
+}
 
-/// ColorBrewer Set1's first 8 (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0), as published.
-const SET1_DARK: [Rgb; 8] = [
+// The ranges. The shared palette's two (the series and the markers) are its values as they are, the
+// published palettes they come from; where one falls short of 3:1 on the background it is kept,
+// and the tests record it. Swarm Core's two (16 and 32) reach 3:1 against the background in
+// each look, nudged where they didn't. The tests measure how far apart each range's entries stay
+// (CIEDE2000, at least 10 between any two entries and 15 between neighbours).
+
+/// ColorBrewer Dark2's first 7 (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0), as published:
+/// the shared palette's dark series (teal, rust, violet, magenta, lime, gold, copper).
+const DARK2: [Rgb; 7] =
+    [Rgb::hex(0x1B9E77), Rgb::hex(0xD95F02), Rgb::hex(0x7570B3), Rgb::hex(0xE7298A), Rgb::hex(0x66A61E), Rgb::hex(0xE6AB02), Rgb::hex(0xA6761D)];
+
+/// Dark2's eighth, its grey: the shared palette's dark series' colour for none (work with no issue).
+const DARK2_NONE: Rgb = Rgb::hex(0x666666);
+
+/// ColorBrewer Set2's first 7 (the same source), as published: the shared palette's light series.
+const SET2: [Rgb; 7] =
+    [Rgb::hex(0x66C2A5), Rgb::hex(0xFC8D62), Rgb::hex(0x8DA0CB), Rgb::hex(0xE78AC3), Rgb::hex(0xA6D854), Rgb::hex(0xFFD92F), Rgb::hex(0xE5C494)];
+
+/// Set2's eighth, its grey: the light series' colour for none.
+const SET2_NONE: Rgb = Rgb::hex(0xB3B3B3);
+
+/// The shared palette's 9-colour marker palette, in its order (markers by number): ColorBrewer Set1's 8 (the
+/// same source) with the shared orange `#FF7F1C` for Set1's `#FF7F00`, then grey. The same in both
+/// looks, all nine in its numbered order.
+const MARKER_PALETTE: [Rgb; 9] = [
     Rgb::hex(0xE41A1C),
     Rgb::hex(0x377EB8),
     Rgb::hex(0x4DAF4A),
     Rgb::hex(0x984EA3),
-    Rgb::hex(0xFF7F00),
+    Rgb::hex(0xFF7F1C),
     Rgb::hex(0xFFFF33),
     Rgb::hex(0xA65628),
     Rgb::hex(0xF781BF),
+    Rgb::hex(0x999999),
 ];
 
-/// Set1 on the light background: four entries are under 3:1 there, and are nudged darker (CIELAB
-/// lightness, hue and chroma kept) to just over it.
-const SET1_LIGHT: [Rgb; 8] = [
-    Rgb::hex(0xE41A1C),
-    Rgb::hex(0x377EB8),
-    Rgb::hex(0x3EA13D), // nudged from #4DAF4A (2.62:1)
-    Rgb::hex(0x984EA3),
-    Rgb::hex(0xDF6E01), // nudged from #FF7F00 (2.39:1)
-    Rgb::hex(0x919207), // nudged from #FFFF33 (1.01:1)
-    Rgb::hex(0xA65628),
-    Rgb::hex(0xD965A3), // nudged from #F781BF (2.24:1)
-];
-
-/// colorcet's `glasbey_light` (`glasbey_bw_minc_20_minl_30`, colorcet 3.2.1: Peter Kovesi,
-/// holoviz/colorcet, CC-BY 4.0), made for dark backgrounds by Glasbey et al.'s method ("Colour
-/// displays for categorical images", Color Research & Application 32(4), 2007), which orders a set
-/// so that each colour is as far as it can be from all before it. Its first 32 that reach 3:1 on
-/// the dark background, in its order: entries 7, 12, 25, 26, 27 and 32 don't, and are left out.
-/// The 16 range is the first 16.
+/// Swarm Core's own, beyond the shared palette's. colorcet's `glasbey_light`
+/// (`glasbey_bw_minc_20_minl_30`, colorcet 3.2.1: Peter Kovesi, holoviz/colorcet, CC-BY 4.0), made
+/// for dark backgrounds by Glasbey et al.'s method ("Colour displays for categorical images", Color
+/// Research & Application 32(4), 2007), which orders a set so that each colour is as far as it can
+/// be from all before it. Its first 32 that reached 3:1 on egui's dark background (`#1B1B1B`),
+/// in its order: entries 7, 12, 25, 26, 27 and 32 didn't, and are left out. On the shared palette's
+/// (`#353535`) five fall short, and are nudged lighter (CIELAB lightness, a* and b* kept as far as
+/// sRGB allows) to just over 3:1, each noted. The 16 range is the first 16.
 const GLASBEY_DARK: [Rgb; 32] = [
-    Rgb::hex(0xD70000),
-    Rgb::hex(0x028800),
-    Rgb::hex(0xB600FF),
+    Rgb::hex(0xF12F17), // nudged from #D70000 (2.27:1)
+    Rgb::hex(0x1B9211), // nudged from #028800 (2.64:1)
+    Rgb::hex(0xC727FF), // nudged from #B600FF (2.59:1)
     Rgb::hex(0x06ACC6),
     Rgb::hex(0x98FF00),
     Rgb::hex(0xFFA530),
@@ -322,8 +407,8 @@ const GLASBEY_DARK: [Rgb; 32] = [
     Rgb::hex(0x00FECF),
     Rgb::hex(0xB0A5FF),
     Rgb::hex(0x94AD84),
-    Rgb::hex(0x9A6900),
-    Rgb::hex(0xD3008C),
+    Rgb::hex(0xA77412), // nudged from #9A6900 (2.57:1)
+    Rgb::hex(0xE6299C), // nudged from #D3008C (2.42:1)
     Rgb::hex(0xFEF590),
     Rgb::hex(0xC86F66),
     Rgb::hex(0x9EE3FF),
@@ -348,11 +433,12 @@ const GLASBEY_DARK: [Rgb; 32] = [
 
 /// The same identifiers on the light background, from colorcet's `glasbey_dark`
 /// (`glasbey_bw_minc_20_maxl_70`, the same source, made for light backgrounds): for each entry of
-/// [`GLASBEY_DARK`] in turn, the unused one of `glasbey_dark`'s first 120 that reaches 3:1 on the
-/// light background and is nearest in hue and chroma (CIELAB a*b* distance plus 0.3 times the
-/// lightness difference). An identifier keeps its colour family when the look changes, and the 32
-/// stay further apart (CIEDE2000 10.3 at the closest) than `glasbey_dark`'s own first 32 that pass
-/// (8.3). Its `glasbey_dark` index is noted beside each.
+/// [`GLASBEY_DARK`] in turn, the unused one of `glasbey_dark`'s first 120 that reached 3:1 on egui's
+/// light background (`#F8F8F8`) and is nearest in hue and chroma (CIELAB a*b* distance plus 0.3
+/// times the lightness difference). An identifier keeps its colour family when the look changes,
+/// and the 32 stay further apart (CIEDE2000 10.0 at the closest) than `glasbey_dark`'s own first 32
+/// that pass (8.3). Its `glasbey_dark` index is noted beside each. On the shared palette's light
+/// background (`#EFEFEF`) six fall short, and are nudged darker, as the dark ones lighter.
 const GLASBEY_LIGHT: [Rgb; 32] = [
     Rgb::hex(0xD70000), // 0
     Rgb::hex(0x028800), // 2
@@ -361,7 +447,7 @@ const GLASBEY_LIGHT: [Rgb; 32] = [
     Rgb::hex(0x6C9700), // 78
     Rgb::hex(0xCC7407), // 41
     Rgb::hex(0xC5668F), // 38
-    Rgb::hex(0x019F70), // 96
+    Rgb::hex(0x009D6F), // 96, nudged from #019F70 (2.95:1)
     Rgb::hex(0x5A4AA3), // 68
     Rgb::hex(0x546745), // 29
     Rgb::hex(0x755A00), // 80
@@ -370,10 +456,10 @@ const GLASBEY_LIGHT: [Rgb; 32] = [
     Rgb::hex(0x9D5743), // 108
     Rgb::hex(0x086B84), // 92
     Rgb::hex(0x006D2E), // 66
-    Rgb::hex(0xA67BB8), // 23
+    Rgb::hex(0xA57AB7), // 23, nudged from #A67BB8 (2.97:1)
     Rgb::hex(0x596D00), // 63
     Rgb::hex(0xA2766A), // 11
-    Rgb::hex(0xFF00CE), // 47
+    Rgb::hex(0xFD00CD), // 47, nudged from #FF00CE (2.97:1)
     Rgb::hex(0x836F8C), // 98
     Rgb::hex(0x00816A), // 39
     Rgb::hex(0xEB4E00), // 77
@@ -381,43 +467,55 @@ const GLASBEY_LIGHT: [Rgb; 32] = [
     Rgb::hex(0x004B00), // 19
     Rgb::hex(0x536177), // 117
     Rgb::hex(0x4C5001), // 104
-    Rgb::hex(0x4B9894), // 83
+    Rgb::hex(0x499692), // 83, nudged from #4B9894 (2.94:1)
     Rgb::hex(0x9F6E32), // 88
     Rgb::hex(0x7F2B8E), // 42
-    Rgb::hex(0x698DBE), // 103
-    Rgb::hex(0xAC8499), // 89
+    Rgb::hex(0x688CBD), // 103, nudged from #698DBE (2.97:1)
+    Rgb::hex(0xA67E93), // 89, nudged from #AC8499 (2.80:1)
 ];
 
-/// The 8 range: few identifiers, each worth a name (a series, a marker by number: [`Shades::at`]).
-pub const RANGE_8: Range = Range {
-    name: "range8",
-    meaning: "Up to 8 identifiers, each told apart at a glance: a series or a marker by number (at), or a few ids (pick)",
-    source: "ColorBrewer Set1, first 8 (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0); in the light look 4 entries darkened to 3:1",
-    dark: Shades { entries: &SET1_DARK },
-    light: Shades { entries: &SET1_LIGHT },
+/// The shared palette's series: numbered things in order, `at(n)` the entry `n % 7`, and the grey for
+/// none (the shared palette's `Tokens::issue`: a work bar's colour by its issue number).
+pub const SERIES: Range = Range {
+    name: "series",
+    meaning: "Numbered things in order (an issue, a lane, a frame): at(n) is entry n % 7, and none is the grey for something with no number",
+    source: "The shared palette's series: ColorBrewer Dark2 in the dark look, Set2 in the light (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0), as published",
+    dark: Shades { entries: &DARK2, none: Some(DARK2_NONE) },
+    light: Shades { entries: &SET2, none: Some(SET2_NONE) },
 };
 
-/// The 16 range: more identifiers, by a stable pick of their id (an object's type, a thread).
+/// The shared palette's marker palette: up to 9 marks told apart at a glance, by number or a few ids.
+pub const MARKERS: Range = Range {
+    name: "markers",
+    meaning: "Up to 9 marks told apart at a glance, the same in both looks: a marker by number (at), or a few ids (pick)",
+    source: "The shared palette's markers: ColorBrewer Set1 (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0) with the shared orange #FF7F1C, then grey",
+    dark: Shades { entries: &MARKER_PALETTE, none: None },
+    light: Shades { entries: &MARKER_PALETTE, none: None },
+};
+
+/// The 16 range, Swarm Core's own: more identifiers, by a stable pick of their id (an object's
+/// type, a thread).
 pub const RANGE_16: Range = Range {
     name: "range16",
     meaning: "Up to 16 identifiers by a stable pick of their id: an object's type, a thread, a source",
-    source: "The first 16 of range32",
-    dark: Shades { entries: GLASBEY_DARK.split_at(16).0 },
-    light: Shades { entries: GLASBEY_LIGHT.split_at(16).0 },
+    source: "Swarm Core's own, beyond the shared palette's: the first 16 of range32",
+    dark: Shades { entries: GLASBEY_DARK.split_at(16).0, none: None },
+    light: Shades { entries: GLASBEY_LIGHT.split_at(16).0, none: None },
 };
 
-/// The 32 range: many identifiers side by side. Any two differ (CIEDE2000 10 or more), but 32
-/// colours can't each be named or matched to a legend alone: it tells neighbours apart.
+/// The 32 range, Swarm Core's own: many identifiers side by side. Any two differ (CIEDE2000 10
+/// or more), but 32 colours can't each be named or matched to a legend alone: it tells neighbours
+/// apart.
 pub const RANGE_32: Range = Range {
     name: "range32",
     meaning: "Up to 32 identifiers side by side (the rows of a timeline, the bars of a scrubber): told apart beside each other, not matched to a legend alone",
-    source: "Glasbey et al. 2007's sets in colorcet 3.2.1 (Peter Kovesi, CC-BY 4.0): glasbey_light in the dark look, glasbey_dark's nearest hue to each in the light",
-    dark: Shades { entries: &GLASBEY_DARK },
-    light: Shades { entries: &GLASBEY_LIGHT },
+    source: "Swarm Core's own, beyond the shared palette's: Glasbey et al. 2007's sets in colorcet 3.2.1 (Peter Kovesi, CC-BY 4.0), glasbey_light in the dark look and glasbey_dark's nearest hue to each in the light, 11 entries nudged to 3:1 on the shared palette's backgrounds",
+    dark: Shades { entries: &GLASBEY_DARK, none: None },
+    light: Shades { entries: &GLASBEY_LIGHT, none: None },
 };
 
-/// Every range, in the order `ui.theme` gives them.
-pub const RANGES: [Range; 3] = [RANGE_8, RANGE_16, RANGE_32];
+/// Every range, in the order `ui.theme` gives them: the shared palette's, then Swarm Core's.
+pub const RANGES: [Range; 4] = [SERIES, MARKERS, RANGE_16, RANGE_32];
 
 /// What `ui.theme` returns: the theme as data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -444,7 +542,7 @@ pub struct TokenData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RangeData {
     pub name: String,
-    /// How many colours it has.
+    /// How many colours it has (`at` and `pick` choose from these; none is apart).
     pub size: u32,
     /// What it is for.
     pub meaning: String,
@@ -452,9 +550,11 @@ pub struct RangeData {
     pub source: String,
     /// Its colours, by index.
     pub entries: Vec<EntryData>,
+    /// The colour for none, where the range has one (the series' grey), indexed after the entries.
+    pub none: Option<EntryData>,
 }
 
-/// One colour of a range, in each look, and made a background for text in each.
+/// One colour of a range, in each look, made a background for text in each, and its border in each.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EntryData {
     pub index: u32,
@@ -466,6 +566,24 @@ pub struct EntryData {
     pub behind_text_dark: String,
     /// The light look's colour made a text background, `#RRGGBB`.
     pub behind_text_light: String,
+    /// The dark look's colour's border, when it is drawn filled ([`darker`]), `#RRGGBB`.
+    pub border_dark: String,
+    /// The light look's colour's border, `#RRGGBB`.
+    pub border_light: String,
+}
+
+impl EntryData {
+    fn of(index: u32, dark: Rgb, light: Rgb) -> EntryData {
+        EntryData {
+            index,
+            dark: dark.to_hex(),
+            light: light.to_hex(),
+            behind_text_dark: behind_text(dark, Look::Dark).to_hex(),
+            behind_text_light: behind_text(light, Look::Light).to_hex(),
+            border_dark: darker(dark).to_hex(),
+            border_light: darker(light).to_hex(),
+        }
+    }
 }
 
 /// The theme as `ui.theme` gives it.
@@ -475,16 +593,11 @@ pub fn data() -> ThemeData {
 }
 
 fn range_data(range: &Range) -> RangeData {
-    let entries = range.dark.entries().iter().zip(range.light.entries()).zip(0u32..).map(|((&dark, &light), index)| EntryData {
-        index,
-        dark: dark.to_hex(),
-        light: light.to_hex(),
-        behind_text_dark: behind_text(dark, Look::Dark).to_hex(),
-        behind_text_light: behind_text(light, Look::Light).to_hex(),
-    });
+    let entries = range.dark.entries().iter().zip(range.light.entries()).zip(0u32..).map(|((&dark, &light), index)| EntryData::of(index, dark, light));
     let entries: Vec<EntryData> = entries.collect();
     let size = u32::try_from(entries.len()).unwrap_or(u32::MAX);
-    RangeData { name: range.name.into(), size, meaning: range.meaning.into(), source: range.source.into(), entries }
+    let none = range.dark.none().zip(range.light.none()).map(|(dark, light)| EntryData::of(size, dark, light));
+    RangeData { name: range.name.into(), size, meaning: range.meaning.into(), source: range.source.into(), entries, none }
 }
 
 #[cfg(test)]

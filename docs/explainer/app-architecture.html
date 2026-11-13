@@ -187,6 +187,7 @@ tbody th { font-weight: 500; }
 .range { display: flex; flex-direction: column; gap: .45rem; }
 .strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 3px; padding: 8px; border-radius: 6px; border: 1px solid var(--rule); }
 .strip.eight { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.strip.nine { grid-template-columns: repeat(9, minmax(0, 1fr)); }
 .strip i { display: block; height: 1.5rem; border-radius: 2px; }
 .strip-label { font-size: .86rem; color: var(--muted); }
 
@@ -284,7 +285,7 @@ tbody th { font-weight: 500; }
       <div class="rules">
         <div class="rule"><h3>Its state is data</h3><p>Open views, selection, scroll and layout are plain versioned data. <code>ui.inspect</code> reads it and <code>ui.set</code> changes it, so an agent drives the window the way a click does.</p></div>
         <div class="rule"><h3>It draws what a command returned</h3><p>No totals, filters or derived state in a view. A test draws a frame headlessly and compares its text with the command's typed result.</p></div>
-        <div class="rule"><h3>Colours from the theme, words from the catalog</h3><p>Drawing code makes no colour and writes no string. Text tokens are measured at 4.5:1 contrast, range colours at 3:1. An identifier's colour is a fixed hash of its id, the same on every machine.</p></div>
+        <div class="rule"><h3>Colours from the theme, words from the catalog</h3><p>Drawing code makes no colour and writes no string. The skeleton's colours are the palette the swarm's tools share. Text tokens are measured at 4.5:1 contrast and range colours at 3:1, and a shared value that falls short is kept and recorded, never nudged silently. An identifier's colour is a fixed hash of its id, the same on every machine.</p></div>
         <div class="rule"><h3>Changes ship with pictures</h3><p>A UI change carries before and after screenshots, rendered by a script of commands so the picture is the same each time.</p></div>
       </div>
     </div>
@@ -436,25 +437,31 @@ tbody th { font-weight: 500; }
   <div hidden>
     <div class="palette" id="palette">
       <h3>The skeleton's palette</h3>
-      <p>Nine tokens are named for what they mean. Most start from egui's default look; where one fell short of 4.5:1 contrast as text, the theme nudged it.</p>
+      <p>Twenty tokens are named for what they mean. They are the palette the swarm's tools share, so an app looks like them; <code>strong</code> and <code>success</code> are Swarm Core's own. A shared value that falls short of a contrast minimum is kept and recorded with its measured ratio, never nudged silently.</p>
       <div class="scroll">
         <table class="tokens">
           <thead><tr><th>Token</th><th>Meaning</th><th>Dark</th><th>Light</th></tr></thead>
           <tbody id="tokens"></tbody>
         </table>
       </div>
-      <p>Three categorical ranges colour identifiers, where a colour tells things apart. Each entry reaches 3:1 against its background, shown here on the app's own dark and light.</p>
+      <p>Four categorical ranges colour identifiers, where a colour tells things apart. They are shown here on the app's own dark and light backgrounds. A filled entry is edged in a darker border, each channel at 0.8.</p>
       <div class="range">
-        <h3>Range of 8</h3>
-        <div class="strip eight" id="set1-dark"></div>
-        <div class="strip eight" id="set1-light"></div>
-        <p class="strip-label">ColorBrewer Set1, as published on dark. On light, four entries are darkened to reach 3:1.</p>
+        <h3>Series</h3>
+        <div class="strip eight" id="series-dark"></div>
+        <div class="strip eight" id="series-light"></div>
+        <p class="strip-label">ColorBrewer Dark2 on dark and Set2 on light, as published. A number takes entry n % 7; the eighth swatch is the grey for something with no number.</p>
+      </div>
+      <div class="range">
+        <h3>Markers</h3>
+        <div class="strip nine" id="markers-dark"></div>
+        <div class="strip nine" id="markers-light"></div>
+        <p class="strip-label">ColorBrewer Set1 with the shared orange, then grey. The same in both looks.</p>
       </div>
       <div class="range">
         <h3>Range of 32</h3>
         <div class="strip" id="glasbey-dark"></div>
         <div class="strip" id="glasbey-light"></div>
-        <p class="strip-label">colorcet's Glasbey sets, ordered so each colour is as far as possible from all before it. The range of 16 is the first 16 of these. An identifier keeps its colour family when the look changes.</p>
+        <p class="strip-label">Swarm Core's own: colorcet's Glasbey sets, ordered so each colour is as far as possible from all before it, each reaching 3:1 against its background. The range of 16 is the first 16 of these. An identifier keeps its colour family when the look changes.</p>
       </div>
     </div>
   </div>
@@ -563,23 +570,36 @@ OUTSIDE.forEach(o => {
 });
 show(LAYERS[3]);
 
-const APP_BG = { dark: "#1B1B1B", light: "#F8F8F8" };
+const APP_BG = { dark: "#353535", light: "#EFEFEF" };
 const TOKENS = [
-  ["background", "What everything is drawn on", "1B1B1B", "F8F8F8"],
-  ["text", "Body text", "8C8C8C", "505050"],
-  ["strong", "Emphasised text, and text on a range colour", "FFFFFF", "000000"],
-  ["muted", "Text that matters less: a hint, a command that can't run", "848484", "707070"],
-  ["accent", "A link, or what draws the eye to an action", "5AAAFF", "0B74C0"],
-  ["selection", "What is selected: its fill, with strong text on it", "005C80", "90D1FF"],
+  ["background", "What everything is drawn on: a panel's fill", "353535", "EFEFEF"],
+  ["chrome", "The menu bar, the status bar and other chrome", "353535", "EFEFEF"],
+  ["panel", "Floating windows, dialogs and popups", "353535", "EFEFEF"],
+  ["base", "Views: lists, tables and text fields", "2A2A2A", "FFFFFF"],
+  ["alt_base", "Every other row of a list drawn on base", "303030", "F7F7F7"],
+  ["header", "Table header rows and a ruler", "3F3F3F", "CACACA"],
+  ["frame", "Lines that frame views and panels", "424242", "ABABAB"],
+  ["border", "Decorative lines: window frames and separators", "424242", "ABABAB"],
+  ["text", "Body text", "FCFCFC", "000000"],
+  ["strong", "Emphasised text, and text on a range colour made a text background", "FFFFFF", "000000"],
+  ["muted", "Text that matters less: a command the UI can't run here, a hint", "A6A6A6", "666666"],
+  ["selected_text", "Text on the selection", "FCFCFC", "000000"],
+  ["link", "A link", "4DA6FF", "1F6FA8"],
+  ["control", "The fill of a widget at rest: a button, a field", "454545", "F7F7F7"],
+  ["control_border", "The edge of a widget at rest: 3:1 on the background", "858585", "7A7A7A"],
+  ["accent", "An accent that carries no text: what has focus, an outline", "007ACC", "2B78AE"],
+  ["selection", "What is selected: its fill, with selected_text on it", "0070BB", "C1DCEE"],
   ["success", "Something that worked", "90EE90", "006400"],
-  ["warning", "Something to look at that hasn't failed", "FF8F00", "C14B04"],
-  ["error", "A failure, or why a command can't run now", "FE3017", "E20C03"],
+  ["warning", "Something to look at that hasn't failed", "FF7F1C", "965C00"],
+  ["error", "A failure, or why a command can't run now", "FF8A80", "B42318"],
 ];
 const STRIPS = {
-  "set1-dark": ["dark", "E41A1C 377EB8 4DAF4A 984EA3 FF7F00 FFFF33 A65628 F781BF"],
-  "set1-light": ["light", "E41A1C 377EB8 3EA13D 984EA3 DF6E01 919207 A65628 D965A3"],
-  "glasbey-dark": ["dark", "D70000 028800 B600FF 06ACC6 98FF00 FFA530 FF8FC8 00FECF B0A5FF 94AD84 9A6900 D3008C FEF590 C86F66 9EE3FF 00C946 A977AD B8BB02 F4C0B1 FF28FD F3CEFF 009F7D FF6200 FF3465 A0E492 8D9BB2 829126 78C7BB BC9258 E58FFF 72B9FF C6A5C1"],
-  "glasbey-light": ["light", "D70000 028800 BB00FE 0088B1 6C9700 CC7407 C5668F 019F70 5A4AA3 546745 755A00 C63189 8F7B01 9D5743 086B84 006D2E A67BB8 596D00 A2766A FF00CE 836F8C 00816A EB4E00 CB0044 004B00 536177 4C5001 4B9894 9F6E32 7F2B8E 698DBE AC8499"],
+  "series-dark": ["dark", "1B9E77 D95F02 7570B3 E7298A 66A61E E6AB02 A6761D 666666"],
+  "series-light": ["light", "66C2A5 FC8D62 8DA0CB E78AC3 A6D854 FFD92F E5C494 B3B3B3"],
+  "markers-dark": ["dark", "E41A1C 377EB8 4DAF4A 984EA3 FF7F1C FFFF33 A65628 F781BF 999999"],
+  "markers-light": ["light", "E41A1C 377EB8 4DAF4A 984EA3 FF7F1C FFFF33 A65628 F781BF 999999"],
+  "glasbey-dark": ["dark", "F12F17 1B9211 C727FF 06ACC6 98FF00 FFA530 FF8FC8 00FECF B0A5FF 94AD84 A77412 E6299C FEF590 C86F66 9EE3FF 00C946 A977AD B8BB02 F4C0B1 FF28FD F3CEFF 009F7D FF6200 FF3465 A0E492 8D9BB2 829126 78C7BB BC9258 E58FFF 72B9FF C6A5C1"],
+  "glasbey-light": ["light", "D70000 028800 BB00FE 0088B1 6C9700 CC7407 C5668F 009D6F 5A4AA3 546745 755A00 C63189 8F7B01 9D5743 086B84 006D2E A57AB7 596D00 A2766A FD00CD 836F8C 00816A EB4E00 CB0044 004B00 536177 4C5001 499692 9F6E32 7F2B8E 688CBD A67E93"],
 };
 const tokens = palette.querySelector("#tokens");
 TOKENS.forEach(([name, meaning, dark, light]) => {

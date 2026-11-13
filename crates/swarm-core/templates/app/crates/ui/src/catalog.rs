@@ -28,6 +28,10 @@ pub const INFO_NAME: &str = "Name";
 pub const INFO_VERSION: &str = "Version";
 pub const INFO_SCHEMA_VERSION: &str = "Schema version";
 
+/// A range's colour for something with no number or id (the series' grey), where the swatch view
+/// writes an entry's index.
+pub const NONE: &str = "none";
+
 /// A categorical range's size, in the swatch view (`ui.theme`).
 pub fn range_size(size: u32) -> String {
     format!("{size} colours")
