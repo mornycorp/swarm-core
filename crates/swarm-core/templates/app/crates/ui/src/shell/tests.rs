@@ -337,6 +337,61 @@ fn the_swatch_view_draws_ui_themes_answer() {
     }
 }
 
+/// A rectangle or a text a frame drew: what it says (a text), where it is, and the rectangle it is
+/// clipped to.
+#[derive(Debug)]
+struct Placed {
+    text: Option<String>,
+    at: egui::Rect,
+    clip: egui::Rect,
+}
+
+fn place(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<Placed>) {
+    let at = shape.visual_bounding_rect();
+    match shape {
+        egui::Shape::Text(text) => out.push(Placed { text: Some(text.galley.text().to_owned()), at, clip }),
+        egui::Shape::Rect(_) => out.push(Placed { text: None, at, clip }),
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| place(s, clip, out)),
+        _ => {}
+    }
+}
+
+/// **A range's row wraps** (mornycorp/swarm-core#102): in a window 400 px wide, every entry of `range32` (its square, its
+/// index's background and its index, all drawn after the range's name) is inside the rectangle it
+/// is clipped to, the view's, rather than past its right edge. The window is tall enough for the
+/// whole view, so only the width can hide an entry.
+#[test]
+fn a_ranges_row_wraps_so_range32_shows_whole_in_a_narrow_window() {
+    let session = Arc::new(Session::new(app()).unwrap());
+    let (mut shell, _) = shell_of(&session, &[]);
+    shell.set_show_list(false);
+    shell.activate(row_of(&shell, "ui.theme"));
+    finish(&mut shell);
+    let answer = session.call_typed::<UiThemeCommand>(UiThemeParams::default(), &CallOpts::new(Caller::Test)).unwrap();
+    let range = answer.ranges.iter().find(|r| r.name == "range32").unwrap();
+    assert_eq!(answer.ranges.last().map(|r| &r.name), Some(&range.name), "range32 is drawn last, so all after its name is its");
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 8000.0));
+    let mut placed = Vec::new();
+    for _ in 0..2 {
+        placed.clear();
+        let mut frame = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| shell.ui(ui));
+        frame.shapes.iter().for_each(|clipped| place(&clipped.shape, clipped.clip_rect, &mut placed));
+        frame.textures_delta.clear();
+    }
+    let name = placed.iter().position(|p| p.text.as_deref() == Some(range.name.as_str())).unwrap();
+    let entries = &placed[name..];
+    let want: Vec<String> = range.entries.iter().map(|e| e.index.to_string()).collect();
+    let indexes: Vec<&Placed> = entries.iter().filter(|p| p.text.as_ref().is_some_and(|t| want.contains(t))).collect();
+    assert_eq!(indexes.iter().filter_map(|p| p.text.clone()).collect::<Vec<_>>(), want, "every index of range32 is drawn, in order");
+    assert!(indexes.windows(2).any(|w| w[1].at.min.y > w[0].at.max.y), "range32 takes more than one line at 400 px: {indexes:?}");
+    for p in entries {
+        assert!(p.clip.max.x <= screen.max.x, "the view is clipped to the window: {p:?}");
+        assert!(p.clip.contains_rect(p.at), "range32 shows whole at 400 px wide: {p:?} is outside the view");
+    }
+}
+
 /// The UI's state is the session's: a `ui.set` made as an agent makes it (the wire form) changes
 /// what the next frame draws, and a click is a `ui.set` that `ui.inspect` then reports.
 #[test]

@@ -191,19 +191,28 @@ fn swatches(shown: &Shown, theme: &Theme, ui: &mut Ui) {
 
 /// A square of the swatch's colour in the window's look, edged in a range entry's border, and under
 /// it the entry's number, on the entry made a background for text, or a token's value.
+///
+/// The square and its text are one cell, sized before it is placed, so the wrapping row it is in
+/// moves it to the next line when it doesn't fit. A child `Ui` (`ui.vertical`) is placed without
+/// that check, and a range's row ran off the view's right edge (mornycorp/swarm-core#102).
 fn swatch(swatch: &Swatch, theme: &Theme, ui: &mut Ui) {
-    ui.vertical(|ui| {
+    let (text, behind) = match &swatch.number {
+        Some(number) => (RichText::new(&number.index).color(theme.strong), Some(theme.parse(number.behind_text.of(theme.look)))),
+        None => (RichText::new(swatch.colour.of(theme.look)).monospace(), None),
+    };
+    let text = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let cell = egui::vec2(SWATCH.max(text.size().x), SWATCH + ui.spacing().item_spacing.y + text.size().y);
+    ui.allocate_ui_with_layout(cell, egui::Layout::top_down(egui::Align::Min), |ui| {
         let (square, _) = ui.allocate_exact_size(egui::Vec2::splat(SWATCH), egui::Sense::hover());
         let fill = theme.parse(swatch.colour.of(theme.look));
         let edge = swatch.border.as_ref().map_or(egui::Stroke::NONE, |border| egui::Stroke::new(1.0, theme.parse(border.of(theme.look))));
         ui.painter().rect(square, 0.0, fill, edge, egui::StrokeKind::Inside);
-        match &swatch.number {
-            Some(number) => {
-                let fill = theme.parse(number.behind_text.of(theme.look));
-                egui::Frame::NONE.fill(fill).show(ui, |ui| ui.colored_label(theme.strong, &number.index));
+        match behind {
+            Some(fill) => {
+                egui::Frame::NONE.fill(fill).show(ui, |ui| ui.label(text));
             }
             None => {
-                ui.monospace(swatch.colour.of(theme.look));
+                ui.label(text);
             }
         }
     });
