@@ -575,7 +575,7 @@ pub fn rev(root: &Path, r: &str) -> Result<String, String> {
 }
 
 /// Does `from..to` hold a merge commit?
-fn has_merges(root: &Path, from: &str, to: &str) -> Result<bool, String> {
+pub(crate) fn has_merges(root: &Path, from: &str, to: &str) -> Result<bool, String> {
     Ok(git(root, &["rev-list", "--merges", "--count", &format!("{from}..{to}")], None, &[])?.trim() != "0")
 }
 

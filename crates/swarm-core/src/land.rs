@@ -19,7 +19,14 @@
 //!    tree, and whose newer `main` changes none of the PR's files ([`gated_on_newer`],
 //!    mornycorp/swarm-core#37). Any other move onto a base the gate didn't test, or to another
 //!    tree, stops. And `s-<pr>` is still the rebased tip the gate tested
-//!    ([`tested_tip`]). And the PR isn't closed: one GitHub closed when its base branch went (the
+//!    ([`tested_tip`]). **A PR stacked on one that merged as other commits** (the server rebased
+//!    it, step 4: `main` lacks what this PR was stacked onto, [`Entry::onto`]) holds that PR's
+//!    original commits, which the server's rebase would replay and which conflict with their
+//!    copies when `main` is merged in (swarm-core#114). Its own commits are rebased onto `main`
+//!    here instead (`git rebase --onto <remote>/<base> <onto>`, [`onto_main`]), and the result is
+//!    pushed only when it carries the gated change ([`carries_gated`]). A rebase that stops at
+//!    the progress docs merges `main` in instead (step 4); any other conflict stops, naming the
+//!    files, nothing pushed. And the PR isn't closed: one GitHub closed when its base branch went (the
 //!    head branch of the PR below it, merged and deleted, sc#19) gets that branch pushed back
 //!    from the stack's record, is reopened, retargeted onto `main`, and the branch deleted again
 //!    ([`closed`]); a step that fails, or a PR closed any other way, stops with the steps to do by
@@ -94,7 +101,9 @@ fn usage(project: &Project) -> String {
   HEAD the gate tested (<target>/gate-logs/<sub>.rc): checks each PR holds work and each remote
   branch is still its pre-rebase tip (or a worker's push since that, restacked onto the same base,
   is the tree the gate tested; a PR GitHub closed when the branch it was stacked on went is pushed
-  that branch back, reopened onto main and the branch deleted again), force-pushes the rebased
+  that branch back, reopened onto main and the branch deleted again), rebases its own commits onto
+  main when what it was stacked on isn't in main (the PR below merged as the server's rebase; only
+  the gated change is pushed), force-pushes the rebased
   branch and checks it landed, notes the gate's summary, retargets
   onto main every open PR stacked on its branch, brings it up to main when it is behind (a server
   rebase, or main merged in), merges (docs-only: [skip ci]), confirms the merge, logs `merge --sub <gate sub>` and tidies
@@ -360,11 +369,70 @@ pub fn untested(stack: &Stack, sub: &str, tested: &str) -> Option<String> {
 }
 
 /// Is `local`, `s-<pr>`'s commit, what the gate tested of the PR? The recorded rebased tip
-/// (`new_tip`) is; so is a commit `land` made on it and pushed (`main` merged in, step 4, before a
-/// rerun), which `remote` (the source branch's tip now) then is. A branch moved any other way since
-/// `stack` is not.
-pub fn tested_tip(local: &str, new_tip: &str, remote: Option<&str>, descends: impl FnOnce() -> bool) -> bool {
-    local == new_tip || (remote == Some(local) && descends())
+/// (`new_tip`) is; so is a commit `land` made of it and pushed before a rerun, which `remote` (the
+/// source branch's tip now) then is: `main` merged in (step 4), or the gated change rebased onto
+/// `main` ([`onto_main`]), which `lands_own` says. A branch moved any other way since `stack` is
+/// not.
+pub fn tested_tip(local: &str, new_tip: &str, remote: Option<&str>, lands_own: impl FnOnce() -> bool) -> bool {
+    local == new_tip || (remote == Some(local) && lands_own())
+}
+
+/// What `land` pushes of a PR, and how it reaches `main`'s head ([`onto_main`]).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Onto {
+    /// The stacked tip: the server rebases it (step 4).
+    Stacked,
+    /// This commit: the PR's own commits rebased onto `main` here, the gated change.
+    Main(String),
+    /// The stacked tip, with `main` merged in (step 4's fallback) because rebasing it stopped at
+    /// docs the merge resolves: why.
+    MergeIn(String),
+}
+
+/// Does `land` rebase the PR onto `main` itself (swarm-core#114)? When what `stack` put it on
+/// isn't in `main` (`onto_in_main`): the PR below merged as other commits (the server rebased
+/// it), so its branch holds that PR's originals, which the server's rebase replays and which
+/// conflict with their copies when `main` is merged in. Not for a branch `land` pushed already
+/// (`local` isn't the stacked tip), one with merge commits (`merges`: a rebase would drop them;
+/// step 4 merges `main` in), or a record that names no base.
+pub fn rebase_here(e: &Entry, local: &str, onto_in_main: impl FnOnce() -> bool, merges: impl FnOnce() -> bool) -> bool {
+    !e.merged_base && !e.onto.is_empty() && local == e.new_tip && !onto_in_main() && !merges()
+}
+
+/// Step 1's last part: the PR's own commits, from what `stack` put it on to `local`, rebased onto
+/// `<remote>/<base>` when [`rebase_here`] says so, in a detached HEAD (`s-<pr>` moves once it is
+/// pushed). The result must carry the gated change ([`carries_gated`]: the gated tree on that
+/// base, or the same patch), else nothing is pushed. A rebase that stops at the progress docs
+/// falls back to merging `main` in, which resolves them; any other conflict stops, naming the
+/// files.
+fn onto_main(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, local: &str) -> Result<Onto, String> {
+    let root = plan.root;
+    let tracking = format!("refs/remotes/{remote}/{base}");
+    event::fetch(root, remote, &format!("refs/heads/{base}"), &tracking)?;
+    let in_main = || git(root, &["merge-base", "--is-ancestor", &e.onto, &tracking], None, &[]).is_ok();
+    let merges = || stack::has_merges(root, &e.onto, local).unwrap_or(true);
+    if !rebase_here(e, local, in_main, merges) {
+        return Ok(Onto::Stacked);
+    }
+    let what = format!("rebasing #{}'s own commits onto {remote}/{base} (what it was stacked on, {}, isn't in {base})", e.mr, short(&e.onto));
+    git(root, &["checkout", "--quiet", "--detach", local], None, &[])?;
+    let rebase = ["-c", "merge.conflictStyle=merge", "rebase", "--quiet", "--onto", &tracking, &e.onto];
+    if let Err(err) = stack::git_slow(root, &rebase, &[("GIT_EDITOR", "true"), ("GIT_SEQUENCE_EDITOR", "true")]) {
+        // The abort runs whatever the listing says: never leave the gate's worktree mid-rebase.
+        let files = git(root, &["diff", "--name-only", "--diff-filter=U"], None, &[]);
+        git(root, &["rebase", "--abort"], None, &[]).map_err(|a| format!("{what}: {err}, and the abort failed: {a}"))?;
+        let files: Vec<String> = files?.lines().map(str::to_owned).collect();
+        return match stack::plan_conflicts(plan.project, &files, false) {
+            Ok(_) => Ok(Onto::MergeIn(format!("{what} stopped at {}, so {base} is merged in", files.join(", ")))),
+            Err(why) => Err(format!("{what}: {why} (rebase aborted, nothing pushed; {err})")),
+        };
+    }
+    let rebased = stack::rev(root, "HEAD")?;
+    if !carries_gated(&change_facts(root, remote, base, e, &rebased)?) {
+        return Err(format!("{what}: {} is not the change the gate tested ({}), nothing pushed: restack", short(&rebased), short(&e.new_tip)));
+    }
+    println!("land: #{} rebased onto {remote}/{base} without what it was stacked on: {} carries the gated change", e.mr, short(&rebased));
+    Ok(Onto::Main(rebased))
 }
 
 /// The entries `mrs` names: the next ones of the stack, in its order (a PR below one landed must
@@ -490,18 +558,25 @@ fn land_one(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Resu
     if !stack::valid_branch(src) {
         return Err(format!("source branch `{src}` is not one to push"));
     }
-    let local = stacked_tip(root, remote, e)?;
+    let local = stacked_tip(root, remote, base, e)?;
 
     // 1, 2: never over a worker's newer commits (unless restacked they are the gated tree, or on a
     // newer `main` the gated patch, #37); never
     // merge a push that didn't land. A PR GitHub closed when the branch it was stacked on went is
-    // reopened first: nothing is pushed to a closed PR's branch.
+    // reopened first: nothing is pushed to a closed PR's branch. Stacked on a PR that merged as
+    // other commits, it goes onto `main` here first (swarm-core#114).
     let over = push_over(root, remote, base, e, &local)?;
+    let onto = onto_main(plan, remote, base, e, &local)?;
     reopen_orphan(plan, one, e, fx)?;
-    push_checked(plan.project, root, remote, src, &over, &local)?;
+    let push = if let Onto::Main(rebased) = &onto { rebased } else { &local };
+    push_checked(plan.project, root, remote, src, &over, push)?;
+    if let Onto::Main(rebased) = &onto {
+        // Only once pushed: until then a rerun finds `s-<pr>` the tip the gate tested.
+        git(root, &["checkout", "--quiet", "-B", &stack::local_branch(e.mr), rebased], None, &[])?;
+    }
     // `stack`'s regenerated docs are a commit in that tip: pushed with the PR.
     let regen = if e.regenerated.is_empty() { String::new() } else { format!(", with regenerated {}", e.regenerated.join(", ")) };
-    println!("land: #{} pushed {src} at {}{regen}", e.mr, short(&local));
+    println!("land: #{} pushed {src} at {}{regen}", e.mr, short(push));
 
     // 3.
     fx.note(e.mr, one.body)?;
@@ -509,7 +584,10 @@ fn land_one(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Resu
     retarget_stacked(plan, one, e, fx)?;
 
     // 4, 5.
-    merge_when_ready(plan, remote, base, e, fx)?;
+    if let Onto::MergeIn(why) = &onto {
+        println!("land: #{}: {why}", e.mr);
+    }
+    merge_when_ready(plan, remote, base, e, matches!(onto, Onto::MergeIn(_)), fx)?;
 
     // 6: nothing below runs on a merge that didn't happen.
     confirm_merged(e.mr, fx)?;
@@ -531,15 +609,19 @@ fn land_one(plan: &Plan<'_>, one: &One<'_>, e: &Entry, fx: &dyn Effects) -> Resu
 }
 
 /// `s-<pr>`'s commit, which must still be what the gate tested ([`tested_tip`]).
-fn stacked_tip(root: &Path, remote: &str, e: &Entry) -> Result<String, String> {
+fn stacked_tip(root: &Path, remote: &str, base: &str, e: &Entry) -> Result<String, String> {
     let branch = stack::local_branch(e.mr);
     let local = stack::rev(root, &format!("refs/heads/{branch}")).map_err(|_| format!("no local branch {branch}: restack"))?;
     if local == e.new_tip {
         return Ok(local);
     }
     let seen = remote_tip(root, remote, &format!("refs/heads/{}", e.source_branch))?;
-    let descends = || git(root, &["merge-base", "--is-ancestor", &e.new_tip, &local], None, &[]).is_ok();
-    if tested_tip(&local, &e.new_tip, seen.as_deref(), descends) {
+    // `land`'s own: `main` merged in (step 4), or the gated change rebased onto `main`.
+    let lands_own = || {
+        git(root, &["merge-base", "--is-ancestor", &e.new_tip, &local], None, &[]).is_ok()
+            || change_facts(root, remote, base, e, &local).is_ok_and(|h| carries_gated(&h))
+    };
+    if tested_tip(&local, &e.new_tip, seen.as_deref(), lands_own) {
         return Ok(local);
     }
     Err(format!("{branch} is {}, not the {} the stack recorded and the gate tested: restack", short(&local), short(&e.new_tip)))
@@ -764,10 +846,10 @@ fn record_merge(plan: &Plan<'_>, e: &Entry, fx: &dyn Effects) {
 }
 
 /// Steps 4 and 5: the wait, bringing the PR up to `main` while it is behind (the server's rebase,
-/// or `main` merged in), and the merge at the head seen, tried again while GitHub refuses it.
-/// Returns once the merge was asked for, or the PR merged already.
-fn merge_when_ready(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, fx: &dyn Effects) -> Result<(), String> {
-    let mut merged_in = e.merged_base;
+/// or `main` merged in: always when `merge_in`), and the merge at the head seen, tried again while
+/// GitHub refuses it. Returns once the merge was asked for, or the PR merged already.
+fn merge_when_ready(plan: &Plan<'_>, remote: &str, base: &str, e: &Entry, merge_in: bool, fx: &dyn Effects) -> Result<(), String> {
+    let mut merged_in = e.merged_base || merge_in;
     if merged_in {
         // `stack` merged its base in: keep it so (a server rebase would replay the merges).
         merge_base_in(plan, remote, base, e)?;
@@ -880,6 +962,13 @@ fn head_facts(root: &Path, remote: &str, base: &str, e: &Entry, sha: &str) -> Re
     if sha == pushed || sha == e.new_tip {
         return Ok(Head { pushed: true, ..Head::default() });
     }
+    change_facts(root, remote, base, e, sha)
+}
+
+/// [`head_facts`] for a commit taken as no push of `land`'s: its tree and patch against where it
+/// forks from `<remote>/<base>`, and the gated change's. Also `land`'s own rebase onto `main`
+/// ([`onto_main`]), before it is pushed and on a rerun.
+fn change_facts(root: &Path, remote: &str, base: &str, e: &Entry, sha: &str) -> Result<Head, String> {
     event::fetch_tip(root, remote, &format!("refs/heads/{}", e.source_branch))?;
     let base_tip = event::fetch_tip(root, remote, &format!("refs/heads/{base}"))?.ok_or_else(|| format!("{remote}/{base} is gone"))?;
     let unknown = |_| format!("the server's head of {} is {}, which {remote} doesn't have: can't check it is the gated change", e.source_branch, short(sha));
@@ -2025,6 +2114,111 @@ mod tests {
         let calls = fake.calls();
         assert!(calls.contains(&format!("merge 1 {rebased} [skip ci]")), "{calls:?}");
         assert!(calls.contains(&"delete 1-one".to_owned()), "{calls:?}");
+    }
+
+    /// swarm-core#114's stack: PR 1 adds `one.rs`, PR 2 (stacked on it) edits the lines PR 1
+    /// added and writes `two`'s files. While `land` waits for PR 1, `main` moves on (writing
+    /// `meanwhile`) and the server rebases PR 1's branch onto it: `main` then holds rewritten
+    /// copies of the commits `s-2` was stacked on. The server refuses to rebase PR 2 off those,
+    /// should it be asked. The server's merges move `main`.
+    fn after_a_server_rebase(name: &str, two: &[(&str, &str)], meanwhile: &'static [(&'static str, &'static str)]) -> (World, Stack, Fake) {
+        let one = [("one.rs", "fn one() {}\n")];
+        let (w, stack) = world_with(name, false, &one, two);
+        let mut fake = Fake::new(&w, true);
+        fake.merges_main = true;
+        fake.refuse_rebase.insert(2);
+        let origin = w.origin.clone();
+        *fake.during_wait.borrow_mut() = Some(Box::new(move || {
+            testgit::push_commit(&origin, "main", &["main"], meanwhile, "main moves on again");
+            testgit::push_commit(&origin, "1-one", &["main"], &one, "1-one, rebased by the server");
+        }));
+        (w, stack, fake)
+    }
+
+    /// A PR stacked on one `land` merged by the server's rebase holds the rewritten PR's original
+    /// commits, which `main` has as other commits; merging `main` in conflicted with its own
+    /// predecessor. It is rebased onto `main` without them and lands, the gated change.
+    #[test]
+    fn a_stacked_pr_after_a_server_rebased_one_lands_rebased_onto_main() {
+        let two = [("one.rs", "fn one() { two() }\n"), ("two.rs", "fn two() {}\n")];
+        let (w, mut stack, fake) = after_a_server_rebase("after-server-rebase", &two, &[("later.md", "later")]);
+        let gated = stack.entries[1].clone();
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        assert_eq!(land(&plan, &mut stack, &[1, 2], &fake).unwrap(), vec![1, 2]);
+
+        // PR 2 went in as its own commit on `main` after PR 1: nothing of `s-1` rode along.
+        let pushed = origin_tip(&w, "2-two");
+        let main = origin_tip(&w, "main");
+        assert_eq!(tgit(&w.origin, &["rev-parse", &format!("{main}^2")]).trim(), pushed);
+        assert_eq!(tgit(&w.origin, &["rev-list", "--count", &format!("{main}^1..{pushed}")]).trim(), "1");
+        assert_eq!(tgit(&w.origin, &["show", &format!("{main}:one.rs")]), "fn one() { two() }\n");
+        assert_eq!(tgit(&w.origin, &["show", &format!("{main}:later.md")]), "later");
+        // It is the gated change: the same patch as the stacked one, and the branch `land` keeps.
+        tgit(&w.coord, &["fetch", "--quiet", "origin"]);
+        let pid = |from: &str, to: &str| patch_id(&w.coord, from, to).unwrap();
+        assert_eq!(pid(&format!("{pushed}^"), &pushed), pid(&gated.onto, &gated.new_tip));
+        assert_eq!(tgit(&w.coord, &["rev-parse", "s-2"]).trim(), pushed);
+        let calls = fake.calls();
+        assert!(calls.contains(&format!("merge 2 {pushed} -")) && calls.contains(&"delete 2-two".to_owned()), "{calls:?}");
+        assert!(!calls.contains(&"rebase 2".to_owned()), "the server is never asked to rebase it: {calls:?}");
+    }
+
+    /// A rerun after `land` pushed its rebase of the PR and stopped (the merge didn't happen)
+    /// goes on from that push: `s-<pr>` is `land`'s own, carrying the gated change, and isn't
+    /// rebased or pushed again.
+    #[test]
+    fn a_rerun_goes_on_from_lands_own_rebase() {
+        let two = [("one.rs", "fn one() { two() }\n")];
+        let (w, mut stack, fake) = after_a_server_rebase("after-server-rebase-rerun", &two, &[("later.md", "later")]);
+        let plan =
+            Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &top(&stack), owner: None, note: None };
+        assert_eq!(land(&plan, &mut stack, &[1], &fake).unwrap(), vec![1]);
+        let e = land(&plan, &mut stack, &[2], &Fake::new(&w, false)).unwrap_err();
+        assert!(e.contains("#2 stopped") && e.contains("not merged"), "{e}");
+        let pushed = origin_tip(&w, "2-two");
+        assert_ne!(pushed, top(&stack), "the rebase was pushed");
+        assert_eq!(tgit(&w.coord, &["rev-parse", "s-2"]).trim(), pushed);
+
+        let mut fake = Fake::new(&w, true);
+        fake.merges_main = true;
+        assert_eq!(land(&plan, &mut stack, &[2], &fake).unwrap(), vec![2]);
+        assert_eq!(origin_tip(&w, "2-two"), pushed, "not rebased or pushed again");
+        assert!(fake.calls().contains(&format!("merge 2 {pushed} -")), "{:?}", fake.calls());
+    }
+
+    /// PR 2's own change conflicts with what `main` gained meanwhile. Its rebase onto `main`
+    /// stops, naming only its own file (not PR 1's, whose copies `main` has), and nothing of it
+    /// is pushed; the worktree is left clean, `s-2` as stacked.
+    #[test]
+    fn a_stacked_pr_whose_own_change_conflicts_with_main_stops_naming_its_files() {
+        let two = [("one.rs", "fn one() { two() }\n"), ("two.rs", "fn two() {}\n")];
+        let (w, mut stack, fake) = after_a_server_rebase("after-server-rebase-conflict", &two, &[("two.rs", "fn two() { main() }\n")]);
+        let (old, stacked) = (origin_tip(&w, "2-two"), top(&stack));
+        let plan = Plan { project: &P, root: &w.coord, sub: "gate-9", summary: "CI summary: all 6 steps passed", tested: &stacked, owner: None, note: None };
+        let e = land(&plan, &mut stack, &[1, 2], &fake).unwrap_err();
+        assert!(e.contains("#2 stopped") && e.contains("two.rs") && e.contains("nothing pushed"), "{e}");
+        assert!(!e.contains("one.rs"), "{e}");
+        assert_eq!(origin_tip(&w, "2-two"), old, "nothing pushed");
+        assert_eq!(tgit(&w.coord, &["rev-parse", "s-2"]).trim(), stacked);
+        assert_eq!(stack::check_clean(&w.coord), Ok(()));
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| c.split(' ').nth(1) == Some("2")), "{calls:?}");
+        assert_eq!(stack::load(&P, &w.coord).unwrap().entries.iter().map(|e| e.mr).collect::<Vec<_>>(), [2]);
+    }
+
+    /// `land` rebases a PR itself only when what it was stacked on isn't in `main`, on the tip
+    /// `stack` left, without merge commits, with a base recorded.
+    #[test]
+    fn land_rebases_onto_main_only_a_pr_whose_base_main_lacks() {
+        let never = || -> bool { panic!("asked git though the answer was known") };
+        let e = entry(2);
+        assert!(rebase_here(&e, "n", || false, || false), "the PR below merged as other commits");
+        assert!(!rebase_here(&e, "n", || true, never), "the PR below is in main as it was stacked: the server rebases it");
+        assert!(!rebase_here(&e, "n", || false, || true), "merge commits: main is merged in");
+        assert!(!rebase_here(&e, "pushed", never, never), "land pushed its own already: a rerun");
+        assert!(!rebase_here(&Entry { merged_base: true, ..entry(2) }, "n", never, never));
+        assert!(!rebase_here(&Entry { onto: String::new(), ..entry(2) }, "n", never, never), "a record that names no base");
     }
 
     #[test]
