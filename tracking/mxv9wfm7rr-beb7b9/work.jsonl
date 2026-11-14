@@ -15,3 +15,4 @@
 {"event":"sub.stop","note":"rc=0","sub":"ready-0311606","t":"2026-11-14T10:46:08Z"}
 {"event":"submit","issue":104,"mr":105,"t":"2026-11-14T10:46:17Z"}
 {"event":"claim","issue":106,"t":"2026-11-14T10:47:33Z"}
+{"event":"work","issue":106,"mr":107,"t":"2026-11-14T10:47:43Z"}
