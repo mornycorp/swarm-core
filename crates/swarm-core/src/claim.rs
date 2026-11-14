@@ -86,6 +86,7 @@ fn usage(project: &Project) -> String {
   --force    claim even though someone holds it, on a new branch and PR (a hold lifted by hand)
   --take-over  take over a stale claim and keep its branch and PR: when the coordinator released
              it (`event release --of`), or it has had no activity for 24 hours
+             (with --force: an idle claim on a held issue, once the coordinator said so)
   --check    warn when another agent holds the current branch's issue (--strict: fail)",
         project.env_name("AGENT")
     )
@@ -1060,7 +1061,7 @@ pub fn full_gate_line(issue: u64, mr: Option<u64>) -> String {
 /// ([`plans_full_gate`]).
 fn claim(ctx: &Ctx<'_>, o: &Opts) -> Result<(), String> {
     if o.take_over {
-        return crate::takeover::run(ctx, opened(ctx, o)?, o.no_switch);
+        return crate::takeover::run(ctx, opened(ctx, o)?, o.no_switch, o.force);
     }
     let mut c = checked(ctx, o)?;
     let gate = plans_full_gate(o.no_fullgate, crate::fullgate::capable(ctx.project, ctx.hooks));

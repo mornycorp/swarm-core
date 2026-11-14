@@ -73,8 +73,38 @@ pub fn parse(description: &str) -> BTreeSet<Ref> {
 /// (its own path is its own issue): each line's first clause after `Blocked on`, `Blocked by`,
 /// `Waiting for`, `Needs` or `Depends on`. `Blocked on mornycorp/swarm-timeline#194 (the fix is
 /// the widget's). Once #194 merges…` names only `mornycorp/swarm-timeline#194`.
+///
+/// A line that says what it waits on after other words is read too (`Blocked: waiting on #12 and
+/// owner/repo#4.`): the first clause after its first `waiting on` or `waiting for`.
 pub fn parse_hold_for(project: &Project, text: &str) -> BTreeSet<Ref> {
-    text.lines().filter_map(|l| clause(l, HOLD_WORDS)).flat_map(refs).take(MAX_NEEDS).map(|r| own(project, r)).collect()
+    text.lines().filter_map(|l| clause(l, HOLD_WORDS).or_else(|| waiting(l))).flat_map(refs).take(MAX_NEEDS).map(|r| own(project, r)).collect()
+}
+
+/// `line`'s first clause after its first `waiting on` or `waiting for` that starts a word,
+/// wherever in the line it is: `None` for a line without one.
+fn waiting(line: &str) -> Option<&str> {
+    let line = capped(line);
+    // ASCII lower-casing keeps every byte where it was, so an index in `lower` is one in `line`.
+    let lower = line.to_ascii_lowercase();
+    let starts_a_word = |at: usize| !lower.get(..at).and_then(|s| s.chars().next_back()).is_some_and(char::is_alphanumeric);
+    let at =
+        ["waiting on", "waiting for"].iter().filter_map(|w| lower.match_indices(w).find(|(at, _)| starts_a_word(*at)).map(|(at, w)| at + w.len())).min()?;
+    Some(first_clause(line.get(at..)?))
+}
+
+/// `line` cut at [`MAX_LINE`] bytes, on a char boundary.
+fn capped(line: &str) -> &str {
+    let cut = (0..=line.len().min(MAX_LINE)).rev().find(|&k| line.is_char_boundary(k)).unwrap_or(0);
+    line.get(..cut).unwrap_or_default()
+}
+
+/// `rest` up to its first clause's end: a `;`, or a `.` that ends a sentence.
+fn first_clause(rest: &str) -> &str {
+    let end = rest
+        .char_indices()
+        .find(|&(at, c)| c == ';' || (c == '.' && rest.get(at + 1..).is_none_or(|r| r.is_empty() || r.starts_with(' '))))
+        .map_or(rest.len(), |(at, _)| at);
+    rest.get(..end).unwrap_or_default()
 }
 
 /// The issues `description` needs, read by `project`: its own path is its own issue.
@@ -92,17 +122,11 @@ fn own(project: &Project, r: Ref) -> Ref {
 
 /// A line's first clause after one of `words` (a `Needs` line's): `None` for any other line.
 fn clause<'a>(line: &'a str, words: &[&str]) -> Option<&'a str> {
-    let cut = (0..=line.len().min(MAX_LINE)).rev().find(|&k| line.is_char_boundary(k)).unwrap_or(0);
-    let line = line.get(..cut)?;
+    let line = capped(line);
     let bare = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '>' | '_'));
     let lower = bare.to_ascii_lowercase();
     let word = words.iter().find(|w| lower.starts_with(**w))?;
-    let rest = bare.get(word.len()..)?;
-    let end = rest
-        .char_indices()
-        .find(|&(at, c)| c == ';' || (c == '.' && rest.get(at + 1..).is_none_or(|r| r.is_empty() || r.starts_with(' '))))
-        .map_or(rest.len(), |(at, _)| at);
-    rest.get(..end)
+    Some(first_clause(bare.get(word.len()..)?))
 }
 
 /// A character of a GitHub repository's `owner/name`.
@@ -323,6 +347,9 @@ mod tests {
             assert_eq!(parse_hold_for(&project, &own), set(&[7, 9]), "{}", project.name);
             assert!(parse(&own).is_empty(), "`Blocked on` and `Waiting for` aren't a Needs line");
             assert_eq!(parse_hold_for(&project, "Needs #3."), set(&[3]));
+            let mid = format!("Blocked: waiting on #12 and {}#4. Then #13.\nStill awaiting for #14, not waiting for the owner.", project.github.repo);
+            assert_eq!(parse_hold_for(&project, &mid), set(&[4, 12]), "{}: in mid line, and only where the words start", project.name);
+            assert!(parse(&mid).is_empty(), "a description's needs read as they did");
         }
     }
 

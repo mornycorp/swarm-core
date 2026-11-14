@@ -376,6 +376,15 @@ pub fn tail(commit: &str) -> String {
     format!("; kind=full; commit={commit}")
 }
 
+/// The `sub.stop` note of a full gate of `commit` that never ran: `superseded: <why>`, cut so
+/// that its [`tail`] (the `commit=` a reader finds the gate by) stays whole.
+pub fn superseded(why: &str, commit: &str) -> String {
+    const WHAT: &str = "superseded: ";
+    let tail = tail(commit);
+    let room = event::MAX_NOTE.saturating_sub(WHAT.len() + tail.chars().count());
+    format!("{WHAT}{}{tail}", gate::one_line(why, room))
+}
+
 /// A full gate's `sub.start` note: `<what>; capacity=<n> free=<GB>; kind=full; commit=<sha>`,
 /// then `extra` (a project's own field, such as `corpus=on (…)`), within the event's note limit
 /// (`what` is cut, never the convention).
@@ -684,7 +693,7 @@ pub fn take_if_due(ctx: &Ctx<'_>, agent: &str, here: bool) -> Result<Outcome, St
             lock_ref::take(root, project.branches.remote, &g, agent, &sub, &main)
         });
         if let Err(why) = won {
-            gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+            gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &superseded(&why, &main)]);
             return Ok(Outcome::Yielded(why));
         }
         let rechecked = (|| {
@@ -701,12 +710,12 @@ pub fn take_if_due(ctx: &Ctx<'_>, agent: &str, here: bool) -> Result<Outcome, St
                 return Err(e);
             }
             Ok(Recheck::Verified(why)) => {
-                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &superseded(&why, &main)]);
                 return Ok(Outcome::Yielded(why));
             }
             Ok(Recheck::Moved(to)) if retargets < MAX_RETARGETS => {
                 let why = format!("main moved to {} while this gate waited for the machine: gating it instead", short(&to));
-                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &format!("superseded: {why}{tail}")]);
+                gate::log_event(project, root, &["sub.stop", "--agent", agent, "--sub", &sub, "--note", &superseded(&why, &main)]);
                 println!("fullgate: {why}");
                 main = to;
                 continue;
@@ -1051,6 +1060,15 @@ mod tests {
     /// mornycorp/swarm-core#36: a full gate that waited for the machine lock reads again. Nothing
     /// changed: it runs. Another gate passed `main` meanwhile: it steps aside. `main` moved: it
     /// gates the new tip, unless that was verified meanwhile too.
+    /// A long why is cut, never the `commit=` a reader finds the gate by.
+    #[test]
+    fn a_superseded_note_keeps_its_commit() {
+        let note = superseded(&"main moved ".repeat(60), "abcdef0");
+        assert!(note.starts_with("superseded: main moved") && note.ends_with(&tail("abcdef0")), "{note}");
+        assert_eq!(note.chars().count(), event::MAX_NOTE);
+        assert_eq!(superseded("w-1 first", "abcdef0"), format!("superseded: w-1 first{}", tail("abcdef0")));
+    }
+
     #[test]
     fn a_gate_that_waited_for_the_machine_rechecks_main() {
         let since = T0;
