@@ -150,13 +150,15 @@ pub fn is_mine(issue: u64, tracked: &[Tracked], notes: &[Value], me: &Me) -> boo
 }
 
 /// The PR a takeover of `issue` adopts, from `mrs` (the open PRs): the only open one for the
-/// issue, or the one the newest claim comment (`newest`) names.
-pub fn pick_pr(issue: u64, mrs: &[Pr], newest: Option<&ClaimNote>) -> Result<Pr, String> {
+/// issue, or with several, the one the newest claim comment that names one of them names
+/// (`claims`, oldest first as [`claim::all_claims`] gives them: a newer claim's PR that has
+/// closed is passed over).
+pub fn pick_pr(issue: u64, mrs: &[Pr], claims: &[ClaimNote]) -> Result<Pr, String> {
     let open: Vec<&Pr> = mrs.iter().filter(|m| m.state == "open" && m.is_for(issue)).collect();
     if let [only] = open.as_slice() {
         return Ok((*only).clone());
     }
-    if let Some(m) = newest.and_then(|n| n.mr).and_then(|m| open.iter().find(|p| p.number == m)) {
+    if let Some(m) = claims.iter().rev().filter_map(|n| n.mr).find_map(|m| open.iter().find(|p| p.number == m)) {
         return Ok((*m).clone());
     }
     if open.is_empty() {
@@ -274,11 +276,12 @@ pub fn unblock(cause: &BTreeSet<Ref>, found: &BTreeMap<Ref, Need>) -> Result<Str
 /// Whether a takeover on `grounds` must wait for a hold on the issue, whose [`unblock`] decision is
 /// `hold` (`None`: not on hold): an idle claim's hold that may still have its cause holds the
 /// takeover too, since a held issue is idle by design; the coordinator's say-so, or my own claim,
-/// goes ahead and leaves the label on.
-pub fn held_back(issue: u64, grounds: &Grounds, hold: Option<&Result<String, String>>) -> Option<String> {
+/// goes ahead and leaves the label on. Its say-so is its release of the claim, or `force`
+/// (`--take-over --force`) once it has said so on the issue.
+pub fn held_back(issue: u64, grounds: &Grounds, hold: Option<&Result<String, String>>, force: bool) -> Option<String> {
     match (grounds, hold) {
-        (Grounds::Idle { .. }, Some(Err(why))) => Some(format!(
-            "claim: #{issue} is on hold, and {why}: an idle claim on a held issue is taken over only on the coordinator's say-so (`cargo xtask event release --issue {issue} --of <its instance> --reason stale`)"
+        (Grounds::Idle { .. }, Some(Err(why))) if !force => Some(format!(
+            "claim: #{issue} is on hold, and {why}: an idle claim on a held issue is taken over only on the coordinator's say-so (`cargo xtask event release --issue {issue} --of <its instance> --reason stale`, or pass --force once it has said so on the issue)"
         )),
         _ => None,
     }
@@ -334,7 +337,8 @@ pub enum Adopted {
     Same,
     /// It was behind, and moved up to origin's head.
     Moved,
-    /// It was behind, and couldn't be moved (checked out in a worktree): why.
+    /// It was behind, and couldn't be moved (checked out in a worktree): why. The take-over is
+    /// refused ([`behind`]): the work would go on without the PR's newest commits.
     Behind(String),
     /// It has commits origin's head doesn't: the take-over is refused (mornycorp/swarm-core#34).
     Ahead,
@@ -376,9 +380,19 @@ pub fn commit_time(root: &Path, tip: &str) -> Option<i64> {
     git(root, &["log", "-1", "--format=%ct", tip], None, &[]).ok()?.trim().parse().ok()
 }
 
-/// `cargo xtask claim <n> --take-over`, once [`claim`]'s first checks (`o`) have passed.
-pub(crate) fn run(ctx: &Ctx<'_>, o: Opened, no_switch: bool) -> Result<(), String> {
-    let t = checked(ctx, o, no_switch)?;
+/// The refusal of a take-over whose local `branch` is behind origin's and couldn't be moved up
+/// (`why`: git's own, it is checked out in a worktree): nothing has been posted yet, and the
+/// command that moves it is named.
+pub fn behind(branch: &str, why: &str) -> String {
+    format!(
+        "claim: branch {branch} here is behind origin's and couldn't be moved up ({why}): where it is checked out, `git merge --ff-only origin/{branch}`, then take over again"
+    )
+}
+
+/// `cargo xtask claim <n> --take-over`, once [`claim`]'s first checks (`o`) have passed. `force`:
+/// the coordinator's say-so for an idle claim on a held issue ([`held_back`]).
+pub(crate) fn run(ctx: &Ctx<'_>, o: Opened, no_switch: bool, force: bool) -> Result<(), String> {
+    let t = checked(ctx, o, no_switch, force)?;
     for step in plan() {
         t.take(step)?;
     }
@@ -398,11 +412,11 @@ struct Takeover<'a> {
 }
 
 /// The takeover's checks: a PR to adopt, its branch on origin, and the claim stale ([`grounds`]).
-fn checked<'a>(ctx: &Ctx<'a>, o: Opened, no_switch: bool) -> Result<Takeover<'a>, String> {
+fn checked<'a>(ctx: &Ctx<'a>, o: Opened, no_switch: bool, force: bool) -> Result<Takeover<'a>, String> {
     let issue = o.issue;
     let me = Me { instance: Some(o.agent.clone()), name: Some(o.name.clone()), branch: None };
     let olds = old_holders(issue, &o.facts.tracked, &o.notes, &me);
-    let pr = pick_pr(issue, &o.facts.mrs, o.facts.claim_note.as_ref())?;
+    let pr = pick_pr(issue, &o.facts.mrs, &claim::all_claims(&o.notes))?;
     check_branch(&pr.head_ref)?;
     let tip = event::fetch_tip(ctx.root, "origin", &format!("refs/heads/{}", pr.head_ref))?
         .ok_or_else(|| format!("claim: PR #{}'s branch {} isn't on origin: nothing to take over", pr.number, pr.head_ref))?;
@@ -410,7 +424,7 @@ fn checked<'a>(ctx: &Ctx<'a>, o: Opened, no_switch: bool) -> Result<Takeover<'a>
     let mine = is_mine(issue, &o.facts.tracked, &o.notes, &me);
     let grounds = grounds(issue, &olds, mine, commit_time(ctx.root, &tip), now)?;
     let hold = hold(ctx.project, &o);
-    if let Some(refused) = held_back(issue, &grounds, hold.as_ref()) {
+    if let Some(refused) = held_back(issue, &grounds, hold.as_ref(), force) {
         return Err(refused);
     }
     let why = grounds.describe(now);
@@ -462,9 +476,7 @@ impl Takeover<'_> {
             Adopted::Made => println!("claim: made branch {branch} at origin's head"),
             Adopted::Same => println!("claim: branch {branch} is at origin's head"),
             Adopted::Moved => println!("claim: moved branch {branch} up to origin's head"),
-            Adopted::Behind(e) => {
-                eprintln!("warning: claim: branch {branch} here is behind origin's and couldn't be moved ({e}): `git merge --ff-only origin/{branch}` on it")
-            }
+            Adopted::Behind(e) => return Err(behind(branch, &e)),
             Adopted::Ahead => return Err(ahead(branch)),
         }
         Ok(())
@@ -526,7 +538,7 @@ fn release_event(agent: &str, issue: &str, of: &str, note: &str) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claim::{latest_claim, parse_time};
+    use crate::claim::parse_time;
     use crate::project::fixtures::{APP_SWARM as P, BOTH};
     use serde_json::json;
 
@@ -710,16 +722,23 @@ mod tests {
     #[test]
     fn the_pr_to_adopt_is_the_only_one_or_the_one_the_claim_names() {
         let mrs = [pr(93, "92-a11y-test", "A11y test (#92)"), pr(94, "77-other", "Other (#77)")];
-        assert_eq!(pick_pr(92, &mrs, None).map(|m| m.number), Ok(93));
-        let none = pick_pr(92, &mrs[1..], None).unwrap_err();
+        assert_eq!(pick_pr(92, &mrs, &[]).map(|m| m.number), Ok(93));
+        let none = pick_pr(92, &mrs[1..], &[]).unwrap_err();
         assert!(none.contains("no open PR to take over") && none.contains("cargo xtask claim 92"), "{none}");
         let two = [pr(93, "92-a11y-test", "A11y test (#92)"), pr(95, "92-again", "Again (#92)")];
-        let refused = pick_pr(92, &two, None).unwrap_err();
+        let refused = pick_pr(92, &two, &[]).unwrap_err();
         assert!(refused.contains("2 open PRs") && refused.contains("#95 (branch 92-again)"), "{refused}");
-        let named = latest_claim(&[note("claimed: worker-38, PR #95", "2026-11-03T08:30:10Z")]);
-        assert_eq!(pick_pr(92, &two, named.as_ref()).map(|m| m.head_ref), Ok("92-again".into()));
+        let named = claim::all_claims(&[note("claimed: worker-38, PR #95", "2026-11-03T08:30:10Z")]);
+        assert_eq!(pick_pr(92, &two, &named).map(|m| m.head_ref), Ok("92-again".into()));
+        // The newest claim names a PR that has closed: the one before it names an open one.
+        let earlier = claim::all_claims(&[
+            note("claimed: worker-38, PR #93", "2026-11-03T08:30:10Z"),
+            note("claimed: worker-40, PR #97", "2026-11-03T09:30:10Z"),
+            note("claimed: worker-41", "2026-11-03T09:40:10Z"),
+        ]);
+        assert_eq!(pick_pr(92, &two, &earlier).map(|m| m.number), Ok(93), "an earlier claim's open PR");
         let closed = Pr { state: "closed".into(), ..pr(96, "92-old", "Old (#92)") };
-        assert_eq!(pick_pr(92, &[closed, mrs[0].clone()], None).map(|m| m.number), Ok(93), "a closed PR isn't adopted");
+        assert_eq!(pick_pr(92, &[closed, mrs[0].clone()], &[]).map(|m| m.number), Ok(93), "a closed PR isn't adopted");
     }
 
     #[test]
@@ -758,12 +777,13 @@ mod tests {
     fn an_idle_claim_on_a_held_issue_waits_for_the_coordinator() {
         let idle = Grounds::Idle { since: t("2026-11-01T08:00:00Z") };
         let stays: Result<String, String> = Err("its cause may not be gone: #5 is open".into());
-        let refused = held_back(92, &idle, Some(&stays)).unwrap();
-        assert!(refused.contains("#5 is open") && refused.contains("--of <its instance>"), "{refused}");
-        assert_eq!(held_back(92, &idle, Some(&Ok("#5".into()))), None, "its cause is gone");
-        assert_eq!(held_back(92, &idle, None), None, "not on hold");
-        assert_eq!(held_back(92, &Grounds::Released, Some(&stays)), None);
-        assert_eq!(held_back(92, &Grounds::Mine, Some(&stays)), None);
+        let refused = held_back(92, &idle, Some(&stays), false).unwrap();
+        assert!(refused.contains("#5 is open") && refused.contains("--of <its instance>") && refused.contains("--force"), "{refused}");
+        assert_eq!(held_back(92, &idle, Some(&stays), true), None, "--force: the coordinator said so on the issue");
+        assert_eq!(held_back(92, &idle, Some(&Ok("#5".into())), false), None, "its cause is gone");
+        assert_eq!(held_back(92, &idle, None, false), None, "not on hold");
+        assert_eq!(held_back(92, &Grounds::Released, Some(&stays), false), None);
+        assert_eq!(held_back(92, &Grounds::Mine, Some(&stays), false), None);
     }
 
     #[test]
@@ -840,7 +860,9 @@ mod tests {
         tgit(&theirs, &["add", "c.txt"]);
         tgit(&theirs, &["commit", "--quiet", "-m", "c"]);
         tgit(&theirs, &["push", "--quiet", "origin", "92-a11y-test"]);
-        assert!(matches!(adopt(&mine, "92-a11y-test"), Ok(Adopted::Behind(_))));
+        let Ok(Adopted::Behind(why)) = adopt(&mine, "92-a11y-test") else { panic!("checked out here, it can't be moved") };
+        let refused = behind("92-a11y-test", &why);
+        assert!(refused.contains("git merge --ff-only origin/92-a11y-test") && refused.contains("take over again"), "{refused}");
         // Not checked out anywhere: moved up.
         tgit(&mine, &["switch", "--quiet", "--detach"]);
         assert_eq!(adopt(&mine, "92-a11y-test"), Ok(Adopted::Moved));

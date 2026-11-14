@@ -835,7 +835,7 @@ On each finished pull request:
        ci --changed --base origin/main` instead, the run that `ready` skipped, so a test run
        stands behind every merge. `gate` finds the PRs in the stack record (or the issues of the
        branches `--merge` names) and reads their submits on the tracking branch; its note names
-       them (`kind=changed (ready --no-ci: #<m>)`). The docs, tooling and full gates run `ci
+       them (`kind=changed (ready --no-ci: #<m>; <the smoke's why>)`). The docs, tooling and full gates run `ci
        --changed` or more already, and stay. A tracking branch it can't read is a warning, and
        the smoke stays.
 

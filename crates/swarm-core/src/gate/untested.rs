@@ -6,7 +6,7 @@
 //! [`NO_CI`]. `gate` reads the tracking branch for the PRs it gates (the stack record's, or the
 //! issues of the branches `--merge` names) and, when the latest `submit` of one says `no-ci`,
 //! runs [`Kind::Changed`] (`ci --changed --base origin/main`) instead of the smoke, its why naming
-//! them (`kind=changed (ready --no-ci: #220)`). A later `ready` with its run is a `submit` without
+//! them (`kind=changed (ready --no-ci: #220; reaches model)`, the smoke's own why kept). A later `ready` with its run is a `submit` without
 //! the note, and the smoke is enough again. The docs, tooling and full gates run `ci --changed`
 //! or more already, and stay.
 
@@ -95,12 +95,13 @@ pub fn untested(files: &[(String, String)], gated: &[Gated]) -> Vec<u64> {
 }
 
 /// The gate's kind once the PRs readied without their run (`untested`) are known: the smoke
-/// becomes [`Kind::Changed`], its why naming them; any other kind stays.
+/// becomes [`Kind::Changed`], its why naming them and keeping the smoke's own; any other kind stays.
 pub fn kind_for(planned: (Kind, String), untested: &[u64]) -> (Kind, String) {
     match planned {
-        (Kind::Smoke, _) if !untested.is_empty() => {
+        (Kind::Smoke, why) if !untested.is_empty() => {
             let prs: Vec<String> = untested.iter().map(|n| format!("#{n}")).collect();
-            (Kind::Changed, format!("ready --no-ci: {}", prs.join(" ")))
+            let why = if why.is_empty() { String::new() } else { format!("; {why}") };
+            (Kind::Changed, format!("ready --no-ci: {}{why}", prs.join(" ")))
         }
         other => other,
     }
@@ -175,8 +176,9 @@ mod tests {
         let untested = untested(&files, &[Gated::Pr(221), Gated::Pr(220)]);
         assert_eq!(untested, [220]);
         let (kind, why) = kind_for(smoke.clone(), &untested);
-        assert_eq!((kind, why.as_str()), (Kind::Changed, "ready --no-ci: #220"));
-        assert_eq!(super::super::kind_field(kind, &why), "kind=changed (ready --no-ci: #220)");
+        assert_eq!((kind, why.as_str()), (Kind::Changed, "ready --no-ci: #220; reaches model"));
+        assert_eq!(kind_for((Kind::Smoke, String::new()), &untested).1, "ready --no-ci: #220", "a smoke with no why of its own");
+        assert_eq!(super::super::kind_field(kind, &why), "kind=changed (ready --no-ci: #220; reaches model)");
         assert_eq!(kind.ci_args(), ["--changed", "--base", "origin/main"]);
         assert!(kind.builds() && Kind::Smoke < kind && kind < Kind::Full);
         // No such PR in the stack: the smoke.
@@ -188,7 +190,7 @@ mod tests {
         }
         // Two of them, in the stack's order.
         let both = [file("w-1", &[NO_CI_220, &TESTED_221.replace(r#""t""#, r#""note":"no-ci; again","t""#)])];
-        assert_eq!(kind_for(smoke, &self::untested(&both, &[Gated::Pr(221), Gated::Pr(220)])).1, "ready --no-ci: #221 #220");
+        assert_eq!(kind_for(smoke, &self::untested(&both, &[Gated::Pr(221), Gated::Pr(220)])).1, "ready --no-ci: #221 #220; reaches model");
     }
 
     /// Only a PR's latest submit counts: readied again with its run, the smoke is enough; readied
@@ -235,7 +237,7 @@ mod tests {
             assert_eq!(kind(&project, &clone, &[], smoke.clone()), smoke, "{}: no tracking branch yet", project.name);
             let send = |line: &str| crate::event::send(&project, &clone, &dir.join("queue.jsonl"), &[("w-1".to_owned(), line.to_owned())]).unwrap();
             send(NO_CI_220);
-            let changed = (Kind::Changed, "ready --no-ci: #220".to_owned());
+            let changed = (Kind::Changed, "ready --no-ci: #220; reaches model".to_owned());
             assert_eq!(kind(&project, &clone, &[], smoke.clone()), changed, "{}", project.name);
             assert_eq!(kind(&project, &clone, &["210-x".into()], smoke.clone()), changed, "{}: --merge", project.name);
             assert_eq!(kind(&project, &clone, &[], (Kind::Docs, "x".into())).0, Kind::Docs, "{}", project.name);
