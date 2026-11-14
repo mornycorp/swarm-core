@@ -25,3 +25,4 @@
 {"event":"sub.stop","note":"rc=0","sub":"ready-81fe4f7","t":"2026-11-14T10:58:28Z"}
 {"event":"submit","issue":108,"mr":109,"t":"2026-11-14T10:58:36Z"}
 {"event":"claim","issue":110,"t":"2026-11-14T13:16:48Z"}
+{"event":"work","issue":110,"mr":111,"t":"2026-11-14T13:16:58Z"}
