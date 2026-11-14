@@ -35,11 +35,14 @@ what it serves and how a consumer wires it in; the swarm protocol
 - **The architectural substrate** is the name for the way this crate defines an app's
   architecture: the contract (`assets/docs/app-architecture.md`), the skeleton that implements
   it and the checks that hold it. Call it that in issues, PRs and docs.
-- **The explainer** (`docs/explainer/app-architecture.html`) is a page for people: the
-  architectural substrate at a glance. Don't read it to learn the rules: the contract and the skeleton are
-  the source. A change to the contract's layers or rules, the checks that hold them, the list of
-  commands or the skeleton's theme colours updates the page in the same PR, so it never says
-  what the code doesn't.
+- **The explainers** are pages for people, shipped as assets beside the docs they explain. Don't
+  read them to learn the rules: the contract and the skeleton are the source.
+  `assets/docs/app-substrate.html` is the architectural substrate at a glance. A test holds its
+  layers, commands and limits to the code, and it names the contract revision it was last read
+  against: a change that adds a row to the contract's revision history re-reads the page against
+  it and moves the stamp, in the same PR. `assets/docs/app-ui-substrate.html` is generated from
+  `app-ui-substrate.md`: never edit it by hand, run `cargo xtask docs render` (a test fails on a
+  stale page).
 - **Checks:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`. `cargo xtask ci` runs them with the doctests and the app skeleton's
   end to end: the coordinator's gate. `cargo xtask ci --changed --base origin/main` runs them

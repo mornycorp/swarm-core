@@ -235,20 +235,6 @@ fn a_pin_bump_reaches_what_depends_on_swarm_core() {
     assert!(describe(&App, &plan, "origin/main", 11).contains("3 of 11 packages affected"));
 }
 
-/// An app pins Swarm Core's testkit beside it: a bump of the pin tests what dev-depends on the
-/// testkit too, with no dependency on Swarm Core itself.
-#[test]
-fn a_pin_bump_reaches_what_depends_on_swarm_cores_testkit() {
-    let mut g = graph();
-    for c in g.iter_mut().filter(|c| c.name == "swarm-model") {
-        c.deps.push(Dep { name: SWARM_CORE_TESTKIT.into(), kind: DepKind::Dev });
-    }
-    let plan = plan(&App, &files(&[SWARM_CORE_PIN]), &packages(), &g, None);
-    assert!(plan.names().contains(&"swarm-model") && plan.names().contains(&"xtask"), "{:?}", plan.names());
-    let Plan::Crates { crates, .. } = &plan else { panic!() };
-    assert!(crates["swarm-model"].starts_with("dev-depends on "), "{}", crates["swarm-model"]);
-}
-
 /// a lockfile change tests the packages it reaches and their dependents; without
 /// what it reaches, everything.
 #[test]

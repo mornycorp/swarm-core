@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The App UI Substrate
 
-> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (menus: on macOS the system menu bar, made from the same menu paths, and the window's own bar elsewhere; a link to the App Substrate's page; the window is in the skeleton: its size and place kept beside the UI state, glow kept, a drawn icon from the palette; the dock is in the skeleton, with egui_tiles: the layout in the UI state, `ui.set`'s checks, its look; the page beside it, in step: `app-ui-substrate.html`; icons are in the skeleton: `icons.rs`, `BY_COMMAND`, the menu column; density is in the skeleton: `density.rs`, installed by `theme::apply`; type is in the skeleton: the faces in `assets/fonts/`, `fonts.rs`, the text styles; the corner radius is in the skeleton: the theme's `CORNER_RADIUS`, `ui.theme`'s `corner_radius`; new: the theme as data, the 20 tokens and 4 ranges, the egui visuals, the contrast rules, and what the skeleton is to adopt: the corner radius, type, density, icons, dock and window · **Target:** M1
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (the page is generated from this doc by `cargo xtask docs render`, never by hand; new: the theme as data, the 20 tokens and 4 ranges, egui's visuals, the contrast rules, type, density, icons, the dock, the window and the menus, each in the skeleton) · **Target:** M1
 
 How {{product}} looks. This is the UI part of the architectural substrate: every app built on
 Swarm Core draws with the same theme, type, density and chrome, so the swarm's tools look and work
@@ -13,10 +13,10 @@ catalog](app-architecture.md#colours-from-the-theme-words-from-the-catalog)); th
 *what* they are.
 
 The colours here are the skeleton's own, from `templates/app/crates/engine/src/theme.rs`, and a
-test holds this document to them (`the_ui_substrate_has_the_skeletons_colours`). **[The page](app-ui-substrate.html)** says the same, with the
-colours drawn (each range on both backgrounds, with its borders and text backgrounds): open it in a
-browser. The same test holds its colours, and `the_ui_substrate_page_and_doc_agree` each section's
-status, so the two stay in step.
+test holds this document to them (`the_ui_substrate_has_the_skeletons_colours`). **[The page](app-ui-substrate.html)** is this document as a
+page, with the colours drawn (each range on both backgrounds, with its borders and text
+backgrounds): open it in a browser. It is generated from this document and never edited by hand
+([section 13](#13-changing-the-ui-substrate)).
 
 Each section says where it stands:
 
@@ -148,6 +148,8 @@ draws them.
 | `markers` | 9 | Up to 9 marks told apart at a glance, the same in both looks: a marker by number (`at`), or a few ids (`pick`) | ColorBrewer Set1 (the same source) with the orange `#FF7F1C` for its `#FF7F00`, then grey |
 | `range16` | 16 | Up to 16 identifiers by a stable pick of their id: an object's type, a thread, a source | The first 16 of `range32` |
 | `range32` | 32 | Up to 32 identifiers side by side (the rows of a timeline, the bars of a scrubber), told apart beside each other, not only by a legend | Glasbey et al. 2007's sets in colorcet 3.2.1 (Peter Kovesi, CC BY 4.0): `glasbey_light` in dark, and `glasbey_dark`'s nearest hue to each in light; 11 entries nudged to 3:1 |
+
+<!-- page: ranges -->
 
 ### `series`
 
@@ -391,7 +393,7 @@ UI maps the same data to wherever the platform puts menus, and no command change
 
   | Menu | Holds |
   |---|---|
-  | The application menu, titled by the system with the app bundle's name (an unbundled binary's, as `cargo run`'s, shows the executable's) | About <product> (the system's panel, with the name and version), the app's own `App` items, Services, Hide <product>, Hide Others, Show All, Quit <product> (⌘Q) |
+  | The application menu, titled by the system with the app bundle's name (an unbundled binary's, as `cargo run`'s, shows the executable's) | About \<product> (the system's panel, with the name and version), the app's own `App` items, Services, Hide \<product>, Hide Others, Show All, Quit \<product> (⌘Q) |
   | The app's menus | in the order the commands first name them, as the window's bar has them |
   | Window | the app's own `Window` items, then Minimize, Zoom and Bring All to Front; the system lists the app's windows there |
   | Help | last, when the app has one; the system adds its search field |
@@ -415,18 +417,27 @@ UI maps the same data to wherever the platform puts menus, and no command change
 
 1. **A colour** is a token in the engine's `theme.rs`, named for what it means, with a value in
    each look, in `TOKENS`. Its contrast is measured where it is read: a shortfall is nudged and
-   noted, or kept in `KEPT_SHORT` with its ratio and why. Change this document and
-   [the page](app-ui-substrate.html) with it: their test fails on a colour that differs.
+   noted, or kept in `KEPT_SHORT` with its ratio and why. Change its row in this document with it:
+   the colour test fails on a colour that differs.
 2. **An identifier's colour** comes from a range, by `pick` or `at`, never a colour of its own.
 3. **A metric** goes in `density`, a text size in `fonts`, an icon in `icons`, each with a doc
    comment saying where its value comes from.
 4. **A new command** gets its icon in the command table, and **a new pane** its icon in the pane
    mapping.
 5. **Every word** a person reads is in the string catalog.
-6. **Check a UI change by eye:** render it offscreen and put the picture on the merge request.
+6. **Check a UI change by eye:** render it offscreen and put the picture on the pull request.
+7. **Edit this document, never [the page](app-ui-substrate.html).** In swarm-core,
+   `cargo xtask docs render` makes the page from it: its text, a swatch beside each colour, each
+   section's status as a badge, and the ranges drawn from the skeleton's `theme.rs` where
+   `<!-- page: ranges -->` stands (each range's table of entries is folded there, as the drawing
+   shows them). The test `the_pages_are_rendered_from_their_docs` fails when the
+   committed page differs from a fresh render, naming the command and the first line that differs.
+   It holds what `the_ui_substrate_page_and_doc_agree` and the page's half of
+   `the_ui_substrate_has_the_skeletons_colours` held, and both are gone.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-14 | minor | New: the App UI Substrate. The theme as data, the 20 tokens and the 4 ranges in both looks, egui's visuals, the contrast rules and what `KEPT_SHORT` keeps, and the corner radius, type, density, icons, the dock (egui_tiles), the window and the app icon, and the menus (the system menu bar on macOS), each in the skeleton. A test holds every colour here to the skeleton's theme, and another holds the page beside it to each section's status (mornycorp/swarm-core#104). |
+| 2026-11-14 | minor | [The page](app-ui-substrate.html) is generated from this doc by `cargo xtask docs render` (in swarm-core's own xtask; the markdown by `pulldown-cmark`): a swatch beside each colour, each status a badge, and the ranges drawn from the skeleton's `theme.rs` where `<!-- page: ranges -->` stands. `the_pages_are_rendered_from_their_docs` fails on a page that differs from a fresh render. A link to [the App Substrate](app-substrate.html), the page that explains the whole substrate (mornycorp/swarm-core#108). |

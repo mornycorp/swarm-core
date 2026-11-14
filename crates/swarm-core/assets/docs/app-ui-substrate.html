@@ -1,7 +1,9 @@
 <!doctype html>
-<!-- A pinned copy from swarm-core (crates/swarm-core/assets/docs/app-ui-substrate.html): the
-     App UI Substrate as a page, in step with app-ui-substrate.md beside it. Edit it there, then
-     `cargo xtask swarm-core bump` and `cargo xtask swarm-core sync-assets`. Open it in a browser. -->
+<!-- Generated: never edit it by hand. A pinned copy from swarm-core
+     (crates/swarm-core/assets/docs/app-ui-substrate.html), rendered from app-ui-substrate.md beside it,
+     with the ranges drawn from the app skeleton's theme.rs, by `cargo xtask docs render`. Edit the doc in
+     swarm-core and render; a consumer takes both with `cargo xtask swarm-core bump` and
+     `cargo xtask swarm-core sync-assets`. Open it in a browser. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -59,19 +61,33 @@ h3 { font: 500 16px/1.3 var(--sans); margin: 10px 0 0; display: flex; flex-wrap:
 section { display: grid; gap: 14px; min-width: 0; }
 p, li { max-width: 70ch; margin: 0; }
 ul, ol { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; }
+li > p { margin: 0; }
+li > * + * { margin-top: 6px; }
+li:has(> .scroll) { max-width: none; }
 a { color: var(--link); }
 code { font: 400 .86em var(--mono); background: var(--alt); border: 1px solid var(--frame); border-radius: 2px; padding: 0 4px; overflow-wrap: anywhere; }
-.lede { font-size: 17px; max-width: 72ch; }
+/* The header: the doc's title, its dates, its opening (the first paragraph is the lede) and its statuses' legend. */
+header blockquote { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.5; }
+header blockquote p { max-width: none; }
+header blockquote + p { font-size: 17px; max-width: 72ch; }
+header ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--dim); }
+header ul li { max-width: none; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 13px var(--mono); color: var(--dim); }
 .status { font: 500 11px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 2px; border: 1px solid currentColor; white-space: nowrap; }
 .status.in { color: var(--ok); }
 .status.todo { color: var(--warn); }
+header .status { margin-right: 6px; }
 .scroll { overflow-x: auto; border: 1px solid var(--frame); border-radius: 2px; background: var(--base); }
 table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--frame); vertical-align: top; }
 th { background: var(--header); font-weight: 500; white-space: nowrap; }
 tbody tr:nth-child(even) td { background: var(--alt); }
 tbody tr:last-child td { border-bottom: 0; }
+td:first-child code { white-space: nowrap; overflow-wrap: normal; }
+details.entries { border: 1px solid var(--frame); border-radius: 2px; background: var(--base); }
+details.entries summary { padding: 5px 10px; cursor: pointer; font-size: 13.5px; color: var(--dim); }
+details.entries[open] summary { border-bottom: 1px solid var(--frame); }
+details.entries .scroll { border: 0; border-radius: 0; }
 td.num, td.hex { font: 400 12.5px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.group { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); background: var(--bg) !important; }
 .sw { display: inline-block; width: 14px; height: 14px; border-radius: 2px; border: 1px solid rgba(127,127,127,.6); vertical-align: -2px; margin-right: 6px; }
@@ -80,6 +96,7 @@ td.group { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: up
 .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .two > * { min-width: 0; }
 .stack { display: grid; gap: 28px; }
+.drawn { display: grid; gap: 14px; }
 .label { font: 500 12px/1 var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; display: block; }
 .range { display: grid; gap: 8px; }
 .range-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
@@ -102,261 +119,471 @@ footer { color: var(--dim); font-size: 13px; border-top: 1px solid var(--frame);
 <main>
 <header>
   <span class="eyebrow">swarm-core · the architectural substrate</span>
-  <h1>The App UI Substrate</h1>
-  <p class="lede">How an app built on Swarm Core looks. This is the UI part of the architectural substrate: every app draws with the same theme, type, density and chrome, so the swarm's tools look and work alike. The app architecture contract says <em>why</em> a colour is a token and a word is a catalog entry; this page says <em>what</em> they are.</p>
-  <div class="meta"><span>the colours: <code>templates/app/crates/engine/src/theme.rs</code></span><span>egui · eframe</span><span>in step with <code>app-ui-substrate.md</code></span></div>
-  <p class="meta"><span><span class="status in legend">In the skeleton</span> the app template does it today</span><span><span class="status todo legend">To adopt</span> specified here; the template doesn't yet (every section is in the skeleton now)</span></p>
+<h1 id="the-app-ui-substrate">The App UI Substrate</h1>
+<blockquote>
+<p><strong>Last reviewed:</strong> 2026-11-14 · <strong>Last updated:</strong> 2026-11-14 · <strong>Change:</strong> minor (the page is generated from this doc by <code>cargo xtask docs render</code>, never by hand; new: the theme as data, the 20 tokens and 4 ranges, egui's visuals, the contrast rules, type, density, icons, the dock, the window and the menus, each in the skeleton) · <strong>Target:</strong> M1</p>
+</blockquote>
+<p>How {{product}} looks. This is the UI part of the architectural substrate: every app built on
+Swarm Core draws with the same theme, type, density and chrome, so the swarm's tools look and work
+alike. <a href="app-architecture.md">The app architecture contract</a> says <em>why</em> a colour is a token and a
+word is a catalog entry (<a href="app-architecture.md#colours-from-the-theme-words-from-the-catalog">Colours from the theme, words from the
+catalog</a>); this document says
+<em>what</em> they are.</p>
+<p>The colours here are the skeleton's own, from <code>templates/app/crates/engine/src/theme.rs</code>, and a
+test holds this document to them (<code>the_ui_substrate_has_the_skeletons_colours</code>). <strong><a href="app-ui-substrate.html">The page</a></strong> is this document as a
+page, with the colours drawn (each range on both backgrounds, with its borders and text
+backgrounds): open it in a browser. It is generated from this document and never edited by hand
+(<a href="#13-changing-the-ui-substrate">section 13</a>).</p>
+<p>Each section says where it stands:</p>
+<ul>
+<li><span class="status in">In the skeleton</span> the app template does it today.</li>
+<li><span class="status todo">To adopt</span> specified here; the template doesn't yet. (Every
+section is in the skeleton now.)</li>
+</ul>
+<div class="meta"><span>the colours: <code>templates/app/crates/engine/src/theme.rs</code></span><span>egui · eframe</span><span>generated from <code>app-ui-substrate.md</code></span></div>
 </header>
 
-<section id="principles">
-  <h2><span class="n">1</span>Principles</h2>
-  <ul>
-    <li><strong>One home for each value.</strong> Colours live in the engine's theme module; metrics, faces and sizes, and icon codepoints each have one module of their own. A call site never writes a colour, a size, a codepoint or a word.</li>
-    <li><strong>The theme is data.</strong> The palette sits in the engine, below the toolkit, so the <code>ui.theme</code> command gives every surface (the window, the CLI, MCP, a test) the same tokens and ranges. The UI crate's theme module is the one place a toolkit colour is made.</li>
-    <li><strong>A colour is named for what it means.</strong> Drawing code asks for <code>error</code> or <code>selection</code>, never for a hue. An identifier's colour comes from a range, by a fixed hash, so it is the same on every run, surface and machine.</li>
-    <li><strong>Readable by rule, checked by test.</strong> Contrast is measured (WCAG 2) in both looks; a value that falls short is either nudged and noted, or kept and recorded with its ratio and the reason.</li>
-    <li><strong>No network.</strong> Fonts and the app icon are embedded, so the desktop and browser builds draw the same offline.</li>
-    <li><strong>Words from the catalog.</strong> Every word a person reads is an entry in the string catalog. <code>scan</code> holds both rules: <code>ui-colours</code> finds a colour made outside the theme module, <code>ui-strings</code> a string literal outside the catalog.</li>
-  </ul>
+<section>
+<h2 id="1-principles"><span class="n">1</span>Principles</h2>
+<ul>
+<li><strong>One home for each value.</strong> Colours live in the engine's theme module; metrics, faces and
+sizes, and icon codepoints each have one module of their own. A call site never writes a colour,
+a size, a codepoint or a word.</li>
+<li><strong>The theme is data.</strong> The palette sits in the engine, below the toolkit, so the <code>ui.theme</code>
+command gives every surface (the window, the CLI, MCP, a test) the same tokens and ranges. The UI
+crate's theme module is the one place a toolkit colour is made.</li>
+<li><strong>A colour is named for what it means.</strong> Drawing code asks for <code>error</code> or <code>selection</code>, never for
+a hue. An identifier's colour comes from a range, by a fixed hash, so it is the same on every run,
+surface and machine.</li>
+<li><strong>Readable by rule, checked by test.</strong> Contrast is measured (WCAG 2) in both looks; a value that
+falls short is either nudged and noted, or kept and recorded with its ratio and the reason.</li>
+<li><strong>No network.</strong> Fonts and the app icon are embedded, so the desktop and browser builds draw the
+same offline.</li>
+<li><strong>Words from the catalog.</strong> Every word a person reads is an entry in the string catalog. <code>scan</code>
+holds both rules: <code>ui-colours</code> finds a colour made outside the theme module, <code>ui-strings</code> a string
+literal outside the catalog.</li>
+</ul>
 </section>
 
-<section id="looks">
-  <h2><span class="n">2</span>Looks, and how the theme is applied <span class="status in">In the skeleton</span></h2>
-  <p>The theme has two looks, <strong>dark</strong> and <strong>light</strong> (<code>Look</code>); each token and each range entry has a value in both.</p>
-  <ol>
-    <li>The engine's <code>theme.rs</code> holds the palette as constants: <code>TOKENS</code> and <code>RANGES</code>.</li>
-    <li><code>ui.theme</code> returns it as data (<code>ThemeData</code>): each token's name, meaning and <code>#RRGGBB</code> in each look, each range's entries with their text background and border in each look, and the corner radius.</li>
-    <li>The UI crate's <code>theme::apply(ctx)</code> runs once, when the window starts: it installs the faces, and gives <strong>both</strong> of egui's appearances their visuals, the text styles and the density (<code>ctx.style_mut_of</code>), so egui chooses between them every frame and following the system's look works live.</li>
-    <li>Drawing code asks <code>Theme::of(ui.visuals())</code> while it draws and never caches it: the look can change between frames.</li>
-  </ol>
-  <p>An app may offer people a choice. One of the swarm's tools has Options › Theme: <strong>System</strong>, <strong>Dark</strong> (its default) and <strong>Light</strong>, saved with the UI state.</p>
+<section>
+<h2 id="2-looks-and-how-the-theme-is-applied"><span class="n">2</span>Looks, and how the theme is applied <span class="status in">In the skeleton</span></h2>
+<p>The theme has two looks, <strong>dark</strong> and <strong>light</strong> (<code>Look</code>); each token and each
+range entry has a value in both.</p>
+<ol>
+<li>The engine's <code>theme.rs</code> holds the palette as constants: <code>TOKENS</code> and <code>RANGES</code>.</li>
+<li><code>ui.theme</code> returns it as data (<code>ThemeData</code>): each token's name, meaning and <code>#RRGGBB</code> in each
+look, each range's entries with their text background and border in each look, and the corner
+radius.</li>
+<li>The UI crate's <code>theme::apply(ctx)</code> runs once, when the window starts: it installs the faces,
+and gives <strong>both</strong> of egui's appearances their visuals, the text styles and the density
+(<code>ctx.style_mut_of</code>), so egui chooses between them every frame and following the system's look
+works live.</li>
+<li>Drawing code asks <code>Theme::of(ui.visuals())</code> while it draws and never caches it: the look can
+change between frames.</li>
+</ol>
+<p>An app may offer people a choice. One of the swarm's tools has Options › Theme: <strong>System</strong>, <strong>Dark</strong> (its
+default) and <strong>Light</strong>, saved with the UI state.</p>
 </section>
 
-<section id="tokens">
-  <h2><span class="n">3</span>Tokens <span class="status in">In the skeleton</span></h2>
-  <p>Twenty tokens, in the order <code>ui.theme</code> gives them. A colour of the app's own (a brand, a status) is a token too, added to <code>TOKENS</code> with a value in each look.</p>
-  <div class="scroll"><table id="t-tokens"><thead><tr><th>Token</th><th>Meaning</th><th>Dark</th><th>Light</th></tr></thead><tbody></tbody></table></div>
+<section>
+<h2 id="3-tokens"><span class="n">3</span>Tokens <span class="status in">In the skeleton</span></h2>
+<p>Twenty tokens, in the order <code>ui.theme</code> gives them.</p>
+<div class="scroll"><table><thead><tr><th>Token</th><th>Meaning</th><th>Dark</th><th>Light</th></tr></thead><tbody>
+<tr><td class="group" colspan="4">Surfaces</td></tr>
+<tr><td><code>background</code></td><td>What everything is drawn on: a panel's fill</td><td class="hex"><span class="sw" style="background:#353535"></span>#353535</td><td class="hex"><span class="sw" style="background:#EFEFEF"></span>#EFEFEF</td></tr>
+<tr><td><code>chrome</code></td><td>The menu bar, the status bar and other chrome</td><td class="hex"><span class="sw" style="background:#353535"></span>#353535</td><td class="hex"><span class="sw" style="background:#EFEFEF"></span>#EFEFEF</td></tr>
+<tr><td><code>panel</code></td><td>Floating windows, dialogs and popups</td><td class="hex"><span class="sw" style="background:#353535"></span>#353535</td><td class="hex"><span class="sw" style="background:#EFEFEF"></span>#EFEFEF</td></tr>
+<tr><td><code>base</code></td><td>Views: lists, tables and text fields</td><td class="hex"><span class="sw" style="background:#2A2A2A"></span>#2A2A2A</td><td class="hex"><span class="sw" style="background:#FFFFFF"></span>#FFFFFF</td></tr>
+<tr><td><code>alt_base</code></td><td>Every other row of a list drawn on <code>base</code></td><td class="hex"><span class="sw" style="background:#303030"></span>#303030</td><td class="hex"><span class="sw" style="background:#F7F7F7"></span>#F7F7F7</td></tr>
+<tr><td><code>header</code></td><td>Table header rows and a ruler</td><td class="hex"><span class="sw" style="background:#3F3F3F"></span>#3F3F3F</td><td class="hex"><span class="sw" style="background:#CACACA"></span>#CACACA</td></tr>
+<tr><td><code>frame</code></td><td>Lines that frame views and panels (decorative: no minimum)</td><td class="hex"><span class="sw" style="background:#424242"></span>#424242</td><td class="hex"><span class="sw" style="background:#ABABAB"></span>#ABABAB</td></tr>
+<tr><td><code>border</code></td><td>Decorative lines: window frames and separators</td><td class="hex"><span class="sw" style="background:#424242"></span>#424242</td><td class="hex"><span class="sw" style="background:#ABABAB"></span>#ABABAB</td></tr>
+<tr><td class="group" colspan="4">Text</td></tr>
+<tr><td><code>text</code></td><td>Body text</td><td class="hex"><span class="sw" style="background:#FCFCFC"></span>#FCFCFC</td><td class="hex"><span class="sw" style="background:#000000"></span>#000000</td></tr>
+<tr><td><code>strong</code></td><td>Emphasised text, and text on a range colour made a text background</td><td class="hex"><span class="sw" style="background:#FFFFFF"></span>#FFFFFF</td><td class="hex"><span class="sw" style="background:#000000"></span>#000000</td></tr>
+<tr><td><code>muted</code></td><td>Text that matters less: a command the UI can't run here, a hint</td><td class="hex"><span class="sw" style="background:#A6A6A6"></span>#A6A6A6</td><td class="hex"><span class="sw" style="background:#666666"></span>#666666</td></tr>
+<tr><td><code>selected_text</code></td><td>Text on the selection</td><td class="hex"><span class="sw" style="background:#FCFCFC"></span>#FCFCFC</td><td class="hex"><span class="sw" style="background:#000000"></span>#000000</td></tr>
+<tr><td><code>link</code></td><td>A link</td><td class="hex"><span class="sw" style="background:#4DA6FF"></span>#4DA6FF</td><td class="hex"><span class="sw" style="background:#1F6FA8"></span>#1F6FA8</td></tr>
+<tr><td class="group" colspan="4">Controls and highlights</td></tr>
+<tr><td><code>control</code></td><td>The fill of a widget at rest: a button, a field</td><td class="hex"><span class="sw" style="background:#454545"></span>#454545</td><td class="hex"><span class="sw" style="background:#F7F7F7"></span>#F7F7F7</td></tr>
+<tr><td><code>control_border</code></td><td>The edge of a widget at rest: 3:1 on the background</td><td class="hex"><span class="sw" style="background:#858585"></span>#858585</td><td class="hex"><span class="sw" style="background:#7A7A7A"></span>#7A7A7A</td></tr>
+<tr><td><code>accent</code></td><td>An accent that carries no text: what has focus, an outline</td><td class="hex"><span class="sw" style="background:#007ACC"></span>#007ACC</td><td class="hex"><span class="sw" style="background:#2B78AE"></span>#2B78AE</td></tr>
+<tr><td><code>selection</code></td><td>What is selected: its fill, with <code>selected_text</code> on it</td><td class="hex"><span class="sw" style="background:#0070BB"></span>#0070BB</td><td class="hex"><span class="sw" style="background:#C1DCEE"></span>#C1DCEE</td></tr>
+<tr><td class="group" colspan="4">States</td></tr>
+<tr><td><code>success</code></td><td>Something that worked</td><td class="hex"><span class="sw" style="background:#90EE90"></span>#90EE90</td><td class="hex"><span class="sw" style="background:#006400"></span>#006400</td></tr>
+<tr><td><code>warning</code></td><td>Something to look at that hasn't failed</td><td class="hex"><span class="sw" style="background:#FF7F1C"></span>#FF7F1C</td><td class="hex"><span class="sw" style="background:#965C00"></span>#965C00</td></tr>
+<tr><td><code>error</code></td><td>A failure, or why a command can't run now</td><td class="hex"><span class="sw" style="background:#FF8A80"></span>#FF8A80</td><td class="hex"><span class="sw" style="background:#B42318"></span>#B42318</td></tr>
+</tbody></table></div>
+<p>A colour of the app's own (a brand, a status) is a token too, added to <code>TOKENS</code> with a value in
+each look.</p>
 </section>
 
-<section id="visuals">
-  <h2><span class="n">4</span>egui's visuals <span class="status in">In the skeleton</span></h2>
-  <p><code>Theme::visuals</code> starts from <code>Visuals::dark()</code> or <code>Visuals::light()</code> and changes these:</p>
-  <div class="scroll"><table><thead><tr><th>egui field</th><th>Set to</th><th>Why</th></tr></thead><tbody>
-    <tr><td><code>panel_fill</code></td><td><code>background</code></td><td>the window's ground</td></tr>
-    <tr><td><code>window_fill</code></td><td><code>panel</code></td><td>windows, dialogs, popups</td></tr>
-    <tr><td><code>extreme_bg_color</code>, <code>code_bg_color</code></td><td><code>base</code></td><td>views: lists, tables, text fields</td></tr>
-    <tr><td><code>faint_bg_color</code></td><td><code>alt_base</code></td><td>striped rows</td></tr>
-    <tr><td><code>window_stroke</code></td><td>1 px <code>border</code></td><td>flat frames</td></tr>
-    <tr><td><code>hyperlink_color</code></td><td><code>link</code></td><td></td></tr>
-    <tr><td><code>selection.bg_fill</code> / <code>selection.stroke</code></td><td><code>selection</code> / 1 px <code>selected_text</code></td><td>the theme's selection, not egui's</td></tr>
-    <tr><td><code>warn_fg_color</code>, <code>error_fg_color</code></td><td><code>warning</code>, <code>error</code></td><td></td></tr>
-    <tr><td><code>weak_text_color</code></td><td><code>muted</code></td><td>egui's weak text is the muted token, not text at 60 %</td></tr>
-    <tr><td><code>fg_stroke.color</code> of the non-interactive, inactive, hovered and open states</td><td><code>text</code></td><td>one text colour across states</td></tr>
-    <tr><td><code>widgets.active.fg_stroke.color</code></td><td><code>strong</code></td><td>egui's strong text is its active widgets' text</td></tr>
-    <tr><td><code>widgets.noninteractive.bg_stroke</code></td><td>1 px <code>border</code></td><td>separators and frames</td></tr>
-    <tr><td><code>widgets.inactive.bg_fill</code>, <code>.weak_bg_fill</code></td><td><code>control</code></td><td>egui draws a resting widget with no edge and a fill barely off the panel: these make a resting button or field visible</td></tr>
-    <tr><td><code>widgets.inactive.bg_stroke</code>, <code>widgets.open.bg_stroke</code></td><td>1 px <code>control_border</code></td><td>its edge, at least 3:1</td></tr>
-    <tr><td><code>override_text_color</code></td><td><code>None</code></td><td>widgets keep their own state colours</td></tr>
-  </tbody></table></div>
-  <h3 id="corner-radius">Corner radius <span class="status in">In the skeleton</span></h3>
-  <p><strong>2 px</strong> in both looks, for <code>window_corner_radius</code>, <code>menu_corner_radius</code> and every widget state's <code>corner_radius</code>: windows, menus and controls are near-square. It is the engine theme's <code>CORNER_RADIUS</code>, which <code>ui.theme</code> gives as <code>corner_radius</code> and <code>Theme::visuals</code> sets. The dock (section 10) is square.</p>
+<section>
+<h2 id="4-eguis-visuals"><span class="n">4</span>egui's visuals <span class="status in">In the skeleton</span></h2>
+<p><code>Theme::visuals</code> starts from <code>Visuals::dark()</code> or <code>Visuals::light()</code> and
+changes these:</p>
+<div class="scroll"><table><thead><tr><th>egui field</th><th>Set to</th><th>Why</th></tr></thead><tbody>
+<tr><td><code>panel_fill</code></td><td><code>background</code></td><td>the window's ground</td></tr>
+<tr><td><code>window_fill</code></td><td><code>panel</code></td><td>windows, dialogs, popups</td></tr>
+<tr><td><code>extreme_bg_color</code>, <code>code_bg_color</code></td><td><code>base</code></td><td>views: lists, tables, text fields</td></tr>
+<tr><td><code>faint_bg_color</code></td><td><code>alt_base</code></td><td>striped rows</td></tr>
+<tr><td><code>window_stroke</code></td><td>1 px <code>border</code></td><td>flat frames</td></tr>
+<tr><td><code>hyperlink_color</code></td><td><code>link</code></td><td></td></tr>
+<tr><td><code>selection.bg_fill</code> / <code>selection.stroke</code></td><td><code>selection</code> / 1 px <code>selected_text</code></td><td>the theme's selection, not egui's</td></tr>
+<tr><td><code>warn_fg_color</code>, <code>error_fg_color</code></td><td><code>warning</code>, <code>error</code></td><td></td></tr>
+<tr><td><code>weak_text_color</code></td><td><code>muted</code></td><td>egui's weak text is the muted token, not text at 60 %</td></tr>
+<tr><td><code>fg_stroke.color</code> of the non-interactive, inactive, hovered and open states</td><td><code>text</code></td><td>one text colour across states</td></tr>
+<tr><td><code>widgets.active.fg_stroke.color</code></td><td><code>strong</code></td><td>egui's strong text is its active widgets' text</td></tr>
+<tr><td><code>widgets.noninteractive.bg_stroke</code></td><td>1 px <code>border</code></td><td>separators and frames</td></tr>
+<tr><td><code>widgets.inactive.bg_fill</code>, <code>.weak_bg_fill</code></td><td><code>control</code></td><td>egui draws a resting widget with no edge and a fill barely off the panel: these make a resting button or field visible</td></tr>
+<tr><td><code>widgets.inactive.bg_stroke</code>, <code>widgets.open.bg_stroke</code></td><td>1 px <code>control_border</code></td><td>its edge, at least 3:1</td></tr>
+<tr><td><code>override_text_color</code></td><td><code>None</code></td><td>widgets keep their own state colours</td></tr>
+</tbody></table></div>
+<h3 id="corner-radius">Corner radius <span class="status in">In the skeleton</span></h3>
+<p><strong>2 px</strong> in both looks, for <code>window_corner_radius</code>, <code>menu_corner_radius</code> and
+every widget state's <code>corner_radius</code>: windows, menus and controls are near-square. It is the
+engine theme's <code>CORNER_RADIUS</code>, which <code>ui.theme</code> gives as <code>corner_radius</code> and <code>Theme::visuals</code> sets.
+The dock (<a href="#10-the-dock">section 10</a>) is square.</p>
 </section>
 
-<section id="ranges">
-  <h2><span class="n">5</span>Ranges: colours for identifiers <span class="status in">In the skeleton</span></h2>
-  <p>A range is a set of colours for telling things apart. There are two ways to choose from one:</p>
-  <ul>
-    <li><code>at(n)</code> takes a number in order: entry <code>n % size</code>.</li>
-    <li><code>pick(id)</code> hashes an identifier with 64-bit FNV-1a over the UTF-8 it displays as, so <code>pick(7)</code> is <code>pick("7")</code>. The hash is fixed and documented, unlike std's <code>DefaultHasher</code>, so an id's colour never changes between Rust releases.</li>
-  </ul>
-  <p>Every entry also has a <strong>text background</strong>, <code>behind_text</code>: its HSL lightness held at most 0.5 in dark or at least 0.5 in light, then moved further until <code>strong</code> text on it reaches 4.5:1, its hue and saturation kept. It has a <strong>border</strong> too, <code>darker</code>: each channel × 0.8, rounded down, which outlines a filled bar or mark. <code>ui.theme</code> gives both with each entry, and the skeleton's swatch view draws them. Below, each entry shows its fill in its border, then <code>strong</code> text on its text background, on each look's <code>background</code>.</p>
-  <div id="ranges-out" class="stack"></div>
+<section>
+<h2 id="5-ranges-colours-for-identifiers"><span class="n">5</span>Ranges: colours for identifiers <span class="status in">In the skeleton</span></h2>
+<p>A range is a set of colours for telling things apart. There are two ways to
+choose from one:</p>
+<ul>
+<li><code>at(n)</code> takes a number in order: entry <code>n % size</code>.</li>
+<li><code>pick(id)</code> hashes an identifier with 64-bit FNV-1a over the UTF-8 it displays as, so <code>pick(7)</code>
+is <code>pick("7")</code>. The hash is fixed and documented, unlike std's <code>DefaultHasher</code>, so an id's colour
+never changes between Rust releases.</li>
+</ul>
+<p>Every entry also has a <strong>text background</strong>, <code>behind_text</code>: its HSL lightness held at most 0.5 in
+dark or at least 0.5 in light, then moved further until <code>strong</code> text on it reaches 4.5:1, its hue
+and saturation kept. It has a <strong>border</strong> too, <code>darker</code>: each channel × 0.8, rounded down, which
+outlines a filled bar or mark. <code>ui.theme</code> gives both with each entry, and the skeleton's swatch view
+draws them.</p>
+<div class="scroll"><table><thead><tr><th>Range</th><th>Size</th><th>For</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>series</code></td><td>7, and a grey for none</td><td>Numbered things in order (an issue, a lane, a frame): <code>at(n)</code> is entry <code>n % 7</code>; <code>none()</code> is the grey for something with no number</td><td>ColorBrewer Dark2 in dark, Set2 in light (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0), as published</td></tr>
+<tr><td><code>markers</code></td><td class="num">9</td><td>Up to 9 marks told apart at a glance, the same in both looks: a marker by number (<code>at</code>), or a few ids (<code>pick</code>)</td><td>ColorBrewer Set1 (the same source) with the orange <code>#FF7F1C</code> for its <code>#FF7F00</code>, then grey</td></tr>
+<tr><td><code>range16</code></td><td class="num">16</td><td>Up to 16 identifiers by a stable pick of their id: an object's type, a thread, a source</td><td>The first 16 of <code>range32</code></td></tr>
+<tr><td><code>range32</code></td><td class="num">32</td><td>Up to 32 identifiers side by side (the rows of a timeline, the bars of a scrubber), told apart beside each other, not only by a legend</td><td>Glasbey et al. 2007's sets in colorcet 3.2.1 (Peter Kovesi, CC BY 4.0): <code>glasbey_light</code> in dark, and <code>glasbey_dark</code>'s nearest hue to each in light; 11 entries nudged to 3:1</td></tr>
+</tbody></table></div>
+<div class="drawn"><p class="source">Drawn from the skeleton's theme (<code>templates/app/crates/engine/src/theme.rs</code>): each range's entries, each as its fill in its border, then <code>strong</code> text on its text background, on each look's <code>background</code>.</p><div id="ranges-out" class="stack"></div></div>
+<h3 id="series"><code>series</code></h3>
+<details class="entries"><summary>Its 8 entries as <code>#RRGGBB</code></summary><div class="scroll"><table><thead><tr><th>Entry</th><th>Dark</th><th>Light</th></tr></thead><tbody>
+<tr><td>series 0</td><td class="hex"><span class="sw" style="background:#1B9E77"></span>#1B9E77</td><td class="hex"><span class="sw" style="background:#66C2A5"></span>#66C2A5</td></tr>
+<tr><td>series 1</td><td class="hex"><span class="sw" style="background:#D95F02"></span>#D95F02</td><td class="hex"><span class="sw" style="background:#FC8D62"></span>#FC8D62</td></tr>
+<tr><td>series 2</td><td class="hex"><span class="sw" style="background:#7570B3"></span>#7570B3</td><td class="hex"><span class="sw" style="background:#8DA0CB"></span>#8DA0CB</td></tr>
+<tr><td>series 3</td><td class="hex"><span class="sw" style="background:#E7298A"></span>#E7298A</td><td class="hex"><span class="sw" style="background:#E78AC3"></span>#E78AC3</td></tr>
+<tr><td>series 4</td><td class="hex"><span class="sw" style="background:#66A61E"></span>#66A61E</td><td class="hex"><span class="sw" style="background:#A6D854"></span>#A6D854</td></tr>
+<tr><td>series 5</td><td class="hex"><span class="sw" style="background:#E6AB02"></span>#E6AB02</td><td class="hex"><span class="sw" style="background:#FFD92F"></span>#FFD92F</td></tr>
+<tr><td>series 6</td><td class="hex"><span class="sw" style="background:#A6761D"></span>#A6761D</td><td class="hex"><span class="sw" style="background:#E5C494"></span>#E5C494</td></tr>
+<tr><td>series none</td><td class="hex"><span class="sw" style="background:#666666"></span>#666666</td><td class="hex"><span class="sw" style="background:#B3B3B3"></span>#B3B3B3</td></tr>
+</tbody></table></div></details>
+<h3 id="markers"><code>markers</code></h3>
+<p>The same in both looks.</p>
+<details class="entries"><summary>Its 9 entries as <code>#RRGGBB</code></summary><div class="scroll"><table><thead><tr><th>Entry</th><th>Dark</th><th>Light</th></tr></thead><tbody>
+<tr><td>markers 0</td><td class="hex"><span class="sw" style="background:#E41A1C"></span>#E41A1C</td><td class="hex"><span class="sw" style="background:#E41A1C"></span>#E41A1C</td></tr>
+<tr><td>markers 1</td><td class="hex"><span class="sw" style="background:#377EB8"></span>#377EB8</td><td class="hex"><span class="sw" style="background:#377EB8"></span>#377EB8</td></tr>
+<tr><td>markers 2</td><td class="hex"><span class="sw" style="background:#4DAF4A"></span>#4DAF4A</td><td class="hex"><span class="sw" style="background:#4DAF4A"></span>#4DAF4A</td></tr>
+<tr><td>markers 3</td><td class="hex"><span class="sw" style="background:#984EA3"></span>#984EA3</td><td class="hex"><span class="sw" style="background:#984EA3"></span>#984EA3</td></tr>
+<tr><td>markers 4</td><td class="hex"><span class="sw" style="background:#FF7F1C"></span>#FF7F1C</td><td class="hex"><span class="sw" style="background:#FF7F1C"></span>#FF7F1C</td></tr>
+<tr><td>markers 5</td><td class="hex"><span class="sw" style="background:#FFFF33"></span>#FFFF33</td><td class="hex"><span class="sw" style="background:#FFFF33"></span>#FFFF33</td></tr>
+<tr><td>markers 6</td><td class="hex"><span class="sw" style="background:#A65628"></span>#A65628</td><td class="hex"><span class="sw" style="background:#A65628"></span>#A65628</td></tr>
+<tr><td>markers 7</td><td class="hex"><span class="sw" style="background:#F781BF"></span>#F781BF</td><td class="hex"><span class="sw" style="background:#F781BF"></span>#F781BF</td></tr>
+<tr><td>markers 8</td><td class="hex"><span class="sw" style="background:#999999"></span>#999999</td><td class="hex"><span class="sw" style="background:#999999"></span>#999999</td></tr>
+</tbody></table></div></details>
+<h3 id="range32-and-range16-its-first-16"><code>range32</code> (and <code>range16</code>, its first 16)</h3>
+<details class="entries"><summary>Its 32 entries as <code>#RRGGBB</code></summary><div class="scroll"><table><thead><tr><th>Entry</th><th>Dark</th><th>Light</th></tr></thead><tbody>
+<tr><td>range32 0</td><td class="hex"><span class="sw" style="background:#F12F17"></span>#F12F17</td><td class="hex"><span class="sw" style="background:#D70000"></span>#D70000</td></tr>
+<tr><td>range32 1</td><td class="hex"><span class="sw" style="background:#1B9211"></span>#1B9211</td><td class="hex"><span class="sw" style="background:#028800"></span>#028800</td></tr>
+<tr><td>range32 2</td><td class="hex"><span class="sw" style="background:#C727FF"></span>#C727FF</td><td class="hex"><span class="sw" style="background:#BB00FE"></span>#BB00FE</td></tr>
+<tr><td>range32 3</td><td class="hex"><span class="sw" style="background:#06ACC6"></span>#06ACC6</td><td class="hex"><span class="sw" style="background:#0088B1"></span>#0088B1</td></tr>
+<tr><td>range32 4</td><td class="hex"><span class="sw" style="background:#98FF00"></span>#98FF00</td><td class="hex"><span class="sw" style="background:#6C9700"></span>#6C9700</td></tr>
+<tr><td>range32 5</td><td class="hex"><span class="sw" style="background:#FFA530"></span>#FFA530</td><td class="hex"><span class="sw" style="background:#CC7407"></span>#CC7407</td></tr>
+<tr><td>range32 6</td><td class="hex"><span class="sw" style="background:#FF8FC8"></span>#FF8FC8</td><td class="hex"><span class="sw" style="background:#C5668F"></span>#C5668F</td></tr>
+<tr><td>range32 7</td><td class="hex"><span class="sw" style="background:#00FECF"></span>#00FECF</td><td class="hex"><span class="sw" style="background:#009D6F"></span>#009D6F</td></tr>
+<tr><td>range32 8</td><td class="hex"><span class="sw" style="background:#B0A5FF"></span>#B0A5FF</td><td class="hex"><span class="sw" style="background:#5A4AA3"></span>#5A4AA3</td></tr>
+<tr><td>range32 9</td><td class="hex"><span class="sw" style="background:#94AD84"></span>#94AD84</td><td class="hex"><span class="sw" style="background:#546745"></span>#546745</td></tr>
+<tr><td>range32 10</td><td class="hex"><span class="sw" style="background:#A77412"></span>#A77412</td><td class="hex"><span class="sw" style="background:#755A00"></span>#755A00</td></tr>
+<tr><td>range32 11</td><td class="hex"><span class="sw" style="background:#E6299C"></span>#E6299C</td><td class="hex"><span class="sw" style="background:#C63189"></span>#C63189</td></tr>
+<tr><td>range32 12</td><td class="hex"><span class="sw" style="background:#FEF590"></span>#FEF590</td><td class="hex"><span class="sw" style="background:#8F7B01"></span>#8F7B01</td></tr>
+<tr><td>range32 13</td><td class="hex"><span class="sw" style="background:#C86F66"></span>#C86F66</td><td class="hex"><span class="sw" style="background:#9D5743"></span>#9D5743</td></tr>
+<tr><td>range32 14</td><td class="hex"><span class="sw" style="background:#9EE3FF"></span>#9EE3FF</td><td class="hex"><span class="sw" style="background:#086B84"></span>#086B84</td></tr>
+<tr><td>range32 15</td><td class="hex"><span class="sw" style="background:#00C946"></span>#00C946</td><td class="hex"><span class="sw" style="background:#006D2E"></span>#006D2E</td></tr>
+<tr><td>range32 16</td><td class="hex"><span class="sw" style="background:#A977AD"></span>#A977AD</td><td class="hex"><span class="sw" style="background:#A57AB7"></span>#A57AB7</td></tr>
+<tr><td>range32 17</td><td class="hex"><span class="sw" style="background:#B8BB02"></span>#B8BB02</td><td class="hex"><span class="sw" style="background:#596D00"></span>#596D00</td></tr>
+<tr><td>range32 18</td><td class="hex"><span class="sw" style="background:#F4C0B1"></span>#F4C0B1</td><td class="hex"><span class="sw" style="background:#A2766A"></span>#A2766A</td></tr>
+<tr><td>range32 19</td><td class="hex"><span class="sw" style="background:#FF28FD"></span>#FF28FD</td><td class="hex"><span class="sw" style="background:#FD00CD"></span>#FD00CD</td></tr>
+<tr><td>range32 20</td><td class="hex"><span class="sw" style="background:#F3CEFF"></span>#F3CEFF</td><td class="hex"><span class="sw" style="background:#836F8C"></span>#836F8C</td></tr>
+<tr><td>range32 21</td><td class="hex"><span class="sw" style="background:#009F7D"></span>#009F7D</td><td class="hex"><span class="sw" style="background:#00816A"></span>#00816A</td></tr>
+<tr><td>range32 22</td><td class="hex"><span class="sw" style="background:#FF6200"></span>#FF6200</td><td class="hex"><span class="sw" style="background:#EB4E00"></span>#EB4E00</td></tr>
+<tr><td>range32 23</td><td class="hex"><span class="sw" style="background:#FF3465"></span>#FF3465</td><td class="hex"><span class="sw" style="background:#CB0044"></span>#CB0044</td></tr>
+<tr><td>range32 24</td><td class="hex"><span class="sw" style="background:#A0E492"></span>#A0E492</td><td class="hex"><span class="sw" style="background:#004B00"></span>#004B00</td></tr>
+<tr><td>range32 25</td><td class="hex"><span class="sw" style="background:#8D9BB2"></span>#8D9BB2</td><td class="hex"><span class="sw" style="background:#536177"></span>#536177</td></tr>
+<tr><td>range32 26</td><td class="hex"><span class="sw" style="background:#829126"></span>#829126</td><td class="hex"><span class="sw" style="background:#4C5001"></span>#4C5001</td></tr>
+<tr><td>range32 27</td><td class="hex"><span class="sw" style="background:#78C7BB"></span>#78C7BB</td><td class="hex"><span class="sw" style="background:#499692"></span>#499692</td></tr>
+<tr><td>range32 28</td><td class="hex"><span class="sw" style="background:#BC9258"></span>#BC9258</td><td class="hex"><span class="sw" style="background:#9F6E32"></span>#9F6E32</td></tr>
+<tr><td>range32 29</td><td class="hex"><span class="sw" style="background:#E58FFF"></span>#E58FFF</td><td class="hex"><span class="sw" style="background:#7F2B8E"></span>#7F2B8E</td></tr>
+<tr><td>range32 30</td><td class="hex"><span class="sw" style="background:#72B9FF"></span>#72B9FF</td><td class="hex"><span class="sw" style="background:#688CBD"></span>#688CBD</td></tr>
+<tr><td>range32 31</td><td class="hex"><span class="sw" style="background:#C6A5C1"></span>#C6A5C1</td><td class="hex"><span class="sw" style="background:#A67E93"></span>#A67E93</td></tr>
+</tbody></table></div></details>
 </section>
 
-<section id="contrast">
-  <h2><span class="n">6</span>Contrast <span class="status in">In the skeleton</span></h2>
-  <p>Measured by WCAG 2 relative luminance, in each look, by the theme's tests.</p>
-  <div class="rule"><strong>Text: at least 4.5:1</strong><span><code>TEXT_CONTRAST</code>, WCAG 2 1.4.3. Every token read as text meets it on what it is drawn on, and <code>strong</code> text on any entry's text background meets it by construction.</span></div>
-  <div class="rule"><strong>Fills and edges: at least 3:1</strong><span><code>FILL_CONTRAST</code>, WCAG 2 1.4.11: <code>control_border</code> against <code>background</code> and <code>panel</code>, and each range entry against <code>background</code>.</span></div>
-  <div class="rule"><strong>A shortfall is nudged or recorded, never silent</strong><span><code>range16</code> and <code>range32</code> are nudged: an entry under 3:1 moves lighter in dark (darker in light) in CIELAB lightness, keeping its hue, and its comment gives the original and its ratio. The rest are kept, and the tests' <code>KEPT_SHORT</code> lists each with its measured ratio and why (21 entries):</span></div>
-  <div class="scroll"><table><thead><tr><th>Kept</th><th>Look</th><th>On <code>background</code></th><th>Why it is kept</th></tr></thead><tbody>
-    <tr><td><code>accent</code></td><td>dark</td><td class="num">2.72:1</td><td>The swarm's tools share one accent blue. It never carries meaning alone: the selection (<code>selected_text</code> on it 5.07:1) and <code>control_border</code> (3.32:1) do.</td></tr>
-    <tr><td><code>series</code> 2, 3 and none</td><td>dark</td><td class="num">2.14–2.97:1</td><td>The ColorBrewer fills as published, so a series is the same colour in every app. A fill is told apart by its border and its neighbours, and text on it goes on its text background, which reaches 4.5:1.</td></tr>
-    <tr><td><code>series</code> 0–6 and none</td><td>light</td><td class="num">1.20–2.28:1</td><td>As above. Set2 is a pastel set made to carry black text.</td></tr>
-    <tr><td><code>markers</code> 0, 1, 3, 6</td><td>dark</td><td class="num">2.31–2.83:1</td><td>As <code>series</code>: the published fills, kept.</td></tr>
-    <tr><td><code>markers</code> 2, 4, 5, 7, 8</td><td>light</td><td class="num">1.07–2.48:1</td><td>As <code>series</code>.</td></tr>
-  </tbody></table></div>
-  <p>The tests also hold how far apart a range's entries stay: at least 10 (CIEDE2000) between any two, and 15 between neighbours.</p>
+<section>
+<h2 id="6-contrast"><span class="n">6</span>Contrast <span class="status in">In the skeleton</span></h2>
+<p>Measured by WCAG 2 relative luminance, in each look, by the theme's tests.</p>
+<ul>
+<li><strong>Text: at least 4.5:1</strong> (<code>TEXT_CONTRAST</code>, WCAG 2 1.4.3). Every token read as text meets it on
+what it is drawn on, and <code>strong</code> text on any entry's text background meets it by construction.</li>
+<li><strong>Fills and edges: at least 3:1</strong> (<code>FILL_CONTRAST</code>, WCAG 2 1.4.11): <code>control_border</code> against
+<code>background</code> and <code>panel</code>, and each range entry against <code>background</code>.</li>
+<li><strong>A shortfall is nudged or recorded, never silent.</strong> <code>range16</code> and <code>range32</code> are nudged: an entry
+under 3:1 moves lighter in dark (darker in light) in CIELAB lightness, keeping its hue, and its
+comment gives the original and its ratio. The rest are kept, and the tests' <code>KEPT_SHORT</code> lists
+each with its measured ratio and why (21 entries):</li>
+</ul>
+<div class="scroll"><table><thead><tr><th>Kept</th><th>Look</th><th>On <code>background</code></th><th>Why it is kept</th></tr></thead><tbody>
+<tr><td><code>accent</code></td><td>dark</td><td class="num">2.72:1</td><td>The swarm's tools share one accent blue. It never carries meaning alone: the selection (<code>selected_text</code> on it 5.07:1) and <code>control_border</code> (3.32:1) do.</td></tr>
+<tr><td><code>series</code> 2, 3 and none</td><td>dark</td><td class="num">2.14–2.97:1</td><td>The ColorBrewer fills as published, so a series is the same colour in every app. A fill is told apart by its border and its neighbours, and text on it goes on its text background, which reaches 4.5:1.</td></tr>
+<tr><td><code>series</code> 0–6 and none</td><td>light</td><td class="num">1.20–2.28:1</td><td>As above. Set2 is a pastel set made to carry black text.</td></tr>
+<tr><td><code>markers</code> 0, 1, 3, 6</td><td>dark</td><td class="num">2.31–2.83:1</td><td>As <code>series</code>: the published fills, kept.</td></tr>
+<tr><td><code>markers</code> 2, 4, 5, 7, 8</td><td>light</td><td class="num">1.07–2.48:1</td><td>As <code>series</code>.</td></tr>
+</tbody></table></div>
+<p>The tests also hold how far apart a range's entries stay: at least 10 (CIEDE2000) between any two,
+and 15 between neighbours.</p>
 </section>
 
-<section id="type">
-  <h2><span class="n">7</span>Type <span class="status in">In the skeleton</span></h2>
-  <p>Embedded faces, in one module (<code>crates/ui/src/fonts.rs</code>) with their sizes, installed by <code>theme::apply</code>. <code>init --app --ui</code> writes the files to <code>assets/fonts/</code>, each with its licence, and their upstream releases and hashes in that folder's <code>README.md</code>.</p>
-  <div class="scroll"><table><thead><tr><th>Family</th><th>Face</th><th>For</th></tr></thead><tbody>
-    <tr><td><code>Proportional</code></td><td>Roboto Regular</td><td>body text, buttons</td></tr>
-    <tr><td><code>"light"</code></td><td>Roboto Light</td><td>small and subtle text</td></tr>
-    <tr><td><code>"medium"</code></td><td>Roboto Medium</td><td>headings, section titles, a start page's title</td></tr>
-    <tr><td><code>"bold"</code></td><td>Roboto Bold</td><td>emphasis (egui has no synthetic bold)</td></tr>
-    <tr><td><code>Monospace</code></td><td>Cascadia Mono Regular</td><td>code, ids, hex</td></tr>
-    <tr><td><code>"icons"</code></td><td>Font Awesome Free 6.7.2 Solid, <em>on its own</em></td><td>icons only: text is never drawn from it, nor an icon from another face</td></tr>
-  </tbody></table></div>
-  <p>egui's own fonts stay behind Roboto and Cascadia Mono as fallbacks, for the symbols and emoji they lack.</p>
-  <h3>Text styles</h3>
-  <p>A scale on a 12 pt body:</p>
-  <div class="scroll"><table><thead><tr><th>Style</th><th>Size (pt)</th><th>Family</th><th>Scale</th></tr></thead><tbody>
-    <tr><td><code>Small</code></td><td class="num">11</td><td>light</td><td>× 0.9</td></tr>
-    <tr><td><code>Body</code>, <code>Button</code></td><td class="num">12</td><td>Proportional</td><td>× 1</td></tr>
-    <tr><td><code>Monospace</code></td><td class="num">12</td><td>Monospace</td><td>× 1</td></tr>
-    <tr><td><code>"h2"</code>: section titles</td><td class="num">18</td><td>medium</td><td>× 1.5</td></tr>
-    <tr><td><code>Heading</code></td><td class="num">21</td><td>medium</td><td>× 1.75</td></tr>
-    <tr><td><code>"callout"</code>: a start page's title</td><td class="num">36</td><td>medium</td><td>× 3</td></tr>
-  </tbody></table></div>
-  <div class="rule"><strong>Wait for the fonts to bind</strong><span>egui binds new font definitions at the start of the <em>next</em> pass, and panics on a named family it doesn't know: nothing draws in Light, Medium, Bold or an icon until <code>fonts::bound(ctx)</code> is true.</span></div>
+<section>
+<h2 id="7-type"><span class="n">7</span>Type <span class="status in">In the skeleton</span></h2>
+<p>Embedded faces, in one module (<code>crates/ui/src/fonts.rs</code>) with their sizes,
+installed by <code>theme::apply</code>. <code>init --app --ui</code> writes the files to <code>assets/fonts/</code>, each with its
+licence, and their upstream releases and hashes in that folder's <code>README.md</code>.</p>
+<div class="scroll"><table><thead><tr><th>Family</th><th>Face</th><th>For</th></tr></thead><tbody>
+<tr><td><code>Proportional</code></td><td>Roboto Regular</td><td>body text, buttons</td></tr>
+<tr><td><code>"light"</code></td><td>Roboto Light</td><td>small and subtle text</td></tr>
+<tr><td><code>"medium"</code></td><td>Roboto Medium</td><td>headings, section titles, a start page's title</td></tr>
+<tr><td><code>"bold"</code></td><td>Roboto Bold</td><td>emphasis (egui has no synthetic bold)</td></tr>
+<tr><td><code>Monospace</code></td><td>Cascadia Mono Regular</td><td>code, ids, hex</td></tr>
+<tr><td><code>"icons"</code></td><td>Font Awesome Free 6.7.2 Solid, <strong>on its own</strong></td><td>icons only: text is never drawn from it, nor an icon from another font</td></tr>
+</tbody></table></div>
+<p>egui's own fonts stay behind Roboto and Cascadia Mono as fallbacks, for the symbols and emoji they
+lack.</p>
+<h3 id="text-styles">Text styles</h3>
+<p>A scale on a 12 pt body:</p>
+<div class="scroll"><table><thead><tr><th>Style</th><th>Size (pt)</th><th>Family</th><th>Scale</th></tr></thead><tbody>
+<tr><td><code>Small</code></td><td class="num">11</td><td>light</td><td class="num">× 0.9</td></tr>
+<tr><td><code>Body</code>, <code>Button</code></td><td class="num">12</td><td>Proportional</td><td class="num">× 1</td></tr>
+<tr><td><code>Monospace</code></td><td class="num">12</td><td>Monospace</td><td class="num">× 1</td></tr>
+<tr><td><code>"h2"</code>: section titles</td><td class="num">18</td><td>medium</td><td class="num">× 1.5</td></tr>
+<tr><td><code>Heading</code></td><td class="num">21</td><td>medium</td><td class="num">× 1.75</td></tr>
+<tr><td><code>"callout"</code>: a start page's title</td><td class="num">36</td><td>medium</td><td class="num">× 3</td></tr>
+</tbody></table></div>
+<div class="rule"><strong>Wait for the fonts to bind</strong><span> egui binds new font definitions at the start of the <em>next</em> pass,
+and panics on a named family it doesn't know: nothing draws in Light, Medium, Bold or an icon until
+<code>fonts::bound(ctx)</code> is true.</span></div>
 </section>
 
-<section id="density">
-  <h2><span class="n">8</span>Density <span class="status in">In the skeleton</span></h2>
-  <p>Logical points, scaled by the system's display scale, in <code>crates/ui/src/density.rs</code>. <code>theme::apply</code> installs <code>density::spacing()</code> as egui's <code>Spacing</code> in both looks; the menu bar and its menus take <code>menu_bar_style</code> and <code>menu_style</code>, and a two-column form <code>form_spacing()</code>, rather than writing numbers.</p>
-  <div class="scroll"><table><thead><tr><th>Metric</th><th>Value</th><th>egui's</th><th>Note</th></tr></thead><tbody>
-    <tr><td>Row height: list, table, menu and tab rows; a button's, combo box's and single-line field's height (<code>ROW_HEIGHT</code>)</td><td class="num">18</td><td class="num">18</td><td>the row for 12 pt Roboto</td></tr>
-    <tr><td>Item spacing (<code>ITEM_SPACING</code>)</td><td class="num">6 × 3</td><td class="num">8 × 3</td><td>tighter across</td></tr>
-    <tr><td>Form column spacing (<code>COLUMN_SPACING</code>)</td><td class="num">12</td><td class="num">–</td><td>between a label column and its values</td></tr>
-    <tr><td>Button padding (<code>BUTTON_PADDING</code>)</td><td class="num">6 × 2</td><td class="num">4 × 1</td><td>2 down gives an 18 pt button</td></tr>
-    <tr><td>Menu entry padding (<code>MENU_PADDING</code>), item spacing y = 0</td><td class="num">8 × 2</td><td class="num">–</td><td>entries touch, so hover fills meet</td></tr>
-    <tr><td>Menu-bar title padding (<code>MENU_BAR_PADDING</code>)</td><td class="num">7 × 2</td><td class="num">–</td><td>titles' text 20 pt apart</td></tr>
-    <tr><td>Menu frame margin (<code>MENU_MARGIN</code>)</td><td class="num">1 × 3</td><td class="num">–</td><td></td></tr>
-  </tbody></table></div>
+<section>
+<h2 id="8-density"><span class="n">8</span>Density <span class="status in">In the skeleton</span></h2>
+<p>Logical points, scaled by the system's display scale, in
+<code>crates/ui/src/density.rs</code>. <code>theme::apply</code> installs <code>density::spacing()</code> as egui's <code>Spacing</code> in
+both looks; the menu bar and its menus take <code>menu_bar_style</code> and <code>menu_style</code>, and a two-column
+form <code>form_spacing()</code>, rather than writing numbers.</p>
+<div class="scroll"><table><thead><tr><th>Metric</th><th>Value</th><th>egui's</th><th>Note</th></tr></thead><tbody>
+<tr><td>Row height: list, table, menu and tab rows; a button's, combo box's and single-line field's height (<code>ROW_HEIGHT</code>)</td><td class="num">18</td><td class="num">18</td><td>the row for 12 pt Roboto</td></tr>
+<tr><td>Item spacing (<code>ITEM_SPACING</code>)</td><td class="num">6 × 3</td><td class="num">8 × 3</td><td>tighter across</td></tr>
+<tr><td>Form column spacing (<code>COLUMN_SPACING</code>)</td><td class="num">12</td><td>–</td><td>between a label column and its values</td></tr>
+<tr><td>Button padding (<code>BUTTON_PADDING</code>)</td><td class="num">6 × 2</td><td class="num">4 × 1</td><td>2 down gives an 18 pt button</td></tr>
+<tr><td>Menu entry padding (<code>MENU_PADDING</code>), item spacing y = 0</td><td class="num">8 × 2</td><td>–</td><td>entries touch, so hover fills meet</td></tr>
+<tr><td>Menu-bar title padding (<code>MENU_BAR_PADDING</code>)</td><td class="num">7 × 2</td><td>–</td><td>titles' text 20 pt apart</td></tr>
+<tr><td>Menu frame margin (<code>MENU_MARGIN</code>)</td><td class="num">1 × 3</td><td>–</td><td></td></tr>
+</tbody></table></div>
 </section>
 
-<section id="icons">
-  <h2><span class="n">9</span>Icons <span class="status in">In the skeleton</span></h2>
-  <p>In <code>crates/ui/src/icons.rs</code>.</p>
-  <ul>
-    <li><strong>Glyphs:</strong> Font Awesome Free 6.7.2 Solid (the font SIL OFL 1.1, the icons CC BY 4.0, whose attribution the embedded font's own metadata carries; an app with an About credits it there too), at the body size. Codepoints are named constants in <code>icons</code>, each the icon's Font Awesome name, never literals; a test checks each is in the embedded font.</li>
-    <li><strong>Which icon goes where is data:</strong> a table (<code>BY_COMMAND</code>) maps a command id to its icon, so a new command gets its menu icon with no menu code, and one function (<code>for_pane</code>) maps each dock pane to its icon, for its tab (section 10). An app with nested menus maps them the same way.</li>
-    <li><strong>Alignment:</strong> menu icons sit in a fixed 16 pt column (Font Awesome's widest glyphs are 1.25 em); a command with no icon keeps the empty column, so labels line up.</li>
-    <li><strong>Colour:</strong> an icon takes its widget's text colour, so a disabled item's icon dims with it; a decorative icon takes a token.</li>
-    <li><strong>Accessibility:</strong> an icon is an atom egui leaves out of a widget's accessible name, so a widget is named by its text; an icon-only button gets a name and a tooltip of its own; a dock tab's title is text with the icon in it.</li>
-  </ul>
+<section>
+<h2 id="9-icons"><span class="n">9</span>Icons <span class="status in">In the skeleton</span></h2>
+<p>In <code>crates/ui/src/icons.rs</code>.</p>
+<ul>
+<li><strong>Glyphs:</strong> Font Awesome Free 6.7.2 Solid (the font SIL OFL 1.1, the icons CC BY 4.0, whose
+attribution the embedded font's own metadata carries; an app with an About credits it there too),
+at the body size. Codepoints are named constants in <code>icons</code>, each the icon's Font Awesome name,
+never literals; a test checks each is in the embedded font.</li>
+<li><strong>Which icon goes where is data:</strong> a table (<code>BY_COMMAND</code>) maps a command id to its icon, so a new
+command gets its menu icon with no menu code, and one function (<code>for_pane</code>) maps each dock pane
+to its icon, for its tab (<a href="#10-the-dock">section 10</a>). An app with nested menus maps them the same
+way.</li>
+<li><strong>Alignment:</strong> menu icons sit in a fixed 16 pt column (Font Awesome's widest glyphs are 1.25 em);
+a command with no icon keeps the empty column, so labels line up.</li>
+<li><strong>Colour:</strong> an icon takes its widget's text colour, so a disabled item's icon dims with it; a
+decorative icon takes a token.</li>
+<li><strong>Accessibility:</strong> an icon is an atom egui leaves out of a widget's accessible name, so a widget
+is named by its text; an icon-only button gets a name and a tooltip of its own; a dock tab's title
+is text with the icon in it.</li>
+</ul>
 </section>
 
-<section id="dock">
-  <h2><span class="n">10</span>The dock <span class="status in">In the skeleton</span></h2>
-  <p>The window under the menu bar is a dock (<code>crates/ui/src/dock.rs</code>): its panes as <code>egui_tiles</code> tiles (rerun-io, MIT OR Apache-2.0, made for egui 0.37), tabs and splits a person drags and resizes. The skeleton's panes are the command list (<code>commands</code>) and the open command's view (<code>view</code>); the default layout puts the list on the left, 300 per mille of the width, and the view beside it.</p>
-  <div class="rule"><strong>The UI state is the layout's source of truth</strong><span>The layout is the UI state's <code>dock</code>, a small typed tree (<code>DockNode</code>: tabs of panes by id with the one shown, or a split across or down into parts, each with its share per mille) that <code>ui.set</code> sets and <code>ui.inspect</code> reads. Each frame the dock is built from it when it changed (an agent's <code>ui.set</code>, a restored launch), drawn, and read back: what a person dragged or resized goes to the state through <code>ui.set</code>. egui_tiles' own saved state is never loaded.</span></div>
-  <div class="rule"><strong>A hostile layout can't break it</strong><span><code>ui.set</code> refuses a layout deeper than 6 or holding more than 32 items, a split with no parts or a share out of 1–1000, empty tabs, or a pane the dock doesn't have; a saved file with such a layout is refused as malformed. Whatever layout it is given, the dock shows each pane once: one left out is added, one named twice is shown once. Hiding the command list (<code>show_list</code>) hides its tile.</span></div>
-  <p>Its look, from the tokens, through egui_tiles' <code>Behavior</code>:</p>
-  <div class="scroll"><table><thead><tr><th>Part</th><th>Value</th></tr></thead><tbody>
-    <tr><td>Gap between panes and around the dock (<code>GAP</code>)</td><td>4, in <code>chrome</code></td></tr>
-    <tr><td>Separator: idle / hovered / dragged</td><td><code>chrome</code> / <code>accent</code> / <code>accent</code></td></tr>
-    <tr><td>Tab bar height (<code>TAB_BAR_HEIGHT</code>, the row + 4)</td><td class="num">22</td></tr>
-    <tr><td>Tab bar fill / line under it</td><td><code>header</code> / <code>frame</code></td></tr>
-    <tr><td>The shown tab</td><td>fill <code>background</code>, outline <code>frame</code>: it joins its pane</td></tr>
-    <tr><td>Other tabs</td><td>fill <code>header</code>, no outline, title <code>muted</code></td></tr>
-    <tr><td>A tab's title</td><td>its pane's icon, then its name, one line of text</td></tr>
-    <tr><td>The focused pane's tab (the pane last clicked in)</td><td>a 2 px <code>accent</code> underline</td></tr>
-    <tr><td>A pane's body</td><td>fill <code>background</code>, 1 px <code>frame</code> stroke, inner margin 6 (<code>PANE_MARGIN</code>)</td></tr>
-    <tr><td>Dragging a pane</td><td>the dragged pane under <code>accent</code> at 40 %; where it would land in <code>accent</code> at 15 %, edged 1 px <code>accent</code></td></tr>
-    <tr><td>Closing a tab</td><td>not offered: the skeleton's panes are fixed, and the list hides by <code>show_list</code></td></tr>
-  </tbody></table></div>
+<section>
+<h2 id="10-the-dock"><span class="n">10</span>The dock <span class="status in">In the skeleton</span></h2>
+<p>The window under the menu bar is a dock (<code>crates/ui/src/dock.rs</code>): its panes
+as <a href="https://github.com/rerun-io/egui_crates"><code>egui_tiles</code></a> tiles (rerun-io, MIT OR Apache-2.0,
+made for egui 0.37), tabs and splits a person drags and resizes. The skeleton's panes are the
+command list (<code>commands</code>) and the open command's view (<code>view</code>); the default layout puts the list
+on the left, 300 per mille of the width, and the view beside it.</p>
+<div class="rule"><strong>The UI state is the layout's source of truth</strong><span> The layout is the UI state's <code>dock</code>, a small typed
+tree (<code>DockNode</code>: tabs of panes by id with the one shown, or a split across or down into parts,
+each with its share per mille) that <code>ui.set</code> sets and <code>ui.inspect</code> reads. Each frame the dock is
+built from it when it changed since it was built (an agent's <code>ui.set</code>, a restored launch), drawn,
+and read back: what a person dragged or resized goes to the state through <code>ui.set</code>. egui_tiles'
+own saved state is never loaded. <code>ui.set</code> refuses a layout deeper than 6 or holding more than 32
+items, a split with no parts or a share out of 1–1000, empty tabs, or a pane the dock doesn't
+have; a saved file with such a layout is refused as malformed. Whatever layout it is given, the
+dock shows each pane once: one left out is added, one named twice is shown once. Hiding the
+command list (<code>show_list</code>) hides its tile.</span></div>
+<p>Its look, from the tokens, through egui_tiles' <code>Behavior</code>:</p>
+<div class="scroll"><table><thead><tr><th>Part</th><th>Value</th></tr></thead><tbody>
+<tr><td>Gap between panes and around the dock (<code>GAP</code>)</td><td>4, in <code>chrome</code></td></tr>
+<tr><td>Separator: idle / hovered / dragged</td><td><code>chrome</code> / <code>accent</code> / <code>accent</code></td></tr>
+<tr><td>Tab bar height (<code>TAB_BAR_HEIGHT</code>, the row + 4)</td><td class="num">22</td></tr>
+<tr><td>Tab bar fill / line under it</td><td><code>header</code> / <code>frame</code></td></tr>
+<tr><td>The shown tab</td><td>fill <code>background</code>, outline <code>frame</code>: it joins its pane</td></tr>
+<tr><td>Other tabs</td><td>fill <code>header</code>, no outline, title <code>muted</code></td></tr>
+<tr><td>A tab's title</td><td>its pane's icon, then its name, one line of text</td></tr>
+<tr><td>The focused pane's tab (the pane last clicked in)</td><td>a 2 px <code>accent</code> underline</td></tr>
+<tr><td>A pane's body</td><td>fill <code>background</code>, 1 px <code>frame</code> stroke, inner margin 6 (<code>PANE_MARGIN</code>)</td></tr>
+<tr><td>Dragging a pane</td><td>the dragged pane under <code>accent</code> at 40 %; where it would land in <code>accent</code> at 15 %, edged 1 px <code>accent</code></td></tr>
+<tr><td>Closing a tab</td><td>not offered: the skeleton's panes are fixed, and the list hides by <code>show_list</code></td></tr>
+</tbody></table></div>
 </section>
 
-<section id="window">
-  <h2><span class="n">11</span>The window and the app icon <span class="status in">In the skeleton</span></h2>
-  <p>In <code>apps/&lt;app&gt;/src/window.rs</code> and <code>place.rs</code>, and <code>crates/ui/src/icon.rs</code>.</p>
-  <ul>
-    <li><strong>Frame:</strong> the system's own title bar and frame: no custom decorations, no transparent window.</li>
-    <li><strong>Title:</strong> the product name.</li>
-    <li><strong>Size and place:</strong> the app keeps them itself, not eframe (<code>persist_window: false</code>), in a file beside the UI state's (<code>--ui-state &lt;file&gt;</code>; the window's is <code>&lt;file&gt;</code> with <code>.window.json</code>). It saves only a normal window's rectangle, and maximized on its own: one closed minimized, maximized or full screen keeps the last normal one. At launch it reads the monitors before the window opens (the app runs eframe on its own event loop, <code>place::Launch</code>) and restores the rectangle only when at least half of it is on a connected monitor and it is over the minimum (640 × 400); otherwise the window opens at its default size (1280 × 800, no more than nine tenths of the monitor), centred on the primary monitor. The file is read through the backends' capped read and written through their atomic writer, as hostile input.</li>
-    <li><strong>Renderer:</strong> glow (OpenGL), the skeleton's default: small, and enough for its window. An app that needs more switches to wgpu in its window's <code>eframe</code> features; one of the swarm's tools does, asking the GPU for its own largest texture side so a window across monitors fits, with vsync on and an environment variable to turn it off when measuring frame times.</li>
-    <li><strong>App icon:</strong> a generic one drawn in code from the theme's palette, with no third-party artwork: a dark tile (<code>header</code> to <code>base</code>) holding a list of three commands, each a <code>text</code> bullet and a bar in the series' first colours. The window uses it at 256 px. An app replaces it with its own, drawn the same way. A browser favicon or a Windows <code>.ico</code> (embedded in the exe with its version info by a <code>build.rs</code>) is the app's to add: generated from the drawing code and checked in, with a test that fails when they drift from it.</li>
-  </ul>
+<section>
+<h2 id="11-the-window-and-the-app-icon"><span class="n">11</span>The window and the app icon <span class="status in">In the skeleton</span></h2>
+<p>In <code>apps/&lt;app&gt;/src/window.rs</code> and <code>place.rs</code>, and <code>crates/ui/src/icon.rs</code>.</p>
+<ul>
+<li><strong>Frame:</strong> the system's own title bar and frame: no custom decorations, no transparent window.</li>
+<li><strong>Title:</strong> the product name.</li>
+<li><strong>Size and place:</strong> the app keeps them itself, not eframe (<code>persist_window: false</code>), in a file
+beside the UI state's (<code>--ui-state &lt;file&gt;</code>; the window's is <code>&lt;file&gt;</code> with <code>.window.json</code>). It
+saves only a normal window's rectangle, and maximized on its own: one closed minimized, maximized
+or full screen keeps the last normal one. At launch it reads the monitors before the window opens
+(the app runs eframe on its own event loop, <code>place::Launch</code>) and restores the rectangle only when
+at least half of it is on a connected monitor and it is over the minimum (640 × 400); otherwise
+the window opens at its default size (1280 × 800, no more than nine tenths of the monitor),
+centred on the primary monitor. The file is read through the backends' capped read and written
+through their atomic writer, as hostile input.</li>
+<li><strong>Renderer:</strong> glow (OpenGL), the skeleton's default: small, and enough for its window. An app that
+needs more switches to wgpu in its window's <code>eframe</code> features; one of the swarm's tools does, asking the
+GPU for its own largest texture side so a window across monitors fits, with vsync on and an
+environment variable to turn it off when measuring frame times.</li>
+<li><strong>App icon:</strong> a generic one drawn in code from the theme's palette, with no third-party artwork:
+a dark tile (<code>header</code> to <code>base</code>) holding a list of three commands, each a <code>text</code> bullet and a bar
+in the series' first colours. The window uses it at 256 px. An app replaces it with its own,
+drawn the same way. A browser favicon or a Windows <code>.ico</code> (embedded in the exe with its version
+info by a <code>build.rs</code>) is the app's to add: generated from the drawing code and checked in, with a
+test that fails when they drift from it.</li>
+</ul>
 </section>
 
-<section id="menus">
-  <h2><span class="n">12</span>Menus <span class="status in">In the skeleton</span></h2>
-  <p>The menus are the commands' menu paths and shortcuts (<code>app-architecture.md</code> › The minimum interfaces): the UI maps the same data to wherever the platform puts menus, and no command changes for it.</p>
-  <ul>
-    <li><strong>Windows and Linux: the window's own bar.</strong> egui's menu bar across the top of the window, a menu per first part of the paths, each item with its icon, its shortcut and, when it can't run now, greyed out with why.</li>
-    <li><strong>macOS: the system menu bar.</strong> The menus are at the top of the screen and the window draws none: the dock fills it under the title bar. <code>crates/ui/src/native_menu.rs</code> makes the bar as plain data from <code>Shell::menus()</code> (tested on every platform), and <code>apps/&lt;app&gt;/src/macos_menu.rs</code> hands it to AppKit with <a href="https://github.com/tauri-apps/muda"><code>muda</code></a> (tauri-apps, MIT OR Apache-2.0) on the window's own event loop. Automatic window tabbing is off, so AppKit adds no tab items. If <code>muda</code> can't make the bar, the window draws its own and says so on stderr.</li>
-  </ul>
-  <div class="scroll"><table><thead><tr><th>Menu</th><th>Holds</th></tr></thead><tbody>
-      <tr><td>The application menu, titled by the system with the app bundle's name (an unbundled binary's, as <code>cargo run</code>'s, shows the executable's)</td><td>About &lt;product&gt; (the system's panel, with the name and version), the app's own <code>App</code> items, Services, Hide &lt;product&gt;, Hide Others, Show All, Quit &lt;product&gt; (⌘Q)</td></tr>
-      <tr><td>The app's menus</td><td>in the order the commands first name them, as the window's bar has them</td></tr>
-      <tr><td>Window</td><td>the app's own <code>Window</code> items, then Minimize, Zoom and Bring All to Front; the system lists the app's windows there</td></tr>
-      <tr><td>Help</td><td>last, when the app has one; the system adds its search field</td></tr>
-  </tbody></table></div>
-  <ul>
-    <li><strong>Where an app's own items go.</strong> A command whose menu path starts with <code>App</code> (<code>App/Settings…</code>, with <code>Mod+Comma</code>: preferences) is in the application menu after About on macOS, and in a menu named <code>App</code> elsewhere. The app's own info (<code>Help/App info</code>, the skeleton's <code>app.info</code>) stays in Help on every platform: About is the system's panel, not a command.</li>
-    <li><strong>Quit</strong> closes the window as its close button does, so the UI state and the window's place are saved; the system's other items are the system's to run.</li>
-    <li><strong>A click is a click.</strong> A native item activates its command's row as a click in the window's bar does (<code>Shell::activate</code>), through the one dispatch, so consent and <code>unavailable</code> behave the same. Each item is greyed out while its command can't run now, set again each frame from the rows.</li>
-    <li><strong>A shortcut fires once.</strong> On macOS it is the item's key equivalent alone: AppKit takes it before the window sees the key, so egui never gets it too. A command's shortcut that a system item takes (⌘Q, ⌘H, ⌥⌘H, ⌘M) keeps its item without the key. <code>Mod</code> is Command; <code>Plus</code> is the <code>=</code> key.</li>
-    <li><strong>Layers.</strong> <code>muda</code> is a toolkit to <code>layers</code>: the UI layer and the apps built on it may link it, nothing below. The skeleton links it in the windowed app, for macOS only (no GTK elsewhere).</li>
-  </ul>
+<section>
+<h2 id="12-menus"><span class="n">12</span>Menus <span class="status in">In the skeleton</span></h2>
+<p>The menus are the commands' menu paths and shortcuts
+(<a href="app-architecture.md#the-minimum-interfaces">app-architecture.md › The minimum interfaces</a>): the
+UI maps the same data to wherever the platform puts menus, and no command changes for it.</p>
+<ul>
+<li>
+<p><strong>Windows and Linux: the window's own bar.</strong> egui's menu bar across the top of the window, a menu
+per first part of the paths, each item with its icon (<a href="#9-icons">section 9</a>), its shortcut and,
+when it can't run now, greyed out with why (<a href="#8-density">section 8</a> has its metrics).</p>
+</li>
+<li>
+<p><strong>macOS: the system menu bar.</strong> The menus are at the top of the screen and the window draws none:
+the dock fills it under the title bar. <code>crates/ui/src/native_menu.rs</code> makes the bar as plain data
+from <code>Shell::menus()</code> (tested on every platform), and <code>apps/&lt;app&gt;/src/macos_menu.rs</code> hands it to
+AppKit with <a href="https://github.com/tauri-apps/muda"><code>muda</code></a> (tauri-apps, MIT OR Apache-2.0) on the
+window's own event loop. Automatic window tabbing is off, so AppKit adds no tab items. If <code>muda</code>
+can't make the bar, the window draws its own and says so on stderr.</p>
+</li>
+<li>
+<p><strong>The macOS bar, left to right:</strong></p>
+<div class="scroll"><table><thead><tr><th>Menu</th><th>Holds</th></tr></thead><tbody>
+<tr><td>The application menu, titled by the system with the app bundle's name (an unbundled binary's, as <code>cargo run</code>'s, shows the executable's)</td><td>About &lt;product&gt; (the system's panel, with the name and version), the app's own <code>App</code> items, Services, Hide &lt;product&gt;, Hide Others, Show All, Quit &lt;product&gt; (⌘Q)</td></tr>
+<tr><td>The app's menus</td><td>in the order the commands first name them, as the window's bar has them</td></tr>
+<tr><td>Window</td><td>the app's own <code>Window</code> items, then Minimize, Zoom and Bring All to Front; the system lists the app's windows there</td></tr>
+<tr><td>Help</td><td>last, when the app has one; the system adds its search field</td></tr>
+</tbody></table></div>
+</li>
+<li>
+<p><strong>Where an app's own items go.</strong> A command whose menu path starts with <code>App</code> (<code>App/Settings…</code>,
+with <code>Mod+Comma</code>: preferences) is in the application menu after About on macOS, and in a menu
+named <code>App</code> elsewhere. The app's own info (<code>Help/App info</code>, the skeleton's <code>app.info</code>) stays in
+Help on every platform: About is the system's panel, not a command.</p>
+</li>
+<li>
+<p><strong>Quit</strong> closes the window as its close button does, so the UI state and the window's place are
+saved; the system's other items are the system's to run.</p>
+</li>
+<li>
+<p><strong>A click is a click.</strong> A native item activates its command's row as a click in the window's bar
+does (<code>Shell::activate</code>), through the one dispatch, so consent and <code>unavailable</code> behave the same.
+Each item is greyed out while its command can't run now, set again each frame from the rows.</p>
+</li>
+<li>
+<p><strong>A shortcut fires once.</strong> On macOS it is the item's key equivalent alone: AppKit takes it before
+the window sees the key, so egui never gets it too. A command's shortcut that a system item takes
+(⌘Q, ⌘H, ⌥⌘H, ⌘M) keeps its item without the key. <code>Mod</code> is Command; <code>Plus</code> is the <code>=</code> key.</p>
+</li>
+<li>
+<p><strong>Layers.</strong> <code>muda</code> is a toolkit to <code>layers</code>: the UI layer and the apps built on it may link it,
+nothing below. The skeleton links it in the windowed app, for macOS only (no GTK elsewhere).</p>
+</li>
+</ul>
 </section>
 
-<section id="changes">
-  <h2><span class="n">13</span>Changing the UI substrate</h2>
-  <ol>
-    <li><strong>A colour</strong> is a token in the engine's <code>theme.rs</code>, named for what it means, with a value in each look, in <code>TOKENS</code>. Its contrast is measured where it is read: a shortfall is nudged and noted, or kept in <code>KEPT_SHORT</code> with its ratio and why. Change this page and <code>app-ui-substrate.md</code> with it: their test fails on a colour that differs.</li>
-    <li><strong>An identifier's colour</strong> comes from a range, by <code>pick</code> or <code>at</code>, never a colour of its own.</li>
-    <li><strong>A metric</strong> goes in <code>density</code>, a text size in <code>fonts</code>, an icon in <code>icons</code>, each with a doc comment saying where its value comes from.</li>
-    <li><strong>A new command</strong> gets its icon in the command table, and <strong>a new pane</strong> its icon in the pane mapping.</li>
-    <li><strong>Every word</strong> a person reads is in the string catalog.</li>
-    <li><strong>Check a UI change by eye:</strong> render it offscreen and put the picture on the merge request.</li>
-  </ol>
+<section>
+<h2 id="13-changing-the-ui-substrate"><span class="n">13</span>Changing the UI substrate</h2>
+<ol>
+<li><strong>A colour</strong> is a token in the engine's <code>theme.rs</code>, named for what it means, with a value in
+each look, in <code>TOKENS</code>. Its contrast is measured where it is read: a shortfall is nudged and
+noted, or kept in <code>KEPT_SHORT</code> with its ratio and why. Change its row in this document with it:
+the colour test fails on a colour that differs.</li>
+<li><strong>An identifier's colour</strong> comes from a range, by <code>pick</code> or <code>at</code>, never a colour of its own.</li>
+<li><strong>A metric</strong> goes in <code>density</code>, a text size in <code>fonts</code>, an icon in <code>icons</code>, each with a doc
+comment saying where its value comes from.</li>
+<li><strong>A new command</strong> gets its icon in the command table, and <strong>a new pane</strong> its icon in the pane
+mapping.</li>
+<li><strong>Every word</strong> a person reads is in the string catalog.</li>
+<li><strong>Check a UI change by eye:</strong> render it offscreen and put the picture on the pull request.</li>
+<li><strong>Edit this document, never <a href="app-ui-substrate.html">the page</a>.</strong> In swarm-core,
+<code>cargo xtask docs render</code> makes the page from it: its text, a swatch beside each colour, each
+section's status as a badge, and the ranges drawn from the skeleton's <code>theme.rs</code> where
+<code>&lt;!-- page: ranges --&gt;</code> stands (each range's table of entries is folded there, as the drawing
+shows them). The test <code>the_pages_are_rendered_from_their_docs</code> fails when the
+committed page differs from a fresh render, naming the command and the first line that differs.
+It holds what <code>the_ui_substrate_page_and_doc_agree</code> and the page's half of
+<code>the_ui_substrate_has_the_skeletons_colours</code> held, and both are gone.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="revision-history">Revision history</h2>
+<div class="scroll"><table><thead><tr><th>Date</th><th>Change</th><th>Summary</th></tr></thead><tbody>
+<tr><td class="num">2026-11-14</td><td>minor</td><td>New: the App UI Substrate. The theme as data, the 20 tokens and the 4 ranges in both looks, egui's visuals, the contrast rules and what <code>KEPT_SHORT</code> keeps, and the corner radius, type, density, icons, the dock (egui_tiles), the window and the app icon, and the menus (the system menu bar on macOS), each in the skeleton. A test holds every colour here to the skeleton's theme, and another holds the page beside it to each section's status (mornycorp/swarm-core#104).</td></tr>
+<tr><td class="num">2026-11-14</td><td>minor</td><td><a href="app-ui-substrate.html">The page</a> is generated from this doc by <code>cargo xtask docs render</code> (in swarm-core's own xtask; the markdown by <code>pulldown-cmark</code>): a swatch beside each colour, each status a badge, and the ranges drawn from the skeleton's <code>theme.rs</code> where <code>&lt;!-- page: ranges --&gt;</code> stands. <code>the_pages_are_rendered_from_their_docs</code> fails on a page that differs from a fresh render. A link to <a href="app-substrate.html">the App Substrate</a>, the page that explains the whole substrate (mornycorp/swarm-core#108).</td></tr>
+</tbody></table></div>
 </section>
 
 <footer>
-  <span>Colours: <code>templates/app/crates/engine/src/theme.rs</code> and its tests, and <code>templates/app/crates/ui/src/theme.rs</code>. The rule: <code>app-architecture.md</code> › Colours from the theme, words from the catalog.</span>
-  <span>This page and <code>app-ui-substrate.md</code> say the same; <code>the_ui_substrate_has_the_skeletons_colours</code> holds both to the skeleton's colours, and <code>the_ui_substrate_page_and_doc_agree</code> holds each section's status in step.</span>
+  <span>Generated from <code>app-ui-substrate.md</code> by swarm-core's <code>cargo xtask docs render</code>, the ranges drawn from the skeleton's <code>templates/app/crates/engine/src/theme.rs</code>: edit the doc, never this page.</span>
+  <span>Its colours are the doc's tables, which <code>the_ui_substrate_has_the_skeletons_colours</code> holds to the skeleton's theme. The rule: <code>app-architecture.md</code> › Colours from the theme, words from the catalog.</span>
 </footer>
 </main>
 
 <script>
-// The colours: the skeleton theme's, in the order it has them (a test holds every one to it).
-const TOKENS = [
-  ["Surfaces"],
-  ["background", "What everything is drawn on: a panel's fill", "#353535", "#EFEFEF"],
-  ["chrome", "The menu bar, the status bar and other chrome", "#353535", "#EFEFEF"],
-  ["panel", "Floating windows, dialogs and popups", "#353535", "#EFEFEF"],
-  ["base", "Views: lists, tables and text fields", "#2A2A2A", "#FFFFFF"],
-  ["alt_base", "Every other row of a list drawn on base", "#303030", "#F7F7F7"],
-  ["header", "Table header rows and a ruler", "#3F3F3F", "#CACACA"],
-  ["frame", "Lines that frame views and panels (decorative: no minimum)", "#424242", "#ABABAB"],
-  ["border", "Decorative lines: window frames and separators", "#424242", "#ABABAB"],
-  ["Text"],
-  ["text", "Body text", "#FCFCFC", "#000000"],
-  ["strong", "Emphasised text, and text on a range colour made a text background", "#FFFFFF", "#000000"],
-  ["muted", "Text that matters less: a command the UI can't run here, a hint", "#A6A6A6", "#666666"],
-  ["selected_text", "Text on the selection", "#FCFCFC", "#000000"],
-  ["link", "A link", "#4DA6FF", "#1F6FA8"],
-  ["Controls and highlights"],
-  ["control", "The fill of a widget at rest: a button, a field", "#454545", "#F7F7F7"],
-  ["control_border", "The edge of a widget at rest: 3:1 on the background", "#858585", "#7A7A7A"],
-  ["accent", "An accent that carries no text: what has focus, an outline", "#007ACC", "#2B78AE"],
-  ["selection", "What is selected: its fill, with selected_text on it", "#0070BB", "#C1DCEE"],
-  ["States"],
-  ["success", "Something that worked", "#90EE90", "#006400"],
-  ["warning", "Something to look at that hasn't failed", "#FF7F1C", "#965C00"],
-  ["error", "A failure, or why a command can't run now", "#FF8A80", "#B42318"],
-];
-const SERIES_DARK = ["#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D"];
-const SERIES_LIGHT = ["#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494"];
-const SERIES_NONE = ["#666666", "#B3B3B3"];
-const MARKERS = ["#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F1C", "#FFFF33", "#A65628", "#F781BF", "#999999"];
-const GLASBEY_DARK = ["#F12F17", "#1B9211", "#C727FF", "#06ACC6", "#98FF00", "#FFA530", "#FF8FC8", "#00FECF", "#B0A5FF", "#94AD84", "#A77412", "#E6299C", "#FEF590", "#C86F66", "#9EE3FF", "#00C946", "#A977AD", "#B8BB02", "#F4C0B1", "#FF28FD", "#F3CEFF", "#009F7D", "#FF6200", "#FF3465", "#A0E492", "#8D9BB2", "#829126", "#78C7BB", "#BC9258", "#E58FFF", "#72B9FF", "#C6A5C1"];
-const GLASBEY_LIGHT = ["#D70000", "#028800", "#BB00FE", "#0088B1", "#6C9700", "#CC7407", "#C5668F", "#009D6F", "#5A4AA3", "#546745", "#755A00", "#C63189", "#8F7B01", "#9D5743", "#086B84", "#006D2E", "#A57AB7", "#596D00", "#A2766A", "#FD00CD", "#836F8C", "#00816A", "#EB4E00", "#CB0044", "#004B00", "#536177", "#4C5001", "#499692", "#9F6E32", "#7F2B8E", "#688CBD", "#A67E93"];
-
+// The colours: the skeleton theme's RANGES (templates/app/crates/engine/src/theme.rs), in its order.
 const RANGES = [
-  { name: "series", size: "7, and a grey for none", meaning: "Numbered things in order (an issue, a lane, a frame): at(n) is entry n % 7; none() is the grey for something with no number.",
-    source: "ColorBrewer Dark2 in dark, Set2 in light (Cynthia A. Brewer, colorbrewer2.org, Apache-2.0), as published.", dark: SERIES_DARK, light: SERIES_LIGHT, none: SERIES_NONE },
-  { name: "markers", size: "9", meaning: "Up to 9 marks told apart at a glance, the same in both looks: a marker by number (at), or a few ids (pick).",
-    source: "ColorBrewer Set1 (the same source) with the orange #FF7F1C for its #FF7F00, then grey.", dark: MARKERS, light: MARKERS },
-  { name: "range16", size: "16", meaning: "Up to 16 identifiers by a stable pick of their id: an object's type, a thread, a source.",
-    source: "The first 16 of range32.", dark: GLASBEY_DARK.slice(0, 16), light: GLASBEY_LIGHT.slice(0, 16) },
-  { name: "range32", size: "32", meaning: "Up to 32 identifiers side by side (the rows of a timeline, the bars of a scrubber), told apart beside each other, not only by a legend.",
-    source: "Glasbey et al. 2007's sets in colorcet 3.2.1 (Peter Kovesi, CC BY 4.0): glasbey_light in dark, and glasbey_dark's nearest hue to each in light; 11 entries nudged to 3:1.", dark: GLASBEY_DARK, light: GLASBEY_LIGHT },
+  { name: "series", dark: ["#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D"], light: ["#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494"], none: ["#666666", "#B3B3B3"] },
+  { name: "markers", dark: ["#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F1C", "#FFFF33", "#A65628", "#F781BF", "#999999"], light: ["#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F1C", "#FFFF33", "#A65628", "#F781BF", "#999999"] },
+  { name: "range16", dark: ["#F12F17", "#1B9211", "#C727FF", "#06ACC6", "#98FF00", "#FFA530", "#FF8FC8", "#00FECF", "#B0A5FF", "#94AD84", "#A77412", "#E6299C", "#FEF590", "#C86F66", "#9EE3FF", "#00C946"], light: ["#D70000", "#028800", "#BB00FE", "#0088B1", "#6C9700", "#CC7407", "#C5668F", "#009D6F", "#5A4AA3", "#546745", "#755A00", "#C63189", "#8F7B01", "#9D5743", "#086B84", "#006D2E"] },
+  { name: "range32", dark: ["#F12F17", "#1B9211", "#C727FF", "#06ACC6", "#98FF00", "#FFA530", "#FF8FC8", "#00FECF", "#B0A5FF", "#94AD84", "#A77412", "#E6299C", "#FEF590", "#C86F66", "#9EE3FF", "#00C946", "#A977AD", "#B8BB02", "#F4C0B1", "#FF28FD", "#F3CEFF", "#009F7D", "#FF6200", "#FF3465", "#A0E492", "#8D9BB2", "#829126", "#78C7BB", "#BC9258", "#E58FFF", "#72B9FF", "#C6A5C1"], light: ["#D70000", "#028800", "#BB00FE", "#0088B1", "#6C9700", "#CC7407", "#C5668F", "#009D6F", "#5A4AA3", "#546745", "#755A00", "#C63189", "#8F7B01", "#9D5743", "#086B84", "#006D2E", "#A57AB7", "#596D00", "#A2766A", "#FD00CD", "#836F8C", "#00816A", "#EB4E00", "#CB0044", "#004B00", "#536177", "#4C5001", "#499692", "#9F6E32", "#7F2B8E", "#688CBD", "#A67E93"] },
 ];
 
 // behind_text and darker, as the skeleton's engine theme computes them.
@@ -391,11 +618,6 @@ function behindText(c, dark) {
   return out;
 }
 
-const swatch = c => `<span class="sw" style="background:${c}"></span>${c}`;
-document.querySelector("#t-tokens tbody").innerHTML = TOKENS.map(r => r.length === 1
-  ? `<tr><td class="group" colspan="4">${r[0]}</td></tr>`
-  : `<tr><td><code>${r[0]}</code></td><td>${r[1]}</td><td class="hex">${swatch(r[2])}</td><td class="hex">${swatch(r[3])}</td></tr>`).join("");
-
 function cell(h, index, dark) {
   const c = rgb(h), behind = hex(behindText(c, dark)), edge = hex(darker(c));
   return `<div class="cell" title="${index}: ${h} · border ${edge} · text background ${behind}"><span class="fill" style="background:${h};border-color:${edge}"></span><span class="txt" style="background:${behind};color:${dark ? "#FFFFFF" : "#000000"}">Aa</span><span class="i">${index}</span></div>`;
@@ -405,8 +627,9 @@ function look(range, dark) {
   if (range.none) cells += cell(range.none[dark ? 0 : 1], "none", dark);
   return `<div><span class="label">${dark ? "Dark" : "Light"}</span><div class="ground ${dark ? "dark" : "light"}">${cells}</div></div>`;
 }
+const size = r => `${r.dark.length}${r.none ? ", and one for none" : ""}`;
 document.getElementById("ranges-out").innerHTML = RANGES.map(r =>
-  `<div class="range"><div class="range-head"><code>${r.name}</code><span>${r.size}</span></div><p>${r.meaning}</p><p class="source">${r.source}</p><div class="two">${look(r, true)}${look(r, false)}</div></div>`).join("");
+  `<div class="range"><div class="range-head"><code>${r.name}</code><span>${size(r)}</span></div><div class="two">${look(r, true)}${look(r, false)}</div></div>`).join("");
 </script>
 </body>
 </html>
