@@ -275,6 +275,36 @@ fn found_after(app: &App, root: &Path, path: &str, change: impl FnOnce(&str) -> 
     found
 }
 
+/// Only the backends crate touches the outside: a program started or a file
+/// written in the engine, the automation crate, the CLI or a crate the app adds is a finding of the
+/// right rule in the right file; the same in the backends' own process module and file writer is
+/// none.
+fn the_backends_alone_touch_the_outside(app: &App, root: &Path) {
+    let start = "fn starts() { let _ = std::process::Command::new(\"x\"); }";
+    let write = "fn writes() { let _ = std::fs::write(\"x\", \"\"); }";
+    for (path, line, rule) in [
+        ("crates/engine/src/lib.rs", start, "process-module"),
+        ("crates/engine/src/session.rs", write, "file-writes"),
+        ("crates/automation/src/serve.rs", write, "file-writes"),
+        ("apps/my-cli/src/main.rs", write, "file-writes"),
+        ("crates/backends/src/files.rs", start, "process-module"),
+    ] {
+        let found = found_after(app, root, path, |text| format!("{text}\n{line}\n"));
+        assert!(found.contains(&format!("[{rule}]")) && found.contains(path), "{rule} in {path}: {found}");
+    }
+    for (path, line) in [("crates/backends/src/process.rs", start), ("crates/backends/src/files.rs", write), ("crates/testkit/src/lib.rs", write)] {
+        // At the end, after the crate root's headers.
+        let found = found_after(app, root, path, |text| format!("{text}\n{line}\n"));
+        assert!(found.is_empty(), "{path} may: {found}");
+    }
+    let added = root.join("crates/domain/src");
+    std::fs::create_dir_all(&added).unwrap();
+    std::fs::write(added.join("lib.rs"), format!("{write}\n")).unwrap();
+    let scans = checks::scan(root, &skeleton::scans_at(root)).err().map_or_else(String::new, |f| f.to_string());
+    assert!(scans.contains("[file-writes]") && scans.contains("crates/domain/src/lib.rs"), "a crate the app adds is held to it: {scans}");
+    std::fs::remove_dir_all(root.join("crates/domain")).unwrap();
+}
+
 /// The UI crate's own rules: a toolkit below the UI layer, and a file write, a process start, an
 /// untyped read, a colour made in place and a word written in place in the UI crate, are each a
 /// finding of the right rule in the right file.
@@ -438,9 +468,11 @@ fn the_examples_checks_pass_with_no_app_and_hold_an_app_to_the_skeletons_scans()
     write(&repo, "Cargo.toml", &with_the_crates(&guide, &manifest));
     assert!(skeleton::is_app(&repo) && !skeleton::has_ui(&repo));
     let report = checks::check(&app, &repo).unwrap_or_else(|f| panic!("the app:\n{f}"));
+    assert!(skeleton::has_backends(&repo), "the skeleton writes the backends crate");
     assert_eq!((report.layers.as_ref().map(|l| l.members), report.scan.rules.len()), (Some(7), skeleton::SCANS.len()), "the skeleton's scans: {report}");
     let found = found_after(&app, &repo, "crates/automation/src/serve.rs", |text| format!("fn reads(v: serde_json::Value) {{ let _ = v[\"k\"]; }}\n{text}"));
     assert!(found.contains("[value-reads]"), "the app is held to them: {found}");
+    the_backends_alone_touch_the_outside(&app, &repo);
 
     skeleton::init(&Project::EXAMPLE, &app, &repo, "2026-11-03", true).unwrap();
     assert!(skeleton::has_ui(&repo));

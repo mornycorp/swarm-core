@@ -15,6 +15,10 @@
 //! the session's `states`, the binary's `enabled`, the frame's `enabled` method; MCP has none), and the
 //! run holds them to agree and a disabled command's call to fail `unavailable` with the same reason.
 //!
+//! A call **cancelled before it runs** is made through the session's call, by its token
+//! ([`App::cancelled`]), and the run holds it to fail `cancelled` without running: no other surface can
+//! be handed a call already cancelled.
+//!
 //! **Each call is made on a fresh session** ([`App::call`]), the socket's too: a server is started for
 //! the call and stopped after it, so a command that changes the session (`ui.set`) never changes what
 //! the next call sees on one surface and not on the others.
@@ -248,8 +252,9 @@ impl App for Ours {
         states_via(surface)
     }
 
-    /// A call cancelled before it runs: the session's, by its token. The transports cancel from
-    /// their own events (a dropped connection), which their own tests hold.
+    /// A call cancelled before it runs: the session's, by its token. The CLI, `serve`, the socket and
+    /// MCP cancel from their own events (a dropped connection, a server's stop), which a request can't
+    /// carry, and their own tests hold.
     fn cancelled(&self, call: Call<'_>) -> Option<Outcome> {
         (call.surface == Surface::InProcess).then(|| via_session_cancelled(call.id, call.params, call.consent))
     }

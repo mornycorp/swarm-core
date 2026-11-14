@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::cases::{self, Case, Key, UNKNOWN_ID, adversarial_params};
 use super::values::{self, Schema};
-use super::{App, Call, CommandInfo, Enabled, Example, Failure, Outcome, REQUEST_CAP, Rule, Surface, Violation, Violations};
+use super::{App, Call, CommandInfo, Enabled, Example, Failure, Outcome, PANICKED, REQUEST_CAP, Rule, Surface, Violation, Violations};
 
 /// The commands a fresh session has disabled, by id, each with why: what the first surface that
 /// answers the enabled query says ([`enabled`]).
@@ -64,12 +64,35 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     shown(&text.unwrap_or_else(|| "(no message)".to_owned()))
 }
 
-/// One call through one surface: `None` when it panicked (a violation of `no-panic`). A failure
-/// without a code or a remediation is a violation of `error-shape`.
+/// Whether `failure` is a panic the app's dispatch caught: `internal`, with [`PANICKED`].
+fn caught_panic(failure: &Failure) -> bool {
+    failure.code == "internal" && failure.remediation == PANICKED
+}
+
+/// One call through one surface: `None` when it panicked, or the app's dispatch caught a panic
+/// (each a violation of `no-panic`). A failure without a code or a remediation is a violation of
+/// `error-shape`.
 fn ask(app: &dyn App, call: Call<'_>, found: &mut Found) -> Option<Outcome> {
+    made(call, catch_unwind(AssertUnwindSafe(|| app.call(call))), found)
+}
+
+/// What the call `call` gave (`Err`: it panicked), held to `no-panic` and `error-shape`: the
+/// outcome, or `None` when it panicked or the app's dispatch caught a panic.
+fn made(call: Call<'_>, gave: std::thread::Result<Outcome>, found: &mut Found) -> Option<Outcome> {
     let Call { surface, id, params, .. } = call;
-    match catch_unwind(AssertUnwindSafe(|| app.call(call))) {
+    match gave {
         Ok(outcome) => {
+            if let Err(f) = &outcome
+                && caught_panic(f)
+            {
+                found.add(
+                    Rule::NoPanic,
+                    id,
+                    Some(surface),
+                    format!("the call panicked: with {} it panicked, caught by the dispatch as `internal`", shown(params)),
+                );
+                return None;
+            }
             if let Err(f) = &outcome
                 && (f.code.trim().is_empty() || f.remediation.trim().is_empty())
             {
@@ -231,33 +254,6 @@ pub(super) fn over_cap(app: &dyn App, commands: &[CommandInfo], found: &mut Foun
             expect.judge(found, &first.id, surface, "a request over the 1 MiB cap", &outcome);
         }
     }
-}
-
-/// `cancelled`: each enabled command, called with valid params and consent but cancelled before
-/// it runs, fails `cancelled` on every surface the app can make such a call through
-/// ([`App::cancelled`]). A command whose schema the run can't build params of is left out: the
-/// `examples` rule says so. The calls made.
-pub(super) fn cancelled(app: &dyn App, commands: &[CommandInfo], disabled: &Disabled, found: &mut Found) -> usize {
-    let expect = Expect { rule: Rule::Cancelled, code: "cancelled", key: Key::Any };
-    let mut calls = 0;
-    for command in commands.iter().filter(|c| !disabled.contains_key(&c.id)) {
-        let Some(params) = values::valid_params(&command.params).ok().and_then(|all| all.into_iter().next()) else { continue };
-        for surface in app.surfaces().into_iter().filter(|s| app.accepts(*s, &params)) {
-            let call = Call { surface, id: &command.id, params: &params, consent: true };
-            match catch_unwind(AssertUnwindSafe(|| app.cancelled(call))) {
-                Ok(None) => {}
-                Ok(Some(outcome)) => {
-                    calls += 1;
-                    expect.judge(found, &command.id, surface, "a call cancelled before it ran", &outcome);
-                }
-                Err(payload) => {
-                    calls += 1;
-                    found.add(Rule::NoPanic, &command.id, Some(surface), format!("the cancelled call panicked: {}", panic_message(&*payload)));
-                }
-            }
-        }
-    }
-    calls
 }
 
 /// A command's state, as a message shows it.
@@ -503,4 +499,35 @@ fn one_example(app: &dyn App, command: &CommandInfo, example: &Example, disabled
     }
     let without = if command.needs_consent { without_consent(app, command, &example.params, valid.ran(), found) } else { 0 };
     valid.calls + without
+}
+
+/// `cancelled`: a call of each enabled command, cancelled before it runs, fails `cancelled` on
+/// every surface the app can make such a call through ([`App::cancelled`]); a result means it ran.
+/// The call is made with consent and with params that get past the command's params check: its
+/// first example's, else the first made from its schema (a command with neither is left out, and
+/// `examples` says so). A disabled command is left out: it is refused `unavailable` before its
+/// cancel is looked at. The calls made.
+pub(super) fn cancelled(app: &dyn App, commands: &[CommandInfo], disabled: &Disabled, found: &mut Found) -> usize {
+    let expect = Expect { rule: Rule::Cancelled, code: "cancelled", key: Key::Any };
+    let examples = app.examples();
+    let mut calls = 0;
+    for command in commands.iter().filter(|c| !disabled.contains_key(&c.id)) {
+        let example = examples.iter().find(|e| e.id == command.id).map(|e| e.params.clone());
+        let Some(params) = example.or_else(|| values::valid_params(&command.params).ok().and_then(|all| all.into_iter().next())) else {
+            continue;
+        };
+        for surface in app.surfaces().into_iter().filter(|s| app.accepts(*s, &params)) {
+            let call = Call { surface, id: &command.id, params: &params, consent: true };
+            let gave = match catch_unwind(AssertUnwindSafe(|| app.cancelled(call))) {
+                Ok(None) => continue,
+                Ok(Some(outcome)) => Ok(outcome),
+                Err(payload) => Err(payload),
+            };
+            calls += 1;
+            if let Some(outcome) = made(call, gave, found) {
+                expect.judge(found, &command.id, surface, "a call cancelled before it ran", &outcome);
+            }
+        }
+    }
+    calls
 }
