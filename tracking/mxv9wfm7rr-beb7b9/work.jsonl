@@ -18,3 +18,4 @@
 {"event":"work","issue":106,"mr":107,"t":"2026-11-14T10:47:43Z"}
 {"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-5271c59","t":"2026-11-14T10:54:03Z"}
 {"event":"sub.stop","note":"rc=0","sub":"ready-5271c59","t":"2026-11-14T10:54:34Z"}
+{"event":"submit","issue":106,"mr":107,"t":"2026-11-14T10:54:44Z"}
