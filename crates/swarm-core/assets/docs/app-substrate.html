@@ -1,10 +1,18 @@
-<!-- A page for people, not a source of rules: an overview of the architecture of an app built on
-     Swarm Core. It is drawn from crates/swarm-core/assets/docs/app-architecture.md (the contract),
-     the skeleton under crates/swarm-core/templates/app/ (its layers, files and theme colours) and
-     the commands in crates/swarm-core/src/lib.rs. Where they differ, they are right and this
-     page is stale: AGENTS.md says when to update it. It has no <html> or <body> wrapper because it
-     is also published as it is; a browser opens it all the same. -->
-<title>Swarm Core App Architecture</title>
+<!doctype html>
+<!-- A pinned copy from swarm-core (crates/swarm-core/assets/docs/app-substrate.html): the
+     architectural substrate explained as a page, beside app-architecture.md (the contract it explains)
+     and app-ui-substrate.html. Edit it there, then `cargo xtask swarm-core bump` and
+     `cargo xtask swarm-core sync-assets`. Open it in a browser. It explains the contract in its own
+     words, so it moves with it: the stamp below is the newest row of app-architecture.md's revision
+     history this page has been read against. When a change adds a row there, re-read this page
+     against it, fix what it makes wrong, and move the stamp to the new row (the test
+     the_app_substrate_page_has_caught_up_with_the_contract fails until then, and says what to write). -->
+<!-- contract revision: 2026-11-14 | minor | [The App Substrate](app-substrate.html), this contra -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>App Substrate</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
@@ -38,6 +46,7 @@
 
 * { box-sizing: border-box; }
 body {
+  margin: 0;
   background: var(--bg); color: var(--ink);
   font: 400 1rem/1.6 var(--body);
 }
@@ -52,6 +61,7 @@ h1 { font-size: clamp(2.1rem, 5.4vw, 3.9rem); font-weight: 800; line-height: 1.0
 h2 { font-size: 1.55rem; font-weight: 700; line-height: 1.15; letter-spacing: -.01em; }
 h3 { font-size: 1.02rem; font-weight: 700; font-stretch: 112%; line-height: 1.3; }
 p { margin: 0; max-width: 64ch; }
+a { color: var(--accent); }
 code, pre { font-family: var(--mono); font-size: .86em; }
 code { background: var(--code-bg); padding: .08em .32em; border-radius: 3px; }
 pre { margin: 0; background: var(--code-bg); padding: .85rem 1rem; border-radius: 6px; overflow-x: auto; line-height: 1.5; }
@@ -62,6 +72,7 @@ pre code { background: none; padding: 0; font-size: 1em; }
 /* hero */
 .hero { display: flex; flex-direction: column; gap: 1.25rem; }
 .hero p { font-size: 1.14rem; line-height: 1.55; max-width: 58ch; }
+.eyebrow { font: 500 .8rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 
 /* core sample */
 .core { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 2.5rem; align-items: start; }
@@ -74,9 +85,6 @@ pre code { background: none; padding: 0; font-size: 1em; }
 .stratum .seg { background: var(--seg); min-height: 3.6rem; position: relative; }
 .stratum:first-child .seg { border-radius: 2.25rem 2.25rem 0 0 / .7rem .7rem 0 0; }
 .stratum.last .seg { border-radius: 0 0 2.25rem 2.25rem / 0 0 .7rem .7rem; }
-.stratum.optional .seg {
-  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--hatch) 6px 7px);
-}
 .stratum .depth { font: 500 .82rem/1 var(--mono); color: var(--muted); align-self: center; font-variant-numeric: tabular-nums; }
 .stratum .what { align-self: center; padding-block: .55rem; border-bottom: 1px solid var(--rule); height: 100%; display: flex; flex-direction: column; justify-content: center; }
 .stratum.last .what { border-bottom: 0; }
@@ -157,7 +165,6 @@ tbody th { font-weight: 500; }
 .graph > header p { font-size: .95rem; color: var(--muted); }
 .graph svg { display: block; width: 100%; min-width: 46rem; height: auto; font-family: var(--body); }
 .graph .lay { stroke: none; }
-.graph .lay.opt { stroke: var(--strata-ink); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .graph .out { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; }
 .graph .n { font: 700 16px var(--display); font-stretch: 112%; fill: var(--strata-ink); }
 .graph .s { font-size: 12.5px; fill: var(--strata-ink); }
@@ -166,7 +173,6 @@ tbody th { font-weight: 500; }
 .graph .l { font-size: 12.5px; fill: var(--ink); }
 .graph .dep line, .graph .dep-key { stroke: var(--muted); stroke-width: 1.6; marker-end: url(#dep-head); }
 .graph .com line, .graph .com-key { stroke: var(--accent); stroke-width: 2; marker-start: url(#com-head); marker-end: url(#com-head); }
-.graph .com line.one { marker-start: none; }
 .graph .dep-fill { fill: var(--muted); }
 .graph .com-fill { fill: var(--accent); }
 .notes { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .4rem; font-size: .95rem; max-width: 72ch; }
@@ -176,20 +182,7 @@ tbody th { font-weight: 500; }
 .cmds dt, .cmds dd { padding: .5rem 0; border-top: 1px solid var(--rule); margin: 0; }
 .cmds dt { font: 500 .88rem/1.7 var(--mono); }
 
-/* the app's palette: the swatch colours are the data, shown on the app's own two backgrounds */
-.palette { display: flex; flex-direction: column; gap: 1rem; border-top: 1px solid var(--rule); padding-top: 1.1rem; min-width: 0; }
-.palette p { font-size: .93rem; }
-.palette table { min-width: 27rem; font-size: .88rem; }
-.tokens td:first-child { font: 500 .88rem var(--mono); }
-.tokens td, .tokens th { text-align: left; }
-.tokens td.hex { font: 400 .82rem var(--mono); white-space: nowrap; }
-.sw { display: inline-block; width: 1rem; height: 1rem; border-radius: 3px; vertical-align: -.15rem; margin-right: .4rem; border: 1px solid var(--rule); }
-.range { display: flex; flex-direction: column; gap: .45rem; }
-.strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 3px; padding: 8px; border-radius: 6px; border: 1px solid var(--rule); }
-.strip.eight { grid-template-columns: repeat(8, minmax(0, 1fr)); }
-.strip.nine { grid-template-columns: repeat(9, minmax(0, 1fr)); }
-.strip i { display: block; height: 1.5rem; border-radius: 2px; }
-.strip-label { font-size: .86rem; color: var(--muted); }
+footer { color: var(--muted); font-size: .88rem; border-top: 1px solid var(--rule); padding-top: 1rem; display: flex; flex-direction: column; gap: .4rem; }
 
 @media (max-width: 52rem) {
   .cmds { grid-template-columns: minmax(0, 1fr); }
@@ -201,14 +194,16 @@ tbody th { font-weight: 500; }
   .steps .fail { grid-column: 2; white-space: normal; }
 }
 </style>
-
+</head>
+<body>
 <main class="page">
 
   <section class="hero">
+    <span class="eyebrow">swarm-core · the architectural substrate</span>
     <h1>Every action is a command. Every surface is an adapter.</h1>
-    <p>An app built by a swarm on Swarm Core is headless first. Each thing it can do is one typed command in one registry. The CLI, JSON lines on stdio, the loopback socket, MCP and the window all call the same dispatch, so a person or an agent can run the whole app without a window.</p>
-    <p>This is the architectural substrate: the shape Swarm Core gives every app before the swarm writes its first feature.</p>
-    <p class="muted">The swarm starts from a skeleton that already has this shape (<code>swarm-core init --app</code>) and is held to it by checks that run in every gate. Select a layer to see what lives there.</p>
+    <p>An app built by a swarm on swarm-core is headless first. Each thing it can do is one typed command in one registry. The CLI, JSON lines on stdio, the loopback socket, MCP and the window all call the same dispatch, so a person or an agent can run the whole app without a window.</p>
+    <p>This is the architectural substrate: the shape swarm-core gives every app before the swarm writes its first feature. <a href="app-architecture.md">The app architecture contract</a> is its rules in full; <a href="app-ui-substrate.html">the App UI Substrate</a> is how its window looks.</p>
+    <p class="muted">The swarm starts from a skeleton that already has this shape (<code>cargo xtask swarm-core init --app</code>, and <code>--ui</code> for the window) and is held to it by checks that run in every gate. Select a layer to see what lives there.</p>
   </section>
 
   <section class="core" aria-label="The seven layers">
@@ -244,7 +239,7 @@ tbody th { font-weight: 500; }
             <div class="on"><span>Open recent</span><kbd>Mod+O</kbd></div>
             <div class="off"><span>Undo</span><span>nothing to undo</span></div>
           </div>
-          <p class="muted" style="font-size:.88rem">Menus are built from the registry. A greyed item shows the same reason a call would fail with.</p>
+          <p class="muted" style="font-size:.88rem">Menus are built from the registry, each item with its command's icon. A greyed item shows the same reason a call would fail with. On macOS the same menus are the system menu bar's, and the window draws none.</p>
         </div>
       </div>
     </div>
@@ -283,9 +278,10 @@ tbody th { font-weight: 500; }
     <div class="body">
       <p>The UI draws memory and calls commands on workers. It never writes a file, starts a program, or blocks its own thread on a call. It asks; it doesn't compute.</p>
       <div class="rules">
-        <div class="rule"><h3>Its state is data</h3><p>Open views, selection, scroll and layout are plain versioned data. <code>ui.inspect</code> reads it and <code>ui.set</code> changes it, so an agent drives the window the way a click does.</p></div>
+        <div class="rule"><h3>Its state is data</h3><p>Open views, selection and the dock's layout are plain versioned data. <code>ui.inspect</code> reads it and <code>ui.set</code> changes it, so an agent drives the window the way a click or a drag does.</p></div>
         <div class="rule"><h3>It draws what a command returned</h3><p>No totals, filters or derived state in a view. A test draws a frame headlessly and compares its text with the command's typed result.</p></div>
-        <div class="rule"><h3>Colours from the theme, words from the catalog</h3><p>Drawing code makes no colour and writes no string. The skeleton's colours are the palette the swarm's tools share. Text tokens are measured at 4.5:1 contrast and range colours at 3:1, and a shared value that falls short is kept and recorded, never nudged silently. An identifier's colour is a fixed hash of its id, the same on every machine.</p></div>
+        <div class="rule"><h3>Colours from the theme, words from the catalog</h3><p>Drawing code makes no colour and writes no string. The theme's tokens and ranges are data <code>ui.theme</code> returns; text tokens are measured at 4.5:1 and range colours at 3:1, and a shared value that falls short is kept and recorded, never nudged silently. An identifier's colour is a fixed hash of its id, the same on every machine.</p></div>
+        <div class="rule"><h3>It looks as the substrate says</h3><p><a href="app-ui-substrate.html">The App UI Substrate</a> gives every value: the tokens and ranges, the faces and text styles, the density, the icons, the dock and the window. The skeleton has every one of them.</p></div>
         <div class="rule"><h3>Changes ship with pictures</h3><p>A UI change carries before and after screenshots, rendered by a script of commands so the picture is the same each time.</p></div>
       </div>
     </div>
@@ -321,7 +317,7 @@ tbody th { font-weight: 500; }
         </table>
       </div>
       <div class="key"><span><i class="dot"></i> checked by a tool in the gate</span><span><i class="dot human"></i> checked by a reviewer</span></div>
-      <p class="muted" style="font-size:.93rem"><code>layers</code> reads each crate's declared layer. <code>scan</code> finds forbidden constructs outside their one home, such as a process start or a file write. <code>conformance</code> runs every command through every surface with hostile and valid params and holds the answers to agree.</p>
+      <p class="muted" style="font-size:.93rem"><code>layers</code> reads each crate's declared layer. <code>scan</code> finds forbidden constructs outside their one home, such as a process start, a file write, a colour or a word in drawing code. <code>conformance</code> runs every command through every surface with hostile and valid params and holds the answers to agree.</p>
       <div class="rule"><h3>One gap a tool doesn't cover yet</h3><p>Only backends touches the outside. <code>layers</code> stops a model or domain crate depending on a backends crate, and <code>scan</code> finds a process start or a file write in any other crate. A direct file read or network call in those layers is not scanned for yet. That is the reviewer's dot in the Layers row.</p></div>
     </div>
   </section>
@@ -329,18 +325,18 @@ tbody th { font-weight: 500; }
   <section class="sec">
     <header>
       <h2>The swarm's commands</h2>
-      <p>Each runs as <code>cargo xtask &lt;name&gt;</code> in the app's repo. Swarm Core serves all but the last two.</p>
+      <p>Each runs as <code>cargo xtask &lt;name&gt;</code> in the app's repo. swarm-core serves all but the last two.</p>
     </header>
     <div class="body">
       <h3>A worker's</h3>
-      <dl class="cmds">
-        <dt>claim</dt><dd>Take an issue: label it, branch from <code>main</code> and open a draft PR.</dd>
-        <dt>ready</dt><dd>Run <code>ci --changed</code> on your branch, then mark the PR ready for the coordinator.</dd>
-        <dt>prwatch</dt><dd>Watch your PRs: merge state, comments, and what each needs from you next.</dd>
+      <dl class="cmds" id="cmds-worker">
+        <dt>claim</dt><dd>Take an issue: hold it on the <code>tracking</code> branch, branch from <code>main</code>, open a draft PR and label it.</dd>
+        <dt>ready</dt><dd>Rebase onto <code>main</code>, run <code>ci --changed</code>, push, mark the PR ready for the coordinator.</dd>
+        <dt>prwatch</dt><dd>Watch your PRs: merge state, notes, one sent back, and what each needs from you next.</dd>
         <dt>finish</dt><dd>End a session: check nothing is owed, remove clean worktrees and merged branches.</dd>
       </dl>
       <h3>The coordinator's</h3>
-      <dl class="cmds">
+      <dl class="cmds" id="cmds-coordinator">
         <dt>stack</dt><dd>Rebase the ready PRs into one stack, in dependency order.</dd>
         <dt>gate</dt><dd>Run the gate on that stack. <code>gate --daemon</code> runs stack, gate and land unattended.</dd>
         <dt>land</dt><dd>Merge the gated stack, and only what was gated.</dd>
@@ -348,17 +344,17 @@ tbody th { font-weight: 500; }
         <dt>fullgate</dt><dd>Run the whole <code>ci</code> on <code>main</code> when it has gone unverified too long.</dd>
       </dl>
       <h3>The machine and the timeline</h3>
-      <dl class="cmds">
+      <dl class="cmds" id="cmds-machine">
         <dt>capacity</dt><dd>Say whether this machine has room for another build.</dd>
         <dt>capabilities</dt><dd>Say what this machine can and can't run.</dd>
         <dt>lock</dt><dd>Show or drop the machine's gate lock.</dd>
         <dt>event</dt><dd>Log one event to the swarm's shared timeline.</dd>
         <dt>gate-times</dt><dd>Compare step and test timings between gate runs.</dd>
         <dt>install-tools</dt><dd>Install the swarm's tools into <code>.git/swarm-tools/</code>.</dd>
-        <dt>swarm-core</dt><dd>Manage the pin: <code>bump</code> to a newer Swarm Core, <code>sync-assets</code> for the pinned docs, <code>init</code> for a new repo or app skeleton.</dd>
+        <dt>swarm-core</dt><dd>Manage the pin: <code>bump</code> to a newer swarm-core, <code>sync-assets</code> for the pinned docs, <code>init</code> for a new repo or app skeleton.</dd>
       </dl>
       <h3>The app's own</h3>
-      <dl class="cmds">
+      <dl class="cmds" id="cmds-app">
         <dt>ci</dt><dd>The gate itself: fmt, clippy, build, layers, tests. <code>--changed</code> narrows to what a change reaches; <code>--smoke</code> skips the full test run.</dd>
         <dt>layers</dt><dd>Run the architecture checks: layer order, lints and the scans.</dd>
       </dl>
@@ -377,26 +373,22 @@ tbody th { font-weight: 500; }
           <marker id="com-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="com-fill"/></marker>
         </defs>
 
-        <!-- callers -->
         <rect class="out" x="90" y="14" width="200" height="40" rx="20"/><text class="t" x="190" y="39" text-anchor="middle">A person</text>
         <rect class="out" x="520" y="14" width="300" height="40" rx="20"/><text class="t" x="670" y="39" text-anchor="middle">An agent or another program</text>
 
-        <!-- layers -->
         <rect class="lay" style="fill:var(--s6)" x="60" y="104" width="260" height="52" rx="4"/><text class="n" x="78" y="127">apps</text><text class="s" x="78" y="145">the windowed app</text>
         <rect class="lay" style="fill:var(--s6)" x="500" y="104" width="340" height="52" rx="4"/><text class="n" x="518" y="127">apps</text><text class="s" x="518" y="145">the CLI</text>
-        <rect class="lay" style="fill:var(--s5)" x="60" y="204" width="260" height="56" rx="4"/><text class="n" x="78" y="228">ui</text><text class="s" x="78" y="247">shell, drawing, input</text>
+        <rect class="lay" style="fill:var(--s5)" x="60" y="204" width="260" height="56" rx="4"/><text class="n" x="78" y="228">ui</text><text class="s" x="78" y="247">shell, dock, drawing, input</text>
         <rect class="lay" style="fill:var(--s4)" x="500" y="204" width="340" height="56" rx="4"/><text class="n" x="518" y="228">automation</text><text class="s" x="518" y="247">serve, the socket, MCP</text>
         <rect class="lay" style="fill:var(--s3)" x="60" y="312" width="780" height="92" rx="4"/><text class="n" x="78" y="340">engine</text><text class="s" x="78" y="360">session, registry, one dispatch</text><text class="s" x="78" y="380">decides what is stored and when; does no I/O itself</text>
         <rect class="lay" style="fill:var(--s2)" x="60" y="456" width="780" height="52" rx="4"/><text class="n" x="78" y="479">backends</text><text class="s" x="78" y="497">the only layer that touches the outside: the process module, the file writer</text>
         <rect class="lay" style="fill:var(--s1)" x="60" y="556" width="780" height="48" rx="4"/><text class="n" x="78" y="578">domain</text><text class="s" x="78" y="595">the app's work, no I/O</text>
         <rect class="lay" style="fill:var(--s0)" x="60" y="648" width="780" height="48" rx="4"/><text class="n" x="78" y="670">model</text><text class="s" x="78" y="687">types and parsers, no I/O</text>
 
-        <!-- outside the app -->
         <rect class="out" x="900" y="418" width="164" height="42" rx="4"/><text class="t" x="982" y="436" text-anchor="middle">child programs</text><text class="s2" x="982" y="452" text-anchor="middle">started with deadlines</text>
         <rect class="out" x="900" y="466" width="164" height="42" rx="4"/><text class="t" x="982" y="484" text-anchor="middle">files on disk</text><text class="s2" x="982" y="500" text-anchor="middle">atomic writes, capped reads</text>
         <rect class="out" x="900" y="514" width="164" height="42" rx="4"/><text class="t" x="982" y="532" text-anchor="middle">git, network,</text><text class="s2" x="982" y="548" text-anchor="middle">a device</text>
 
-        <!-- dependencies: always down -->
         <g class="dep">
           <line x1="130" y1="156" x2="130" y2="203"/><line x1="600" y1="156" x2="600" y2="203"/>
           <line x1="130" y1="260" x2="130" y2="311"/><line x1="600" y1="260" x2="600" y2="311"/>
@@ -404,7 +396,6 @@ tbody th { font-weight: 500; }
           <line x1="130" y1="604" x2="130" y2="647"/>
         </g>
 
-        <!-- communication -->
         <g class="com">
           <line x1="190" y1="55" x2="190" y2="103"/><line x1="700" y1="55" x2="700" y2="103"/>
           <line x1="220" y1="261" x2="220" y2="311"/><line x1="700" y1="261" x2="700" y2="311"/>
@@ -419,7 +410,6 @@ tbody th { font-weight: 500; }
         <text class="l" x="712" y="282">call(id, JSON)</text><text class="l" x="712" y="298">result or typed error</text>
         <text class="l" x="262" y="426">calls with a deadline</text><text class="l" x="262" y="442">capped results</text>
 
-        <!-- key -->
         <line class="dep-key" x1="900" y1="576" x2="950" y2="576"/><text class="l" x="960" y="580">depends on</text>
         <line class="com-key" x1="900" y1="602" x2="950" y2="602"/><text class="l" x="960" y="606">talks to</text>
         <rect class="out" x="900" y="622" width="50" height="18" rx="3"/><text class="l" x="960" y="636">outside the app</text>
@@ -434,58 +424,30 @@ tbody th { font-weight: 500; }
     </ul>
   </section>
 
-  <div hidden>
-    <div class="palette" id="palette">
-      <h3>The skeleton's look</h3>
-      <p>The App UI Substrate (<code>docs/app-ui-substrate.md</code>, a pinned doc beside the contract) says what the window looks like, and the skeleton does each part: a 2 px corner radius; Roboto, Cascadia Mono and Font Awesome faces; an 18 pt row and its spacing; an icon for each command; a dock of tabs and splits laid out by the UI state, so <code>ui.set</code> sets it; a window that remembers its size and place; and on macOS the system menu bar.</p>
-      <h3>The skeleton's palette</h3>
-      <p>Twenty tokens are named for what they mean. They are the palette the swarm's tools share, so an app looks like them; <code>strong</code> and <code>success</code> are Swarm Core's own. A shared value that falls short of a contrast minimum is kept and recorded with its measured ratio, never nudged silently.</p>
-      <div class="scroll">
-        <table class="tokens">
-          <thead><tr><th>Token</th><th>Meaning</th><th>Dark</th><th>Light</th></tr></thead>
-          <tbody id="tokens"></tbody>
-        </table>
-      </div>
-      <p>Four categorical ranges colour identifiers, where a colour tells things apart. They are shown here on the app's own dark and light backgrounds. A filled entry is edged in a darker border, each channel at 0.8.</p>
-      <div class="range">
-        <h3>Series</h3>
-        <div class="strip eight" id="series-dark"></div>
-        <div class="strip eight" id="series-light"></div>
-        <p class="strip-label">ColorBrewer Dark2 on dark and Set2 on light, as published. A number takes entry n % 7; the eighth swatch is the grey for something with no number.</p>
-      </div>
-      <div class="range">
-        <h3>Markers</h3>
-        <div class="strip nine" id="markers-dark"></div>
-        <div class="strip nine" id="markers-light"></div>
-        <p class="strip-label">ColorBrewer Set1 with the shared orange, then grey. The same in both looks.</p>
-      </div>
-      <div class="range">
-        <h3>Range of 32</h3>
-        <div class="strip" id="glasbey-dark"></div>
-        <div class="strip" id="glasbey-light"></div>
-        <p class="strip-label">Swarm Core's own: colorcet's Glasbey sets, ordered so each colour is as far as possible from all before it, each reaching 3:1 against its background. The range of 16 is the first 16 of these. An identifier keeps its colour family when the look changes.</p>
-      </div>
-    </div>
-  </div>
+  <footer>
+    <span>The contract this page explains: <code>app-architecture.md</code>. How the window looks: <code>app-ui-substrate.html</code> and <code>app-ui-substrate.md</code>. All three ship to every app as pinned copies from swarm-core.</span>
+    <span>A test holds this page to Swarm Core: its layers to <code>Layers::STANDARD</code>, its swarm commands to the commands it serves, and its limits to the skeleton's <code>limits.rs</code> (<code>the_app_substrate_page_says_what_swarm_core_does</code>). It names the newest revision of the contract it has been read against, and another fails when the contract has a newer one (<code>the_app_substrate_page_has_caught_up_with_the_contract</code>).</span>
+  </footer>
 
 </main>
 
 <script>
+// The layers, top to bottom: Swarm Core's `Layers::STANDARD`, which a test holds this list to.
 const LAYERS = [
   { n: 6, id: "apps", line: "The binaries: the CLI and the windowed app", uses: "any lower layer",
-    holds: "Thin entry points. The CLI parses arguments and calls the dispatch; the windowed app opens the UI shell, keeps the window's size and place, and on macOS hands the menus to the system menu bar.",
-    rules: ["The CLI never links a UI toolkit", "A surfaces test runs the same calls through each transport"],
-    files: ["apps/<cli>/src/cli.rs", "apps/<cli>/tests/surfaces.rs", "apps/<app>/src/window.rs", "apps/<app>/src/ui_state.rs", "apps/<app>/src/place.rs", "apps/<app>/src/macos_menu.rs"] },
-  { n: 5, id: "ui", line: "The shell: toolkit code, drawing, input", uses: "engine",
-    holds: "The only layer that links a UI toolkit. It turns pixels and input into a command's params and draws the result.",
-    rules: ["Calls commands on workers; never blocks its thread", "No colour or string literal outside the theme and catalog", "Reads typed results, never raw JSON"],
-    files: ["shell.rs", "views.rs", "draw.rs", "jobs.rs", "theme.rs", "catalog.rs", "fonts.rs", "density.rs", "icons.rs", "dock.rs", "icon.rs", "native_menu.rs"] },
+    holds: "Thin entry points. The CLI parses arguments and calls the dispatch; the windowed app opens the UI shell, and keeps its window's size and place.",
+    rules: ["The CLI never links a UI toolkit", "A surfaces test runs the same calls through each transport", "The window opens where it was left, but only onto a connected monitor"],
+    files: ["apps/<cli>/src/cli.rs", "apps/<cli>/tests/surfaces.rs", "apps/<app>/src/window.rs", "apps/<app>/src/place.rs", "apps/<app>/src/ui_state.rs"] },
+  { n: 5, id: "ui", line: "The shell: toolkit code, the dock, drawing, input", uses: "engine",
+    holds: "The only layer that links a UI toolkit. It turns pixels and input into a command's params and draws the result, in the look the App UI Substrate gives.",
+    rules: ["Calls commands on workers; never blocks its thread", "No colour or string literal outside the theme and catalog", "Reads typed results, never raw JSON", "Its faces, density, icons and dock are the App UI Substrate's"],
+    files: ["shell.rs", "views.rs", "draw.rs", "dock.rs", "jobs.rs", "theme.rs", "fonts.rs", "density.rs", "icons.rs", "icon.rs", "catalog.rs"] },
   { n: 4, id: "automation", line: "The transports: serve, the socket, MCP", uses: "engine",
     holds: "Framing only. Each transport reads a request, calls the dispatch and writes a reply.",
     rules: ["Names no command; it asks the registry", "Writes no file itself", "The socket binds 127.0.0.1 and wants a token first", "Request and reply sizes are capped"],
     files: ["serve.rs", "socket.rs", "mcp.rs", "frame.rs", "limits.rs", "token.rs"] },
   { n: 3, id: "engine", line: "The session, the registry, the one dispatch", uses: "model, domain, backends",
-    holds: "Where every command is registered and every call is made. It decides what is stored and when, and leaves the I/O to backends.",
+    holds: "Where every command is registered and every call is made. It decides what is stored and when, and leaves the I/O to backends. It holds the UI's state, the dock's layout among it, and the theme as data.",
     rules: ["The only place a command spec is built", "Starts no program and writes no file; it calls backends and turns a failure there into the command's error", "The app's own lock, which times out instead of waiting forever"],
     files: ["registry.rs", "call.rs", "session.rs", "error.rs", "lock.rs", "theme.rs", "ui.rs"] },
   { n: 2, id: "backends", line: "The only layer that touches the outside", uses: "model, domain",
@@ -502,7 +464,7 @@ const LAYERS = [
     files: ["ids.rs"] },
 ];
 const OUTSIDE = [
-  { id: "xtask", line: "The repo's tooling", uses: "Swarm Core",
+  { id: "xtask", line: "The repo's tooling", uses: "swarm-core",
     holds: "Runs the gate: ci, the layers check, the scans, and the swarm's own commands such as claim, ready and gate.",
     rules: ["Never a dependency of the product"], files: [] },
   { id: "testkit", line: "Test helpers and the conformance run", uses: "engine",
@@ -525,14 +487,13 @@ const MATRIX = [
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const strata = document.getElementById("strata"), outside = document.getElementById("outside"), detail = document.getElementById("detail");
 const buttons = [];
-const palette = document.getElementById("palette");
 
 function show(item) {
   buttons.forEach(([b, it]) => b.setAttribute("aria-pressed", String(it === item)));
   detail.replaceChildren();
   const head = el("div");
   head.append(el("h2", null, item.id));
-  head.append(el("p", "muted", item.n != null ? "Layer " + item.n + (item.optional ? ", optional" : "") : "Outside the stack"));
+  head.append(el("p", "muted", item.n != null ? "Layer " + item.n : "Outside the stack"));
   detail.append(head, el("p", null, item.holds));
   const dl = el("dl");
   dl.append(el("dt", null, "May use"), el("dd", null, item.uses));
@@ -551,11 +512,16 @@ function show(item) {
   }
   dl.append(el("dt", null, "In the skeleton"), fd);
   detail.append(dl);
-  if (item.id === "ui") detail.append(palette);
+  if (item.id === "ui") {
+    const p = el("p"), a = el("a", null, "The App UI Substrate");
+    a.href = "app-ui-substrate.html";
+    p.append(a, " gives the tokens and ranges, the faces, the density, the icons, the dock and the window.");
+    detail.append(p);
+  }
 }
 
 LAYERS.forEach((l, i) => {
-  const b = el("button", "stratum" + (l.optional ? " optional" : "") + (i === LAYERS.length - 1 ? " last" : ""));
+  const b = el("button", "stratum" + (i === LAYERS.length - 1 ? " last" : ""));
   b.type = "button";
   b.style.setProperty("--seg", "var(--s" + l.n + ")");
   const what = el("span", "what");
@@ -572,56 +538,6 @@ OUTSIDE.forEach(o => {
 });
 show(LAYERS[3]);
 
-const APP_BG = { dark: "#353535", light: "#EFEFEF" };
-const TOKENS = [
-  ["background", "What everything is drawn on: a panel's fill", "353535", "EFEFEF"],
-  ["chrome", "The menu bar, the status bar and other chrome", "353535", "EFEFEF"],
-  ["panel", "Floating windows, dialogs and popups", "353535", "EFEFEF"],
-  ["base", "Views: lists, tables and text fields", "2A2A2A", "FFFFFF"],
-  ["alt_base", "Every other row of a list drawn on base", "303030", "F7F7F7"],
-  ["header", "Table header rows and a ruler", "3F3F3F", "CACACA"],
-  ["frame", "Lines that frame views and panels", "424242", "ABABAB"],
-  ["border", "Decorative lines: window frames and separators", "424242", "ABABAB"],
-  ["text", "Body text", "FCFCFC", "000000"],
-  ["strong", "Emphasised text, and text on a range colour made a text background", "FFFFFF", "000000"],
-  ["muted", "Text that matters less: a command the UI can't run here, a hint", "A6A6A6", "666666"],
-  ["selected_text", "Text on the selection", "FCFCFC", "000000"],
-  ["link", "A link", "4DA6FF", "1F6FA8"],
-  ["control", "The fill of a widget at rest: a button, a field", "454545", "F7F7F7"],
-  ["control_border", "The edge of a widget at rest: 3:1 on the background", "858585", "7A7A7A"],
-  ["accent", "An accent that carries no text: what has focus, an outline", "007ACC", "2B78AE"],
-  ["selection", "What is selected: its fill, with selected_text on it", "0070BB", "C1DCEE"],
-  ["success", "Something that worked", "90EE90", "006400"],
-  ["warning", "Something to look at that hasn't failed", "FF7F1C", "965C00"],
-  ["error", "A failure, or why a command can't run now", "FF8A80", "B42318"],
-];
-const STRIPS = {
-  "series-dark": ["dark", "1B9E77 D95F02 7570B3 E7298A 66A61E E6AB02 A6761D 666666"],
-  "series-light": ["light", "66C2A5 FC8D62 8DA0CB E78AC3 A6D854 FFD92F E5C494 B3B3B3"],
-  "markers-dark": ["dark", "E41A1C 377EB8 4DAF4A 984EA3 FF7F1C FFFF33 A65628 F781BF 999999"],
-  "markers-light": ["light", "E41A1C 377EB8 4DAF4A 984EA3 FF7F1C FFFF33 A65628 F781BF 999999"],
-  "glasbey-dark": ["dark", "F12F17 1B9211 C727FF 06ACC6 98FF00 FFA530 FF8FC8 00FECF B0A5FF 94AD84 A77412 E6299C FEF590 C86F66 9EE3FF 00C946 A977AD B8BB02 F4C0B1 FF28FD F3CEFF 009F7D FF6200 FF3465 A0E492 8D9BB2 829126 78C7BB BC9258 E58FFF 72B9FF C6A5C1"],
-  "glasbey-light": ["light", "D70000 028800 BB00FE 0088B1 6C9700 CC7407 C5668F 009D6F 5A4AA3 546745 755A00 C63189 8F7B01 9D5743 086B84 006D2E A57AB7 596D00 A2766A FD00CD 836F8C 00816A EB4E00 CB0044 004B00 536177 4C5001 499692 9F6E32 7F2B8E 688CBD A67E93"],
-};
-const tokens = palette.querySelector("#tokens");
-TOKENS.forEach(([name, meaning, dark, light]) => {
-  const tr = el("tr");
-  tr.append(el("td", null, name), el("td", null, meaning));
-  [dark, light].forEach(hex => {
-    const td = el("td", "hex"), sw = el("i", "sw");
-    sw.style.background = "#" + hex;
-    td.append(sw, "#" + hex);
-    tr.append(td);
-  });
-  tokens.append(tr);
-});
-Object.entries(STRIPS).forEach(([id, [look, list]]) => {
-  const strip = palette.querySelector("#" + id);
-  strip.style.background = APP_BG[look];
-  strip.setAttribute("aria-label", "On the " + look + " background");
-  list.split(" ").forEach(hex => { const i = el("i"); i.style.background = "#" + hex; i.title = "#" + hex; strip.append(i); });
-});
-
 const tbody = document.getElementById("matrix");
 MATRIX.forEach(([name, cells]) => {
   const tr = el("tr");
@@ -635,3 +551,5 @@ MATRIX.forEach(([name, cells]) => {
   tbody.append(tr);
 });
 </script>
+</body>
+</html>

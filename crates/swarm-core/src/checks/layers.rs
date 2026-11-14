@@ -213,9 +213,8 @@ fn place_of(config: &Layers, name: &str) -> Option<Place> {
     } else if name == config.testkit {
         Some(Place::Testkit)
     } else {
-        // A name in the stack is that layer, never an alias: an app's own stack may name `sources`.
-        let position = |name: &str| config.stack.iter().position(|l| *l == name);
-        position(name).or_else(|| config.aliases.iter().find(|(old, _)| *old == name).and_then(|(_, now)| position(now))).map(Place::Stack)
+        let name = config.aliases.iter().find(|(old, _)| *old == name).map_or(name, |(_, now)| now);
+        config.stack.iter().position(|l| *l == name).map(Place::Stack)
     }
 }
 
@@ -631,17 +630,6 @@ mod tests {
         let dir = workspace("layers-own-stack-backends", &with_backends());
         let found = layers(&dir, &own).err().map(|f| f.0.into_iter().map(|f| f.to_string()).collect::<Vec<_>>()).unwrap_or_default();
         assert!(found.iter().any(|m| m.starts_with("crates/backends/Cargo.toml:5: [layer-declared] app-backends declares a layer that isn't")), "{found:?}");
-        // The contract's alias maps to a layer this stack doesn't have, so it does nothing here;
-        // and a stack that names `sources` itself keeps it: a name in the stack is never an alias.
-        let said_sources: Vec<(&'static str, String)> =
-            with_backends().into_iter().map(|(dir, text)| (dir, text.replace("layer = \"backends\"", "layer = \"sources\""))).collect();
-        let found = layers(&workspace("layers-own-stack-alias", &said_sources), &own)
-            .err()
-            .map(|f| f.0.into_iter().map(|f| f.to_string()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        assert!(found.iter().any(|m| m.starts_with("crates/backends/Cargo.toml:5: [layer-declared] app-backends declares a layer that isn't")), "{found:?}");
-        let named = Layers { stack: &["model", "domain", "sources", "engine", "automation", "ui", "apps"], ..Layers::STANDARD };
-        assert!(layers(&workspace("layers-own-stack-named", &said_sources), &named).is_ok());
     }
 
     #[test]

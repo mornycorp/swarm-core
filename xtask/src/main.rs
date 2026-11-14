@@ -15,11 +15,16 @@
 //!   Landing). It has no smoke of golden tests, no `layers`, no pinned assets' check and no
 //!   `conformance` step: those are an app's.
 //!
+//! And one command of its own, beyond the swarm's: **`docs render [--check]`** ([`docs`],
+//! mornycorp/swarm-core#108), which makes the docs' pages from their markdown.
+//!
 //! Its [`Hooks`] keep every default but two ([`Ours`]).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![warn(clippy::cognitive_complexity, clippy::too_many_lines)]
 #![cfg_attr(test, allow(clippy::cognitive_complexity, clippy::too_many_lines))]
+
+mod docs;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -93,6 +98,7 @@ fn main() -> ExitCode {
     let result = match (args.split_first(), refused) {
         (_, Some((command, why))) => Err(format!("`cargo xtask {command}` doesn't apply here: {why}")),
         (Some((&"ci", rest)), None) => ci(&root, rest),
+        (Some((&"docs", rest)), None) => docs::run(&root, rest),
         (Some((command, rest)), None) if swarm_core::serves(command) => swarm_core::run(&PROJECT, &Ours, &root, command, rest),
         (Some((command, _)), None) if !matches!(*command, "help" | "-h" | "--help") => {
             help();
@@ -117,6 +123,7 @@ fn help() {
     println!(
         "cargo xtask ci [--changed --base <ref> [--plan [--head <ref>]] | --smoke] [--test-alone \"<binary id> <test>\"]... [--doctests] [--only <step>,...]"
     );
+    println!("{}", docs::USAGE);
     for (command, usage) in swarm_core::COMMANDS {
         if !NOT_HERE.iter().any(|(n, _)| n == command) {
             println!("{usage}");

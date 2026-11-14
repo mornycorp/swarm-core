@@ -9,6 +9,12 @@ publish.workspace = true
 [dependencies]
 # By path, never by git: the xtask runs this checkout's Swarm Core, the code its workers change.
 swarm-core = { path = "../crates/swarm-core" }
+# `cargo xtask docs render` (mornycorp/swarm-core#108): a doc's page made from its markdown. Here
+# only, never in Swarm Core's library, so no consumer links it. MIT; no command-line parser.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[dev-dependencies]
+swarm-core-testkit = { workspace = true }
 
 [lints]
 workspace = true

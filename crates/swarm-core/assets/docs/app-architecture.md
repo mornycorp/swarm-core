@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-14 · **Change:** minor (what the colours, type and chrome are is the App UI Substrate, a pinned doc beside this one; the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-14 · **Change:** minor (the App Substrate, this contract explained as a page, moves with it: it names the newest revision it has been read against; what the colours, type and chrome are is the App UI Substrate, a pinned doc beside this one; the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -13,8 +13,13 @@ this document is pinned: `AGENTS.md` links to it instead of restating it, and a 
 Swarm Core change and a bump in each app ([swarm-protocol.md](swarm-protocol.md) › The
 coordinator's loop, step 9).
 
-**[The App UI Substrate](app-ui-substrate.md)** ([as a page](app-ui-substrate.html)) is how the
-window looks.
+**[The App Substrate](app-substrate.html)** explains this contract as a page, to open in a browser:
+the layers to select, one dispatch, the window as a client, what holds each rule, and the swarm's
+commands. It moves with this contract: it names the newest row of the revision history below that
+it has been read against, and a test (`the_app_substrate_page_has_caught_up_with_the_contract`)
+fails when a change here adds a row, until the page is re-read against the change and its stamp
+moved to the new row, in the same pull request. **[The App UI Substrate](app-ui-substrate.md)** ([as a page](app-ui-substrate.html)) is
+how the window looks.
 
 This is the short, generic contract. The app's own long form is its
 [architecture.md](architecture.md) (its crates, its commands, where its state lives) and its own
@@ -611,6 +616,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | [The App Substrate](app-substrate.html), this contract explained as a page beside it. It moves with this contract: it names the newest row here that it has been read against, and `the_app_substrate_page_has_caught_up_with_the_contract` fails when a change adds a row, until the page is re-read and its stamp moved on, in the same pull request (mornycorp/swarm-core#108). |
 | 2026-11-14 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): what the colours, type and chrome are is [the App UI Substrate](app-ui-substrate.md), a pinned doc beside this one (mornycorp/swarm-core#104). |
 | 2026-11-13 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): the skeleton's colours are the palette the swarm's tools share, so an app looks like them: its chrome tokens (surfaces, text, controls and highlights, states, each under a name for what it means), its series (Dark2 dark, Set2 light, `at(n)` as `n % 7` and a grey for none), its markers (Set1 with `#FF7F1C`, then grey) and its darker border for a filled entry; the 16 and 32 ranges are Swarm Core's own beyond them; a value taken from elsewhere that falls short of a contrast minimum is kept and recorded with its measured ratio, or nudged and listed as a divergence, never nudged silently (mornycorp/swarm-core#100). |
 | 2026-11-13 | minor | State on disk: the skeleton's one writer also makes a private file and one that is never written over what is there, so the control socket's token goes through it and no file write is allow-listed; a backend's `Failed` (a deadline, a refusing disk) reaches a caller as `unavailable`, not `internal` (swarm-core#94) |

@@ -366,7 +366,9 @@ fn colour_rows(doc: &str) -> std::collections::BTreeMap<String, [String; 2]> {
 
 /// **The App UI Substrate has the skeleton's colours** (mornycorp/swarm-core#104): its tables give every token and every
 /// entry of the series, the markers and range32 (range16 is its first 16) as the skeleton's theme
-/// has them, in each look, and nothing else, so the document and the theme can't drift apart.
+/// has them, in each look, and nothing else, so the document and the theme can't drift apart. The
+/// page is generated from the doc: `the_pages_are_rendered_from_their_docs`, in this repo's
+/// xtask, holds it to the doc, its ranges drawn from the theme.
 #[test]
 fn the_ui_substrate_has_the_skeletons_colours() {
     let theme = crate::skeleton::FILES.iter().find(|f| f.path == "crates/engine/src/theme.rs").unwrap().text;
@@ -386,61 +388,77 @@ fn the_ui_substrate_has_the_skeletons_colours() {
     range(&mut want, "range32", palette_const(theme, "GLASBEY_DARK"), palette_const(theme, "GLASBEY_LIGHT"));
     assert_eq!(want.len(), 20 + 8 + 9 + 32);
     assert_eq!(colour_rows(asset("docs/app-ui-substrate.md").text), want, "the doc");
-    assert_eq!(page_colours(asset("docs/app-ui-substrate.html").text), want, "the page");
 }
 
-/// Every `"#RRGGBB"` in the page's script's `const <name> = [ … ];`, in order.
-fn page_const(page: &str, name: &str) -> Vec<String> {
-    let start = page.find(&format!("const {name} = [")).unwrap_or_else(|| panic!("no const {name} in the page"));
-    let rest = page.get(start..).unwrap();
-    let body = rest.get(..rest.find("];").unwrap()).unwrap();
-    body.split("\"#").skip(1).map(|r| format!("#{}", r.get(..6).unwrap().to_uppercase())).collect()
+/// What the App Substrate's page says it has caught up with: the date and the start of a row of
+/// `app-architecture.md`'s revision history.
+const CONTRACT_STAMP: &str = "<!-- contract revision: ";
+
+/// How much of a row's text a stamp carries.
+const STAMP_CHARS: usize = 60;
+
+/// The stamp the App Substrate's page carries once it has caught up with `doc`'s newest revision:
+/// that row's date and the start of its text.
+fn contract_stamp(doc: &str) -> String {
+    let history = doc.get(doc.find("## Revision history").unwrap()..).unwrap();
+    // The newest row is the first: this history is newest first.
+    let newest = history.lines().find(|l| l.starts_with("| 2")).unwrap();
+    let (date, text) = newest.trim_start_matches("| ").split_once(" | ").unwrap();
+    let start: String = text.chars().take(STAMP_CHARS).collect();
+    format!("{CONTRACT_STAMP}{date} | {} -->", start.trim_end())
 }
 
-/// The page's colours, named as [`colour_rows`] names the doc's: each token, and each entry of the
-/// series, the markers and range32 (range16 is its first 16, sliced in the script).
-fn page_colours(page: &str) -> std::collections::BTreeMap<String, [String; 2]> {
-    let mut rows = std::collections::BTreeMap::new();
-    let start = page.find("const TOKENS = [").unwrap();
-    let tokens = page.get(start..).unwrap();
-    for line in tokens.get(..tokens.find("];").unwrap()).unwrap().lines() {
-        let Some(name) = line.trim().strip_prefix("[\"").and_then(|r| r.split('"').next()) else { continue };
-        let colours: Vec<String> = line.split("\"#").skip(1).map(|r| format!("#{}", r.get(..6).unwrap().to_uppercase())).collect();
-        if let Ok(pair) = <[String; 2]>::try_from(colours) {
-            assert_eq!(rows.insert(name.to_owned(), pair), None, "{name} is in the page twice");
-        }
-    }
-    let mut range = |name: &str, dark: Vec<String>, light: Vec<String>| {
-        assert_eq!(dark.len(), light.len(), "{name}");
-        for (i, pair) in dark.into_iter().zip(light).enumerate() {
-            rows.insert(format!("{name} {i}"), <[String; 2]>::from(pair));
-        }
-    };
-    range("series", page_const(page, "SERIES_DARK"), page_const(page, "SERIES_LIGHT"));
-    range("markers", page_const(page, "MARKERS"), page_const(page, "MARKERS"));
-    range("range32", page_const(page, "GLASBEY_DARK"), page_const(page, "GLASBEY_LIGHT"));
-    let [dark, light] = <[String; 2]>::try_from(page_const(page, "SERIES_NONE")).unwrap();
-    rows.insert("series none".to_owned(), [dark, light]);
-    rows
-}
-
-/// **The page and the doc agree**: each section's status, in order, is the same in both: the
-/// doc's `**In the skeleton.**` and `**To adopt.**`, the page's `status in` and `status todo` (not
-/// the legend's), so a section adopted in one is adopted in the other.
+/// **The App Substrate's page has caught up with the contract**: it explains
+/// `app-architecture.md` in its own words, so it carries the newest revision it has been read
+/// against, and fails here when the contract gains one, until someone re-reads the page against
+/// what changed and moves the stamp.
 #[test]
-fn the_ui_substrate_page_and_doc_agree() {
-    let doc: Vec<bool> = asset("docs/app-ui-substrate.md")
-        .text
-        .lines()
-        .filter_map(|l| if l.starts_with("**In the skeleton.**") { Some(true) } else { l.starts_with("**To adopt.**").then_some(false) })
-        .collect();
-    let page_text = asset("docs/app-ui-substrate.html").text;
-    let mut marks: Vec<(usize, bool)> = page_text.match_indices("class=\"status in\"").map(|(at, _)| (at, true)).collect();
-    marks.extend(page_text.match_indices("class=\"status todo\"").map(|(at, _)| (at, false)));
-    marks.sort_unstable();
-    let page: Vec<bool> = marks.into_iter().map(|(_, adopted)| adopted).collect();
-    assert_eq!(doc.len(), 12, "the doc's statuses: sections 2 to 12, and the corner radius");
-    assert_eq!(page, doc, "the page's statuses, in order, are the doc's (true: in the skeleton)");
+fn the_app_substrate_page_has_caught_up_with_the_contract() {
+    let page = asset("docs/app-substrate.html").text;
+    let want = contract_stamp(asset("docs/app-architecture.md").text);
+    let have = page.lines().find(|l| l.starts_with(CONTRACT_STAMP)).unwrap_or("(no stamp)");
+    assert_eq!(
+        have.trim_end(),
+        want,
+        "app-substrate.html explains app-architecture.md as of the revision it names, and the contract has moved on: re-read the page \
+         against the revision history's rows since then, change what they make wrong, then set the page's stamp to `right`"
+    );
+}
+
+/// **The App Substrate's page says what Swarm Core does**: its layers, top to bottom, are
+/// `Layers::STANDARD`'s; its swarm commands are the ones Swarm Core serves ([`crate::COMMANDS`])
+/// and the app's own two (`ci`, `layers`); its transport limits are the skeleton's `limits.rs`.
+#[test]
+fn the_app_substrate_page_says_what_swarm_core_does() {
+    let page = asset("docs/app-substrate.html").text;
+    let layers_at = page.find("const LAYERS = [").unwrap();
+    let layers = page.get(layers_at..).unwrap();
+    let layers = layers.get(..layers.find("];").unwrap()).unwrap();
+    let mut ids: Vec<&str> = layers.split("id: \"").skip(1).filter_map(|r| r.split('"').next()).collect();
+    ids.reverse();
+    assert_eq!(ids, crate::checks::Layers::STANDARD.stack, "the layers, bottom up");
+
+    let cmds_at = page.find("id=\"cmds-worker\"").unwrap();
+    let cmds = page.get(cmds_at..).unwrap();
+    let cmds = cmds.get(..cmds.find("</section>").unwrap()).unwrap();
+    let mut named: Vec<&str> = cmds.split("<dt>").skip(1).filter_map(|r| r.split("</dt>").next()).collect();
+    named.sort_unstable();
+    let mut served: Vec<&str> = crate::COMMANDS.iter().map(|&(name, _)| name).chain(["ci", "layers"]).collect();
+    served.sort_unstable();
+    assert_eq!(named, served, "the swarm's commands");
+
+    let limits = crate::skeleton::FILES.iter().find(|f| f.path == "crates/automation/src/limits.rs").unwrap().text;
+    let pairs = [
+        ("pub const MAX_REQUEST: usize = 1024 * 1024;", "<dt>1 MiB</dt>"),
+        ("pub const MAX_REPLY: usize = 8 * 1024 * 1024;", "<dt>8 MiB</dt>"),
+        ("pub const MAX_CONNECTIONS: usize = 16;", "<dt>16</dt>"),
+        ("pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);", "<dt>30 s</dt>"),
+    ];
+    for (code, shown) in pairs {
+        assert!(limits.contains(code) && page.contains(shown), "the skeleton has `{code}` and the page shows {shown}");
+    }
+    let socket = crate::skeleton::FILES.iter().find(|f| f.path == "crates/automation/src/socket.rs").unwrap().text;
+    assert!(socket.contains("It binds `127.0.0.1`") && page.contains("<dt>127.0.0.1</dt>"), "the socket's address");
 }
 
 /// `cargo xtask swarm-core sync-assets [--check]` is served, and refuses other arguments.

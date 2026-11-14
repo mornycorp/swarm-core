@@ -165,13 +165,12 @@ fn gates(lines: &[Value]) -> BTreeMap<String, Gate> {
 }
 
 /// Why a gate's `sub.stop` note says it failed for the change's cause, or `None`: it passed, it
-/// was stopped before its result (no `rc`), or its cause is the machine's (transient, or its
-/// setup).
+/// was stopped before its result (no `rc`), or its cause is the machine's.
 fn failed(note: &str) -> Option<String> {
     let rc: i64 = gate::tokens(note).next()?.strip_prefix("rc=")?.parse().ok()?;
     let cause = gate::field(note, "cause");
-    let machines = cause.and_then(Cause::parse).is_some_and(|c| c.transient() || c.setup());
-    (rc != 0 && !machines).then(|| match cause {
+    let transient = cause.and_then(Cause::parse).is_some_and(Cause::transient);
+    (rc != 0 && !transient).then(|| match cause {
         Some(c) => format!("rc={rc}; cause={c}"),
         None => format!("rc={rc}"),
     })
@@ -376,7 +375,7 @@ mod tests {
     #[test]
     fn a_transient_failure_a_rerun_or_a_stopped_gate_is_no_send_back() {
         let start = r#"{"event":"sub.start","name":"gate","note":"local gate: #9 (#7); capacity=1 free=9.8","sub":"gate-mr9","t":"2026-10-17T12:00:00Z"}"#;
-        for stop in ["rc=101; cause=memory", "rc=1; cause=python", "rc=0; merged #9", "superseded: main moved"] {
+        for stop in ["rc=101; cause=memory", "rc=0; merged #9", "superseded: main moved"] {
             let file = format!("{start}\n{{\"event\":\"sub.stop\",\"note\":\"{stop}\",\"sub\":\"gate-mr9\",\"t\":\"2026-10-17T12:10:00Z\"}}");
             assert!(send_backs(&files(&[("pc-c", &file)]), &set(&[9])).is_empty(), "{stop}");
         }
