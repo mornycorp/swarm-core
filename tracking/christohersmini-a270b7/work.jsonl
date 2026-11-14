@@ -23,3 +23,4 @@
 {"event":"sub.start","name":"gate","note":"land rebase #114; capacity=3 free=10.0; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-115","t":"2026-11-14T13:54:03Z"}
 {"event":"merge","issue":114,"mr":115,"sub":"gate-115","t":"2026-11-14T13:55:28Z"}
 {"event":"sub.stop","note":"rc=0; kind=full; main=2e70826f61461bfa0225e813fadf8419b551f432; merged #115","sub":"gate-115","t":"2026-11-14T13:55:34Z"}
+{"event":"sub.start","name":"gate","note":"Docs #116; capacity=3 free=9.9; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-117","t":"2026-11-14T14:01:51Z"}
