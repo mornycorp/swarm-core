@@ -39,6 +39,10 @@ pub const LOCK: &str = "Cargo.lock";
 /// bump of its pin reaches every package that depends on it.
 pub const SWARM_CORE: &str = crate::pin::PACKAGE;
 
+/// Swarm Core's testkit, which an app depends on (a dev-dependency) beside it, pinned to the same
+/// commit: a bump of the pin moves it with Swarm Core.
+pub const SWARM_CORE_TESTKIT: &str = crate::pin::TESTKIT;
+
 /// What [`changed_files`] lists for `Cargo.toml` and `Cargo.lock` when their change only moves
 /// Swarm Core's pin: Swarm Core itself, which [`plan`] follows to
 /// the packages that depend on it.
@@ -118,7 +122,7 @@ pub fn crates(meta: &serde_json::Value) -> Vec<Crate> {
             Some("build") => DepKind::Build,
             _ => DepKind::Normal,
         };
-        (members.contains(name) || name == SWARM_CORE).then(|| Dep { name: name.to_owned(), kind })
+        (members.contains(name) || name == SWARM_CORE || name == SWARM_CORE_TESTKIT).then(|| Dep { name: name.to_owned(), kind })
     };
     packages
         .iter()
@@ -277,6 +281,10 @@ pub fn affected(
         }
         queue.push_back(c.clone());
     }
+    // Swarm Core's pin moves its testkit with it: what depends on that is reached too.
+    if changed.contains_key(SWARM_CORE) {
+        queue.push_back(SWARM_CORE_TESTKIT.to_owned());
+    }
     // Packages whose library changed: they reach their dependents.
     let mut lib: BTreeSet<String> = queue.iter().cloned().collect();
     while let Some(dep) = queue.pop_front() {
@@ -294,6 +302,7 @@ pub fn affected(
         }
     }
     lib.remove(SWARM_CORE);
+    lib.remove(SWARM_CORE_TESTKIT);
     (why, lib)
 }
 

@@ -60,11 +60,19 @@ pub fn rerun_of<'a>(last: &'a str, last_rc: Option<&str>, gated: &str, sub: &str
     (rc != 0 && what == gated && of != sub && !of.is_empty()).then_some(of)
 }
 
+/// Whether `note` already says what its gate is: a rerun (`rerun of `) or one of the gate daemon's
+/// steps ([`super::daemon::policy::gate_note`]). Such a note is kept as it is: a regate or a
+/// bisection is a gate of its own, not a rerun.
+pub fn says_what_it_is(note: &str) -> bool {
+    let note = note.trim_start();
+    ["rerun of ", "daemon gate:", "regate of ", "bisect of ", "verify main for "].iter().any(|p| note.starts_with(p))
+}
+
 /// A gate's start note: the coordinator's, as the rerun of `of` when there is one (`rerun of <of>:
-/// <note>`), unless the note says what it reruns already.
+/// <note>`), unless the note says what its gate is already ([`says_what_it_is`]).
 pub fn note(note: &str, of: Option<&str>) -> String {
     match of {
-        Some(of) if !note.trim_start().starts_with("rerun of ") => format!("rerun of {of}: {}", note.trim()),
+        Some(of) if !says_what_it_is(note) => format!("rerun of {of}: {}", note.trim()),
         _ => note.to_owned(),
     }
 }
@@ -157,6 +165,13 @@ mod tests {
         assert_eq!(note("local gate: #9 #10 (#7 #8)", Some("gate-mr9")), "rerun of gate-mr9: local gate: #9 #10 (#7 #8)");
         assert_eq!(note("rerun of gate-mr9: by hand", Some("gate-mr9")), "rerun of gate-mr9: by hand", "it says so already");
         assert_eq!(note("local gate: #9", None), "local gate: #9");
+        // The gate daemon's steps say what they are, and stay as written.
+        use crate::gate::daemon::policy::{Step, gate_note};
+        for step in [Step::First, Step::Regate("gate-3".into()), Step::Bisect("gate-3".into()), Step::VerifyMain("gate-3".into())] {
+            let said = gate_note(&step, &[9, 10]);
+            assert!(says_what_it_is(&said), "{said}");
+            assert_eq!(note(&said, Some("gate-3")), said, "the daemon's step stays");
+        }
     }
 
     /// A stack that changed (a new head, another PR, another `main`), a last gate that passed or
