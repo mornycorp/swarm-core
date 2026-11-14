@@ -28,8 +28,8 @@ label "main-red"            "#b22222" "main is red: nothing merges or starts fro
 label "type::task" "#6699cc" "Planned work"
 label "type::bug"  "#d9534f" "Behaves wrongly or crashes"
 label "type::gap"  "#8e44ad" "Tracks a gap entry in docs/gaps.md"
-# CI.
-label "full-ci" "#c0c0c0" "Run every platform job on this pull request"
+# A label the project's own CI reads (such as `full-ci`, "run every platform job") is the project's:
+# it goes in scripts/github-labels.project.sh with its CI.
 
 # The project's own labels, defined with `label` above.
 PROJECT_LABELS="$(dirname "$0")/github-labels.project.sh"

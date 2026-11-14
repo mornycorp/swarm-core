@@ -7,7 +7,7 @@
      history this page has been read against. When a change adds a row there, re-read this page
      against it, fix what it makes wrong, and move the stamp to the new row (the test
      the_app_substrate_page_has_caught_up_with_the_contract fails until then, and says what to write). -->
-<!-- contract revision: 2026-11-14 | minor | One dispatch: a panic the dispatch caught is an `int -->
+<!-- contract revision: 2026-11-14 | minor | Two rules the skeleton already kept, now said: Never -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -295,7 +295,7 @@ footer { color: var(--muted); font-size: .88rem; border-top: 1px solid var(--rul
     <div class="body">
       <div class="rules">
         <div class="rule"><h3>Never crash</h3><ul><li>No <code>unwrap</code>, <code>expect</code> or <code>panic!</code> in production code, and no indexing on input</li><li>Arithmetic on input is checked; recursion and allocation are bounded</li><li>A crash fix ships the input that crashed as a test</li></ul></div>
-        <div class="rule"><h3>Never hang on another program</h3><ul><li>One process module starts every child</li><li>A wall-clock deadline and an idle deadline</li><li>Output is capped and drained on its own threads</li><li>The child's whole process group is killed on timeout, cancel and drop</li></ul></div>
+        <div class="rule"><h3>Never hang on another program</h3><ul><li>One process module starts every child</li><li>A child never gets the control socket's token</li><li>A wall-clock deadline and an idle deadline</li><li>Output is capped and drained on its own threads</li><li>The child's whole process group is killed on timeout, cancel and drop</li></ul></div>
         <div class="rule"><h3>Never hang on a lock</h3><ul><li>The app's own lock times out with an error that names it</li><li><code>std::sync::Mutex</code> is refused by the linter</li><li>One lock read per statement</li></ul></div>
         <div class="rule"><h3>State on disk</h3><ul><li>Versioned, with a migration from every earlier version</li><li>A file from a newer version is refused, never overwritten</li><li>One atomic writer: a temporary file, flushed, then renamed</li><li>Saved before memory changes</li></ul></div>
         <div class="rule"><h3>No secrets out</h3><p>A result, a log line or an error never carries a token, key or password. Secret settings are stored and shown redacted.</p></div>

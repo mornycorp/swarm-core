@@ -1,6 +1,6 @@
 # The tracking format
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-12 · **Change:** minor (a full gate's `superseded:` stop after its recheck; no format change) · **Target:** every consumer's `tracking` branch
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-11-14 · **Change:** minor (Gates: the gate daemon's start notes defined, with an example; a `changed` gate for a `no-ci` submit keeps the smoke's why; a full gate's `superseded:` stop after its recheck; no format change) · **Target:** every consumer's `tracking` branch
 
 **Current version: 3** ([Versions](#versions)). `cargo xtask event` writes it as `format` on every
 `session.start`.
@@ -159,6 +159,29 @@ gate analytics can read them:
   stack, the same HEAD), `gate` begins its start note `rerun of <that sub>: ` itself. A restack
   of an unchanged stack is the same stack; a gate of another stack between the two, or a last
   gate that passed or has no result, makes it a gate of its own.
+- **The gate daemon's gates** (`gate --daemon`; [the swarm protocol › The gate
+  daemon](../crates/swarm-core/assets/docs/swarm-protocol.md#the-gate-daemon)) are the
+  coordinator's gates, logged as its instance, `sub` `gate-<n>`. The daemon's text in the start
+  note names its step, then the PRs the gate gates and no other:
+  - `daemon gate: #<m> …`: a stack's first gate;
+  - `regate of <sub>: #<m> …`: after gate `<sub>` failed and the daemon dropped the PR the failure
+    points at, the rest of `<sub>`'s stack, less the PRs stacked on the dropped one;
+  - `bisect of <sub>: #<m> …`: after `<sub>` failed pointing at no one PR (none, or several), the
+    first half of its stack; after such a half passed, the first half of `<sub>`'s PRs it left
+    out, the suspects. When one suspect is left it is the culprit, dropped with a `sendback --sub
+    <sub>`, `<sub>` the last gate that failed with it.
+  - `verify main for <sub>`: `<sub>`'s failed tests, each alone, on `main` with nothing stacked
+    (`gate --test-alone`, kind `tooling`), after `<sub>`'s stack failed at its tests, where the
+    project turns it on (`Hooks::verify_main`). It gates no PR. When it fails, no PR is sent back
+    for `<sub>` and the daemon's off switch is set.
+
+  `<sub>` is the daemon's failed gate, whose result is its own or its rerun's (`<sub>-rerun`,
+  `rerun of <sub>: …`). A regate or a bisection is a gate of its own, not a rerun: it gates its PRs
+  whole, and its own failure is regated or bisected in turn. For each PR it drops for a failure the
+  daemon logs `sendback --issue <i> --mr <m> --sub <sub> --note "cause=<cause>: <evidence>"`, one
+  per issue the PR closes; for a PR it only **sets aside** it logs none: one stacked on the
+  dropped PR (it waits for that PR's fix), and the PRs a bisection leaves out (gated in a later
+  gate, the round's or the next round's). [Send-backs](#send-backs) reads them.
 - **A worker's own gate before it submits** is not one of these: `cargo xtask ready` runs it
   inside a sub named `ready` (`sub.start --sub ready-<short head> --name ready --note "ci
   --changed before submitting"`), so a reader's gate counts keep to the coordinator's gates. Its
@@ -169,8 +192,8 @@ gate analytics can read them:
 - **A submit without its run** (sc#18): `cargo xtask ready --no-ci` skips that gate, and its
   `submit` note's first `;`-separated part is `no-ci` (the rest, if any, as for any submit). The
   coordinator's `gate` reads the latest `submit` of each PR it gates: when it says `no-ci`, a
-  smoke becomes the `changed` kind (`ci --changed --base origin/main`), its why naming the PRs:
-  `kind=changed (ready --no-ci: #<m> …)`. A reader may count a PR whose latest submit says
+  smoke becomes the `changed` kind (`ci --changed --base origin/main`), its why naming the PRs,
+  then the smoke's own why when it had one: `kind=changed (ready --no-ci: #<m> …; <why>)`. A reader may count a PR whose latest submit says
   `no-ci` as submitted untested. Older writers wrote no note there: their `--no-ci` submits
   can't be told apart.
 
@@ -180,6 +203,22 @@ gate analytics can read them:
 {"event":"sub.start","name":"gate","note":"rerun of gate-mr154: local gate: #154 (#141); capacity=1 free=9.6","sub":"gate-mr154-rerun","t":"2026-10-20T10:46:19Z"}
 {"event":"merge","issue":141,"mr":154,"sub":"gate-mr154-rerun","t":"2026-10-20T10:52:17Z"}
 {"event":"sub.stop","note":"rc=0; merged #154","sub":"gate-mr154-rerun","t":"2026-10-20T10:52:41Z"}
+```
+
+The gate daemon bisecting a failed stack of four (the failure named a file #2 and #3 both
+changed), blaming #2 in the bisection's half, regating #1 without it and, next round, gating the
+half the bisection left out. Only #2 is sent back:
+
+```json
+{"event":"sub.start","name":"gate","note":"daemon gate: #1 #2 #3 #4; capacity=2 free=11.0; kind=full","sub":"gate-1","t":"2026-11-07T10:00:00Z"}
+{"event":"sub.stop","note":"rc=101; cause=build; kind=full","sub":"gate-1","t":"2026-11-07T10:08:00Z"}
+{"event":"sub.start","name":"gate","note":"bisect of gate-1: #1 #2; capacity=2 free=11.0; kind=full","sub":"gate-2","t":"2026-11-07T10:08:30Z"}
+{"event":"sub.stop","note":"rc=101; cause=build; kind=full","sub":"gate-2","t":"2026-11-07T10:15:00Z"}
+{"event":"sendback","issue":102,"mr":2,"note":"cause=build: it changed `crates/engine/src/cmd.rs`, where the build or a check failed","sub":"gate-2","t":"2026-11-07T10:15:05Z"}
+{"event":"sub.start","name":"gate","note":"regate of gate-2: #1; capacity=2 free=11.0; kind=full","sub":"gate-3","t":"2026-11-07T10:15:30Z"}
+{"event":"merge","issue":101,"mr":1,"sub":"gate-3","t":"2026-11-07T10:22:00Z"}
+{"event":"sub.stop","note":"rc=0; kind=full; merged #1","sub":"gate-3","t":"2026-11-07T10:22:10Z"}
+{"event":"sub.start","name":"gate","note":"daemon gate: #3 #4; capacity=2 free=11.0; kind=full","sub":"gate-4","t":"2026-11-07T10:23:30Z"}
 ```
 
 ### Send-backs
@@ -258,6 +297,7 @@ instant, a field it doesn't name as an extra.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Gates: what each of the gate daemon's start notes means (`daemon gate:`, `regate of <sub>:`, `bisect of <sub>:`, `verify main for <sub>`), which PRs it logs a `sendback` for and which it only sets aside, with a worked example of a bisection; the `changed` kind's why for a `no-ci` submit is followed by the smoke's own why; a full gate's `superseded:` stop is cut so that its `commit=` stays whole. No format change |
 | 2026-11-12 | minor | Send-backs: a gate daemon's gate (a start note beginning `daemon gate:`, `regate of`, `bisect of` or `verify main for`) that fails sends back only the PRs its `sendback` events name; no format change (mornycorp/swarm-core#44) |
 | 2026-11-12 | minor | The periodic full gate: a `superseded:` stop also says `main` was verified, or moved, while it waited for the machine lock (mornycorp/swarm-core#36); no format change |
 | 2026-11-04 | minor | Gates and Send-backs: a gate of the same PRs at the same heads onto the same `main` straight after the last gate failed begins its start note `rerun of <sub>:` itself, so a silent rerun of a flake is no send-back; no format change (mornycorp/swarm-core#20) |

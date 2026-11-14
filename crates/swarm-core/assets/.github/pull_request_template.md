@@ -21,10 +21,18 @@ Closes #<!-- issue number; the merge closes it -->
 - [ ] Tests for the change (and a regression test for any crash fix)
 - [ ] {{mr_docs}}
 - [ ] **Progress** section above filled in
-- [ ] UI changes checked visually (snapshot PNG attached below)
+- [ ] A UI change: a test checks what its views draw against their commands' answers, and **Screenshots** below has before and after (docs/app-architecture.md › Verify visually)
 - [ ] `log/devlog.md` entry written
 - [ ] Events logged (`cargo xtask event`: claim, work, submit)
 
 ## Screenshots
 
-<!-- Before / after from `cargo run -p {{ui_crate}} --example snapshot`, for UI changes. -->
+<!-- For a UI change: before and after, the same state in each (docs/app-architecture.md › Verify
+     visually). From `cargo run -p {{ui_crate}} --example snapshot` where the app has one, or the
+     app run with its control socket (`--socket`), driven with `ui.set` and the commands whose views
+     changed, and its window captured. Say which commands set the state up, so a reviewer can make
+     the same picture. Write "No UI change" otherwise. -->
+
+| Before | After |
+|---|---|
+|  |  |

@@ -60,7 +60,10 @@ architecture rests on it:
   `--smoke` need not have it: the `test` step runs the same test whenever the change reaches the
   app. **The step fails unless the test ran**: it names it exactly, so a renamed test fails the
   step rather than matching nothing and passing. A repo with no app has no such step.
-  `crates/swarm-core/fake/xtask.rs` keeps it in the full run's steps.
+  `crates/swarm-core/fake/xtask.rs` keeps it in the full run's steps, and
+  `crates/swarm-core/examples/consumer_xtask.rs` runs it as
+  `cargo test -p <cli> --test surfaces -- --exact <test>` and requires `1 passed` in its output, and
+  only when the workspace is an app (`swarm_core::skeleton::is_app`).
 
 ## What it leaves
 
