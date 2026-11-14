@@ -8,3 +8,4 @@
 {"event":"sub.start","name":"gate","note":"App UI substrate #104; capacity=3 free=10.3; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-105","t":"2026-11-14T10:47:37Z"}
 {"event":"merge","issue":104,"mr":105,"sub":"gate-105","t":"2026-11-14T10:49:02Z"}
 {"event":"sub.stop","note":"rc=0; kind=full; main=dcae950d004b84f07d624cd052d50f046ff72e88; merged #105","sub":"gate-105","t":"2026-11-14T10:49:09Z"}
+{"event":"sub.start","name":"gate","note":"Five small gaps #106; capacity=3 free=9.8; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-107","t":"2026-11-14T10:55:33Z"}
