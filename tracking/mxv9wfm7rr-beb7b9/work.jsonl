@@ -11,3 +11,4 @@
 {"event":"submit","issue":102,"mr":103,"t":"2026-11-13T17:58:50Z"}
 {"event":"claim","issue":104,"t":"2026-11-14T10:38:04Z"}
 {"event":"work","issue":104,"mr":105,"t":"2026-11-14T10:38:14Z"}
+{"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-0311606","t":"2026-11-14T10:45:28Z"}
