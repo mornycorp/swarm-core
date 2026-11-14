@@ -19,3 +19,4 @@
 {"event":"sub.stop","note":"rc=0; kind=full; main=e9e5d6bd1f2d3a107dff8bb67b9ba151ed044f38; merged #111","sub":"gate-111","t":"2026-11-14T13:25:50Z"}
 {"event":"sub.start","name":"gate","note":"claim --take-over #112; capacity=3 free=10.1; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-113","t":"2026-11-14T13:48:16Z"}
 {"event":"merge","issue":112,"mr":113,"sub":"gate-113","t":"2026-11-14T13:49:40Z"}
+{"event":"sub.stop","note":"rc=0; kind=full; main=827454bd6647c958a7b9e5cd8854106e4d378e72; merged #113","sub":"gate-113","t":"2026-11-14T13:49:46Z"}
