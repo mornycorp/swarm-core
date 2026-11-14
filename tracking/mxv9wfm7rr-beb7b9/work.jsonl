@@ -33,3 +33,4 @@
 {"event":"work","issue":112,"mr":113,"t":"2026-11-14T13:43:31Z"}
 {"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-8890270","t":"2026-11-14T13:46:26Z"}
 {"event":"sub.stop","note":"rc=0","sub":"ready-8890270","t":"2026-11-14T13:46:55Z"}
+{"event":"submit","issue":112,"mr":113,"t":"2026-11-14T13:47:06Z"}
