@@ -44,3 +44,4 @@
 {"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-c42ec78","t":"2026-11-14T14:00:13Z"}
 {"event":"sub.stop","note":"rc=0","sub":"ready-c42ec78","t":"2026-11-14T14:00:40Z"}
 {"event":"submit","issue":116,"mr":117,"t":"2026-11-14T14:00:50Z"}
+{"event":"session.stop","note":"swarm-foundation's gaps ported: #111 #113 #115 landed or ready, #117 (docs) ready for the coordinator","t":"2026-11-14T14:01:02Z"}
