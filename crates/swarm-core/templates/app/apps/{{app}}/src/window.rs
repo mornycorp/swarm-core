@@ -10,9 +10,9 @@ use eframe::egui;
 
 use {{crate_prefix_ident}}automation::control::{self, ControlArgs};
 use {{crate_prefix_ident}}engine::{AppInfo, Session, clip};
-use {{crate_prefix_ident}}ui::{Shell, Wake, theme, views::views};
+use {{crate_prefix_ident}}ui::{Shell, Wake, icon, theme, views::views};
 
-use crate::ui_state;
+use crate::{place, ui_state};
 
 const USAGE: &str = "usage: {{app}} [--ui-state <file>] [--socket [--yes] [--token-file <path>] [--port <n>]]";
 
@@ -93,6 +93,7 @@ fn take_ui_state(words: &mut Vec<&str>) -> Result<Option<PathBuf>, String> {
 /// closes, unless the file couldn't be read (it is then the person's to fix, never overwritten).
 pub fn run(args: &[String]) -> Result<(), Failure> {
     let Args { ui_state, socket } = parse(args).map_err(Failure::Usage)?;
+    let window_file = ui_state.as_deref().map(place::file_beside);
     let app = AppInfo { name: env!("CARGO_PKG_NAME").to_owned(), version: env!("CARGO_PKG_VERSION").to_owned() };
     let session = Arc::new(Session::new(app).map_err(|e| Failure::App(e.to_string()))?);
     let save_to = ui_state.filter(|path| match ui_state::restore(&session, path) {
@@ -111,6 +112,23 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         }
         None => None,
     };
+    let saved_place = window_file.as_deref().and_then(place::load);
+    let monitors = place::monitors();
+    let tracker = place::Tracker::new(window_file, saved_place);
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("{{product}}")
+        .with_inner_size(place::DEFAULT_SIZE)
+        .with_min_inner_size(place::MIN_SIZE)
+        .with_icon(icon::icon_data());
+    let options = eframe::NativeOptions {
+        viewport,
+        persist_window: false,
+        window_builder: Some(place::hook(saved_place, Arc::clone(&monitors))),
+        ..eframe::NativeOptions::default()
+    };
+    // Before the window and the menu bar: AppKit would add its tab items to the View menu.
+    #[cfg(target_os = "macos")]
+    crate::macos_menu::no_window_tabs();
     let ui_session = Arc::clone(&session);
     let create: eframe::AppCreator<'_> = Box::new(move |cc| {
         // The window is drawn in the theme's colours: the palette the swarm's tools share.
@@ -119,23 +137,64 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         let wake: Wake = Arc::new(move || ctx.request_repaint());
         // A `ui.set` from the socket repaints the window, so what an agent sets shows at once.
         ui_session.watch_ui(Arc::clone(&wake)).map_err(|e| e.message)?;
-        Ok(Box::new(Window { shell: Shell::new(ui_session, views(), wake) }))
+        // Mutable for macOS's system menu bar only: elsewhere nothing changes it.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        let mut shell = Shell::new(ui_session, views(), wake);
+        #[cfg(target_os = "macos")]
+        let menu = system_menu(&cc.egui_ctx, &mut shell);
+        Ok(Box::new(Window {
+            shell,
+            tracker,
+            #[cfg(target_os = "macos")]
+            menu,
+        }))
     });
-    let ran = eframe::run_native(env!("CARGO_PKG_NAME"), eframe::NativeOptions::default(), create).map_err(|e| Failure::App(e.to_string()));
+    let ran = place::Launch::run(env!("CARGO_PKG_NAME"), options, monitors, create).map_err(Failure::App);
     if let Some(path) = save_to {
         ui_state::save(&session, &path).map_err(Failure::App)?;
     }
     ran
 }
 
-/// The eframe app: the shell draws itself into the root `Ui`.
+/// macOS: the menus in the system menu bar, or, when `muda` can't make it, the window's own (said
+/// on stderr).
+#[cfg(target_os = "macos")]
+fn system_menu(ctx: &egui::Context, shell: &mut Shell) -> Option<crate::macos_menu::NativeMenu> {
+    match crate::macos_menu::NativeMenu::install(ctx, shell, "{{product}}", env!("CARGO_PKG_VERSION")) {
+        Ok(menu) => Some(menu),
+        Err(why) => {
+            eprintln!("{}: no system menu bar ({why}), so the window draws its own", env!("CARGO_PKG_NAME"));
+            None
+        }
+    }
+}
+
+/// The eframe app: the shell draws itself into the root `Ui`, and the tracker follows the window's
+/// size and place, to save them when it closes. On macOS the system menu bar's clicks run before the
+/// frame, and its items follow the rows the frame refreshed.
 struct Window {
     shell: Shell,
+    tracker: place::Tracker,
+    #[cfg(target_os = "macos")]
+    menu: Option<crate::macos_menu::NativeMenu>,
 }
 
 impl eframe::App for Window {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.tracker.observe(ui.ctx());
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.menu {
+            menu.run_clicks(&mut self.shell, ui.ctx());
+        }
         self.shell.ui(ui);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.menu {
+            menu.show(&self.shell);
+        }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.tracker.save();
     }
 }
 

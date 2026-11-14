@@ -17,7 +17,8 @@
 //! - **The UI shell** (`--ui`): `crates/ui` (layer `ui`: an egui shell
 //!   that lists the commands, runs one on a worker thread and draws its typed result; the toolkit is
 //!   the app's choice and the crate says so) and `apps/<app>` (layer `apps`: the window, with
-//!   `--socket` the control socket on the same session). [`UI_SCANS`] holds the UI crate to the
+//!   `--socket` the control socket on the same session, and on macOS the menus in the system menu
+//!   bar). [`UI_SCANS`] holds the UI crate to the
 //!   contract's The UI is a client (its colours from its theme, its words from its catalog among
 //!   it); [`scans`] gives them with [`SCANS`].
 //! - **Templates**, under `templates/app/`, are the files as they will be, with `{{name}}`
@@ -139,12 +140,28 @@ pub const UI_SCANS: &[Scan] = &[
     Scan::ui_file_writes().files(UI_SOURCES).test_files(TEST_FILES),
     Scan::ui_process_starts().files(UI_SOURCES).test_files(TEST_FILES),
     Scan::value_reads().files(UI_SOURCES).test_files(TEST_FILES),
-    Scan::ui_colours().files(UI_SOURCES).except(&[UI_THEME]).test_files(TEST_FILES),
-    Scan::ui_strings().files(UI_SOURCES).except(&[UI_CATALOG]).test_files(TEST_FILES).allowing(&[Allowed {
-        file: "crates/ui/src/jobs.rs",
-        count: 3,
-        reason: "the worker thread's name and `Jobs`'s `Debug` names: what the OS and a debugger show, never the window",
+    Scan::ui_colours().files(UI_SOURCES).except(&[UI_THEME]).test_files(TEST_FILES).allowing(&[Allowed {
+        file: "crates/ui/src/icons.rs",
+        count: 1,
+        reason: "`Color32::PLACEHOLDER` in a dock tab's title: no colour, the one the tab draws its title in",
     }]),
+    Scan::ui_strings().files(UI_SOURCES).except(&[UI_CATALOG]).test_files(TEST_FILES).allowing(&[
+        Allowed {
+            file: "crates/ui/src/jobs.rs",
+            count: 3,
+            reason: "the worker thread's name and `Jobs`'s `Debug` names: what the OS and a debugger show, never the window",
+        },
+        Allowed {
+            file: "crates/ui/src/fonts.rs",
+            count: 18,
+            reason: "the faces' files and names, and the named families and text styles: egui's keys, never drawn",
+        },
+        Allowed {
+            file: "crates/ui/src/native_menu.rs",
+            count: 12,
+            reason: "the menu path parts it places (`App`, `Window`, `Help`), the system items' shortcuts and the items' ids: keys, never drawn",
+        },
+    ]),
 ];
 
 /// The rules of [`UI_SCANS`] that hold the UI crate to its theme and its catalog.
@@ -256,18 +273,49 @@ pub const FILES: &[Asset] = &[
 /// `app` value ([`crate::Hooks::asset_vars`]), the name of the windowed binary.
 pub const UI_FILES: &[Asset] = &[
     Asset { path: "apps/{{app}}/Cargo.toml", text: include_str!("../templates/app/apps/{{app}}/Cargo.toml.tmpl") },
+    Asset { path: "apps/{{app}}/src/macos_menu.rs", text: include_str!("../templates/app/apps/{{app}}/src/macos_menu.rs") },
     Asset { path: "apps/{{app}}/src/main.rs", text: include_str!("../templates/app/apps/{{app}}/src/main.rs") },
+    Asset { path: "apps/{{app}}/src/place.rs", text: include_str!("../templates/app/apps/{{app}}/src/place.rs") },
+    Asset { path: "apps/{{app}}/src/place/tests.rs", text: include_str!("../templates/app/apps/{{app}}/src/place/tests.rs") },
     Asset { path: "apps/{{app}}/src/ui_state.rs", text: include_str!("../templates/app/apps/{{app}}/src/ui_state.rs") },
     Asset { path: "apps/{{app}}/src/window.rs", text: include_str!("../templates/app/apps/{{app}}/src/window.rs") },
+    Asset { path: "assets/fonts/CascadiaMono-OFL.txt", text: include_str!("../templates/app/assets/fonts/CascadiaMono-OFL.txt") },
+    Asset { path: "assets/fonts/FontAwesome-LICENSE.txt", text: include_str!("../templates/app/assets/fonts/FontAwesome-LICENSE.txt") },
+    Asset { path: "assets/fonts/README.md", text: include_str!("../templates/app/assets/fonts/README.md") },
+    Asset { path: "assets/fonts/Roboto-LICENSE.txt", text: include_str!("../templates/app/assets/fonts/Roboto-LICENSE.txt") },
     Asset { path: "crates/ui/Cargo.toml", text: include_str!("../templates/app/crates/ui/Cargo.toml.tmpl") },
     Asset { path: "crates/ui/src/catalog.rs", text: include_str!("../templates/app/crates/ui/src/catalog.rs") },
+    Asset { path: "crates/ui/src/density.rs", text: include_str!("../templates/app/crates/ui/src/density.rs") },
+    Asset { path: "crates/ui/src/density/tests.rs", text: include_str!("../templates/app/crates/ui/src/density/tests.rs") },
+    Asset { path: "crates/ui/src/dock.rs", text: include_str!("../templates/app/crates/ui/src/dock.rs") },
+    Asset { path: "crates/ui/src/dock/tests.rs", text: include_str!("../templates/app/crates/ui/src/dock/tests.rs") },
     Asset { path: "crates/ui/src/draw.rs", text: include_str!("../templates/app/crates/ui/src/draw.rs") },
+    Asset { path: "crates/ui/src/fonts.rs", text: include_str!("../templates/app/crates/ui/src/fonts.rs") },
+    Asset { path: "crates/ui/src/fonts/tests.rs", text: include_str!("../templates/app/crates/ui/src/fonts/tests.rs") },
+    Asset { path: "crates/ui/src/icon.rs", text: include_str!("../templates/app/crates/ui/src/icon.rs") },
+    Asset { path: "crates/ui/src/icon/tests.rs", text: include_str!("../templates/app/crates/ui/src/icon/tests.rs") },
+    Asset { path: "crates/ui/src/icons.rs", text: include_str!("../templates/app/crates/ui/src/icons.rs") },
+    Asset { path: "crates/ui/src/icons/tests.rs", text: include_str!("../templates/app/crates/ui/src/icons/tests.rs") },
     Asset { path: "crates/ui/src/jobs.rs", text: include_str!("../templates/app/crates/ui/src/jobs.rs") },
     Asset { path: "crates/ui/src/lib.rs", text: include_str!("../templates/app/crates/ui/src/lib.rs") },
+    Asset { path: "crates/ui/src/native_menu.rs", text: include_str!("../templates/app/crates/ui/src/native_menu.rs") },
+    Asset { path: "crates/ui/src/native_menu/tests.rs", text: include_str!("../templates/app/crates/ui/src/native_menu/tests.rs") },
     Asset { path: "crates/ui/src/shell.rs", text: include_str!("../templates/app/crates/ui/src/shell.rs") },
     Asset { path: "crates/ui/src/shell/tests.rs", text: include_str!("../templates/app/crates/ui/src/shell/tests.rs") },
     Asset { path: "crates/ui/src/theme.rs", text: include_str!("../templates/app/crates/ui/src/theme.rs") },
     Asset { path: "crates/ui/src/views.rs", text: include_str!("../templates/app/crates/ui/src/views.rs") },
+];
+
+/// The UI shell's binary files, by path in the app, sorted: the faces `crates/ui/src/fonts.rs`
+/// embeds (the App UI Substrate › Type), each with its licence and README among [`UI_FILES`].
+/// Written as they are, with no placeholders, only where missing.
+pub const UI_BINARY_FILES: &[(&str, &[u8])] = &[
+    ("assets/fonts/CascadiaMono-Regular.ttf", include_bytes!("../templates/app/assets/fonts/CascadiaMono-Regular.ttf")),
+    ("assets/fonts/Roboto-Bold.ttf", include_bytes!("../templates/app/assets/fonts/Roboto-Bold.ttf")),
+    ("assets/fonts/Roboto-Light.ttf", include_bytes!("../templates/app/assets/fonts/Roboto-Light.ttf")),
+    ("assets/fonts/Roboto-Medium.ttf", include_bytes!("../templates/app/assets/fonts/Roboto-Medium.ttf")),
+    ("assets/fonts/Roboto-Regular.ttf", include_bytes!("../templates/app/assets/fonts/Roboto-Regular.ttf")),
+    ("assets/fonts/fa-solid-900.ttf", include_bytes!("../templates/app/assets/fonts/fa-solid-900.ttf")),
 ];
 
 /// The longest name (`cli`, the prefix without its dash) the skeleton takes.
@@ -448,7 +496,10 @@ then run `cargo xtask swarm-core init --app` again (docs/new-swarm.md › The ap
         ));
     }
     crate::templates::init(project, hooks, root, today)?;
-    let written = write_missing(root, files)?;
+    let mut written = write_missing(root, files)?;
+    let binary: &[(&str, &[u8])] = if ui { UI_BINARY_FILES } else { &[] };
+    written.extend(write_missing(root, binary.iter().map(|&(path, bytes)| (path.to_owned(), bytes)))?);
+    let total = total + binary.len();
     println!(
         "swarm-core: the app skeleton: {written} of {total} files written from swarm-core {version}; it is this app's now (docs/new-swarm.md › The app's skeleton)",
         written = written.len(),
@@ -466,7 +517,7 @@ then run `cargo xtask swarm-core init --app` again (docs/new-swarm.md › The ap
 }
 
 /// Write each of `files` that isn't at `root` yet; the paths written.
-fn write_missing(root: &Path, files: Vec<(String, String)>) -> Result<Vec<String>, String> {
+fn write_missing<T: AsRef<[u8]>>(root: &Path, files: impl IntoIterator<Item = (String, T)>) -> Result<Vec<String>, String> {
     let mut written = Vec::new();
     for (path, text) in files {
         let at = root.join(&path);

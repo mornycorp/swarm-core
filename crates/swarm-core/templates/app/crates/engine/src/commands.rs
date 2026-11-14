@@ -14,7 +14,7 @@ use {{crate_prefix_ident}}model::SCHEMA_VERSION;
 
 use crate::error::clip;
 use crate::theme::{self, ThemeData};
-use crate::{CallContext, Command, CommandError, Registry, RegistryError, Requirement, Session, UiState};
+use crate::{CallContext, Command, CommandError, DockNode, Registry, RegistryError, Requirement, Session, UiState};
 
 /// Every command of the app: the one place they are registered.
 pub fn registry() -> Result<Registry, RegistryError> {
@@ -93,6 +93,9 @@ pub struct UiSetParams {
     /// Whether to show the command list.
     #[serde(default)]
     pub show_list: Option<bool>,
+    /// Where the dock's panes are (`ui::DockNode`): tabs of panes by id, or a split into parts.
+    #[serde(default)]
+    pub dock: Option<DockNode>,
 }
 
 /// `ui.set`: changes the UI's state, as a click does; its result is the state now.
@@ -104,7 +107,7 @@ impl Command for UiSetCommand {
     type Output = UiState;
     const ID: &'static str = "ui.set";
     const TITLE: &'static str = "Set the UI";
-    const SUMMARY: &'static str = "Opens a command's view or closes it, and shows or hides the command list";
+    const SUMMARY: &'static str = "Opens a command's view or closes it, shows or hides the command list, and lays out the dock's panes";
     const REQUIRES: &'static [Requirement] = &[Requirement::Session];
 
     fn run(&self, session: &Session, params: UiSetParams, _cx: &CallContext) -> Result<UiState, CommandError> {
@@ -113,12 +116,18 @@ impl Command for UiSetCommand {
             Some("") => Some(None),
             Some(id) => Some(Some(registered(session, id)?)),
         };
+        if let Some(dock) = &params.dock {
+            dock.check()?;
+        }
         session.update_ui(|state| {
             if let Some(selected) = selected {
                 state.selected = selected;
             }
             if let Some(show) = params.show_list {
                 state.show_list = show;
+            }
+            if let Some(dock) = params.dock {
+                state.dock = Some(dock);
             }
         })
     }
@@ -198,18 +207,48 @@ mod tests {
     fn ui_set_changes_what_it_is_given_and_ui_inspect_reads_it_back() {
         let s = session();
         let call = |id: &str, params| s.call(id, params, &CallOpts::new(Caller::Test));
-        let start = json!({"schema_version": SCHEMA_VERSION, "selected": null, "show_list": true});
+        let start = json!({"schema_version": SCHEMA_VERSION, "selected": null, "show_list": true, "dock": null});
         assert_eq!(call("ui.inspect", json!({})).unwrap(), start);
         let opened = call("ui.set", json!({"selected": "app.info"})).unwrap();
         assert_eq!((opened["selected"].clone(), opened["show_list"].clone()), (json!("app.info"), json!(true)));
         assert_eq!(call("ui.set", json!({"show_list": false})).unwrap()["selected"], "app.info", "what isn't given stays");
-        assert_eq!(call("ui.inspect", json!({})).unwrap(), json!({"schema_version": SCHEMA_VERSION, "selected": "app.info", "show_list": false}));
+        assert_eq!(call("ui.inspect", json!({})).unwrap(), json!({"schema_version": SCHEMA_VERSION, "selected": "app.info", "show_list": false, "dock": null}));
         let e = call("ui.set", json!({"selected": "app.nope", "show_list": true})).unwrap_err();
         assert_eq!(e.code, ErrorCode::NotFound);
         assert!(!s.ui().unwrap().show_list, "a refused call changes nothing");
         assert_eq!(call("ui.set", json!({"selected": ""})).unwrap()["selected"], Value::Null, "\"\" closes the view");
         let e = call("ui.set", json!({"show_list": "yes"})).unwrap_err();
         assert_eq!((e.code, e.key.as_deref()), (ErrorCode::BadParams, Some("show_list")));
+    }
+
+    /// `ui.set` lays out the dock: a layout it checks is kept, and one too deep, too big, with an
+    /// empty part or a pane the dock doesn't have is refused and changes nothing.
+    #[test]
+    fn ui_set_lays_out_the_dock_and_refuses_a_layout_it_cant_build() {
+        let s = session();
+        let call = |params| s.call("ui.set", params, &CallOpts::new(Caller::Test));
+        let stacked = json!({"kind": "split", "across": false, "parts": [
+            {"share": 1, "node": {"kind": "tabs", "panes": ["view"], "active": 0}},
+            {"share": 2, "node": {"kind": "tabs", "panes": ["commands", "view"], "active": 9}}]});
+        assert_eq!(call(json!({"dock": stacked.clone()})).unwrap()["dock"], stacked);
+        let mut deep = json!({"kind": "tabs", "panes": ["view"], "active": 0});
+        for _ in 0..crate::ui::DOCK_DEPTH {
+            deep = json!({"kind": "split", "across": true, "parts": [{"share": 1, "node": deep}]});
+        }
+        let many = json!({"kind": "tabs", "panes": vec!["view"; crate::ui::DOCK_ITEMS], "active": 0});
+        let refused = [
+            (deep, ErrorCode::TooLarge),
+            (many, ErrorCode::TooLarge),
+            (json!({"kind": "tabs", "panes": [], "active": 0}), ErrorCode::BadParams),
+            (json!({"kind": "split", "across": true, "parts": []}), ErrorCode::BadParams),
+            (json!({"kind": "split", "across": true, "parts": [{"share": 0, "node": {"kind": "tabs", "panes": ["view"], "active": 0}}]}), ErrorCode::BadParams),
+            (json!({"kind": "tabs", "panes": ["nope"], "active": 0}), ErrorCode::NotFound),
+        ];
+        for (dock, code) in refused {
+            assert_eq!(call(json!({"dock": dock.clone()})).unwrap_err().code, code, "{dock}");
+        }
+        assert_eq!(s.ui().unwrap().dock.map(|d| serde_json::to_value(d).unwrap()), Some(stacked), "a refused layout changes nothing");
+        assert!(DockNode::default_layout().check().is_ok());
     }
 
     /// `ui.theme` gives the theme's tokens and ranges as `#RRGGBB`, the same on the wire as typed, and

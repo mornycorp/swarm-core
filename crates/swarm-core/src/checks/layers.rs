@@ -79,7 +79,7 @@ impl Layers {
         apps: "apps",
         tooling: "tooling",
         testkit: "testkit",
-        toolkits: &["egui", "eframe", "egui_extras", "egui_kittest", "winit", "rfd"],
+        toolkits: &["egui", "eframe", "egui_extras", "egui_kittest", "winit", "rfd", "muda"],
         deny: &["clippy::unwrap_used", "clippy::expect_used", "clippy::panic", "clippy::unimplemented", "clippy::todo", "clippy::unreachable"],
         outside_deny: &["clippy::unwrap_used", "clippy::expect_used"],
         unsafe_crates: &[],

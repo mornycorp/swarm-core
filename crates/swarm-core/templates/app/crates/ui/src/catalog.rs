@@ -10,6 +10,8 @@
 
 /// The command list's heading.
 pub const COMMANDS: &str = "Commands";
+/// The tab of the dock's pane that shows the open command.
+pub const VIEW_PANE: &str = "Command";
 /// The button that hides the command list.
 pub const HIDE_LIST: &str = "Hide";
 /// The button that shows it again.
@@ -27,6 +29,25 @@ pub const CANCEL: &str = "Cancel";
 pub const INFO_NAME: &str = "Name";
 pub const INFO_VERSION: &str = "Version";
 pub const INFO_SCHEMA_VERSION: &str = "Schema version";
+
+/// The system menu bar's own items ([`crate::native_menu`]): the application menu's, named for the
+/// product, and the Window menu's. The platform runs them; the app only names and places them.
+pub fn about(product: &str) -> String {
+    format!("About {product}")
+}
+pub fn hide(product: &str) -> String {
+    format!("Hide {product}")
+}
+pub fn quit(product: &str) -> String {
+    format!("Quit {product}")
+}
+pub const SERVICES: &str = "Services";
+pub const HIDE_OTHERS: &str = "Hide Others";
+pub const SHOW_ALL: &str = "Show All";
+pub const WINDOW: &str = "Window";
+pub const MINIMIZE: &str = "Minimize";
+pub const ZOOM: &str = "Zoom";
+pub const BRING_ALL_TO_FRONT: &str = "Bring All to Front";
 
 /// A range's colour for something with no number or id (the series' grey), where the swatch view
 /// writes an entry's index.

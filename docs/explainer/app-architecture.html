@@ -436,6 +436,8 @@ tbody th { font-weight: 500; }
 
   <div hidden>
     <div class="palette" id="palette">
+      <h3>The skeleton's look</h3>
+      <p>The App UI Substrate (<code>docs/app-ui-substrate.md</code>, a pinned doc beside the contract) says what the window looks like, and the skeleton does each part: a 2 px corner radius; Roboto, Cascadia Mono and Font Awesome faces; an 18 pt row and its spacing; an icon for each command; a dock of tabs and splits laid out by the UI state, so <code>ui.set</code> sets it; a window that remembers its size and place; and on macOS the system menu bar.</p>
       <h3>The skeleton's palette</h3>
       <p>Twenty tokens are named for what they mean. They are the palette the swarm's tools share, so an app looks like them; <code>strong</code> and <code>success</code> are Swarm Core's own. A shared value that falls short of a contrast minimum is kept and recorded with its measured ratio, never nudged silently.</p>
       <div class="scroll">
@@ -471,13 +473,13 @@ tbody th { font-weight: 500; }
 <script>
 const LAYERS = [
   { n: 6, id: "apps", line: "The binaries: the CLI and the windowed app", uses: "any lower layer",
-    holds: "Thin entry points. The CLI parses arguments and calls the dispatch; the windowed app opens the UI shell.",
+    holds: "Thin entry points. The CLI parses arguments and calls the dispatch; the windowed app opens the UI shell, keeps the window's size and place, and on macOS hands the menus to the system menu bar.",
     rules: ["The CLI never links a UI toolkit", "A surfaces test runs the same calls through each transport"],
-    files: ["apps/<cli>/src/cli.rs", "apps/<cli>/tests/surfaces.rs", "apps/<app>/src/window.rs", "apps/<app>/src/ui_state.rs"] },
+    files: ["apps/<cli>/src/cli.rs", "apps/<cli>/tests/surfaces.rs", "apps/<app>/src/window.rs", "apps/<app>/src/ui_state.rs", "apps/<app>/src/place.rs", "apps/<app>/src/macos_menu.rs"] },
   { n: 5, id: "ui", line: "The shell: toolkit code, drawing, input", uses: "engine",
     holds: "The only layer that links a UI toolkit. It turns pixels and input into a command's params and draws the result.",
     rules: ["Calls commands on workers; never blocks its thread", "No colour or string literal outside the theme and catalog", "Reads typed results, never raw JSON"],
-    files: ["shell.rs", "views.rs", "draw.rs", "jobs.rs", "theme.rs", "catalog.rs"] },
+    files: ["shell.rs", "views.rs", "draw.rs", "jobs.rs", "theme.rs", "catalog.rs", "fonts.rs", "density.rs", "icons.rs", "dock.rs", "icon.rs", "native_menu.rs"] },
   { n: 4, id: "automation", line: "The transports: serve, the socket, MCP", uses: "engine",
     holds: "Framing only. Each transport reads a request, calls the dispatch and writes a reply.",
     rules: ["Names no command; it asks the registry", "Writes no file itself", "The socket binds 127.0.0.1 and wants a token first", "Request and reply sizes are capped"],

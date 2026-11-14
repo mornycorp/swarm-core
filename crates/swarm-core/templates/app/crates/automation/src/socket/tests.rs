@@ -77,7 +77,7 @@ fn it_listens_on_loopback_only() {
 fn a_good_auth_then_the_same_frames_as_serve() {
     let server = start();
     let mut client = Client::authed(&server);
-    let info = json!({"name": "demo", "version": "0.3.0", "schema_version": 1});
+    let info = json!({"name": "demo", "version": "0.3.0", "schema_version": 2});
     assert_eq!(client.ask(&json!({"id": 1, "method": "app.info"})), json!({"id": 1, "ok": true, "result": info}));
     assert_eq!(client.ask(&json!({"id": "b", "method": "commands"}))["result"][0]["id"], "app.info");
     let failed = client.ask(&json!({"id": 2, "method": "app.info", "params": {"x": 1}}));

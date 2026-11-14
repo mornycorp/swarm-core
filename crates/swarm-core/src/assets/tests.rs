@@ -317,6 +317,132 @@ fn a_file_no_longer_shipped_is_removed() {
     let _ = std::fs::remove_file(outside);
 }
 
+/// Every `Rgb::hex(0x……)` in `text`, in order, as `#RRGGBB`.
+fn rgb_hexes(text: &str) -> Vec<String> {
+    text.split("Rgb::hex(0x").skip(1).map(|rest| format!("#{}", rest.get(..6).unwrap().to_uppercase())).collect()
+}
+
+/// The colours of the skeleton theme's `const <name>`: an array, or one colour.
+fn palette_const(theme: &str, name: &str) -> Vec<String> {
+    let start = theme.find(&format!("const {name}: ")).unwrap_or_else(|| panic!("no const {name}"));
+    // To the statement's end: the first line ending in `;`, not the `;` in its type (`[Rgb; 7]`).
+    // By lines, so a Windows checkout's CRLF ends a line too.
+    let mut statement = String::new();
+    for line in theme.get(start..).unwrap().lines() {
+        statement.push_str(line);
+        if line.trim_end().ends_with(';') {
+            break;
+        }
+    }
+    rgb_hexes(&statement)
+}
+
+/// Every token of the skeleton's theme: its name, then its dark and light colours.
+fn skeleton_tokens(theme: &str) -> Vec<(String, [String; 2])> {
+    let literals = theme.split("Token {").skip(1).filter_map(|rest| {
+        let body = rest.get(..rest.find('}')?)?;
+        let name = body.split("name: \"").nth(1)?.split('"').next()?;
+        let [dark, light] = <[String; 2]>::try_from(rgb_hexes(body)).ok()?;
+        Some((name.to_owned(), [dark, light]))
+    });
+    literals.collect()
+}
+
+/// The colour rows of a document's tables: those whose last two cells are each one `#RRGGBB`, by
+/// their first cell (its backticks dropped).
+fn colour_rows(doc: &str) -> std::collections::BTreeMap<String, [String; 2]> {
+    let is_hex = |c: &str| c.len() == 7 && c.starts_with('#') && c.get(1..).unwrap().bytes().all(|b| b.is_ascii_hexdigit());
+    let mut rows = std::collections::BTreeMap::new();
+    for line in doc.lines().filter(|l| l.starts_with('|')) {
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(|c| c.trim().trim_matches('`')).collect();
+        let [first, .., dark, light] = cells.as_slice() else { continue };
+        if is_hex(dark) && is_hex(light) {
+            let old = rows.insert((*first).to_owned(), [dark.to_uppercase(), light.to_uppercase()]);
+            assert_eq!(old, None, "{first} is in the UI substrate twice");
+        }
+    }
+    rows
+}
+
+/// **The App UI Substrate has the skeleton's colours** (mornycorp/swarm-core#104): its tables give every token and every
+/// entry of the series, the markers and range32 (range16 is its first 16) as the skeleton's theme
+/// has them, in each look, and nothing else, so the document and the theme can't drift apart.
+#[test]
+fn the_ui_substrate_has_the_skeletons_colours() {
+    let theme = crate::skeleton::FILES.iter().find(|f| f.path == "crates/engine/src/theme.rs").unwrap().text;
+    let mut want: std::collections::BTreeMap<String, [String; 2]> = skeleton_tokens(theme).into_iter().collect();
+    assert_eq!(want.len(), 20, "the skeleton's tokens");
+    let range = |want: &mut std::collections::BTreeMap<_, _>, name: &str, dark: Vec<String>, light: Vec<String>| {
+        assert_eq!(dark.len(), light.len(), "{name}");
+        for (i, (d, l)) in dark.into_iter().zip(light).enumerate() {
+            want.insert(format!("{name} {i}"), [d, l]);
+        }
+    };
+    range(&mut want, "series", palette_const(theme, "DARK2"), palette_const(theme, "SET2"));
+    let none = [palette_const(theme, "DARK2_NONE"), palette_const(theme, "SET2_NONE")].map(|c| c.concat());
+    want.insert("series none".to_owned(), none);
+    let markers = palette_const(theme, "MARKER_PALETTE");
+    range(&mut want, "markers", markers.clone(), markers);
+    range(&mut want, "range32", palette_const(theme, "GLASBEY_DARK"), palette_const(theme, "GLASBEY_LIGHT"));
+    assert_eq!(want.len(), 20 + 8 + 9 + 32);
+    assert_eq!(colour_rows(asset("docs/app-ui-substrate.md").text), want, "the doc");
+    assert_eq!(page_colours(asset("docs/app-ui-substrate.html").text), want, "the page");
+}
+
+/// Every `"#RRGGBB"` in the page's script's `const <name> = [ … ];`, in order.
+fn page_const(page: &str, name: &str) -> Vec<String> {
+    let start = page.find(&format!("const {name} = [")).unwrap_or_else(|| panic!("no const {name} in the page"));
+    let rest = page.get(start..).unwrap();
+    let body = rest.get(..rest.find("];").unwrap()).unwrap();
+    body.split("\"#").skip(1).map(|r| format!("#{}", r.get(..6).unwrap().to_uppercase())).collect()
+}
+
+/// The page's colours, named as [`colour_rows`] names the doc's: each token, and each entry of the
+/// series, the markers and range32 (range16 is its first 16, sliced in the script).
+fn page_colours(page: &str) -> std::collections::BTreeMap<String, [String; 2]> {
+    let mut rows = std::collections::BTreeMap::new();
+    let start = page.find("const TOKENS = [").unwrap();
+    let tokens = page.get(start..).unwrap();
+    for line in tokens.get(..tokens.find("];").unwrap()).unwrap().lines() {
+        let Some(name) = line.trim().strip_prefix("[\"").and_then(|r| r.split('"').next()) else { continue };
+        let colours: Vec<String> = line.split("\"#").skip(1).map(|r| format!("#{}", r.get(..6).unwrap().to_uppercase())).collect();
+        if let Ok(pair) = <[String; 2]>::try_from(colours) {
+            assert_eq!(rows.insert(name.to_owned(), pair), None, "{name} is in the page twice");
+        }
+    }
+    let mut range = |name: &str, dark: Vec<String>, light: Vec<String>| {
+        assert_eq!(dark.len(), light.len(), "{name}");
+        for (i, pair) in dark.into_iter().zip(light).enumerate() {
+            rows.insert(format!("{name} {i}"), <[String; 2]>::from(pair));
+        }
+    };
+    range("series", page_const(page, "SERIES_DARK"), page_const(page, "SERIES_LIGHT"));
+    range("markers", page_const(page, "MARKERS"), page_const(page, "MARKERS"));
+    range("range32", page_const(page, "GLASBEY_DARK"), page_const(page, "GLASBEY_LIGHT"));
+    let [dark, light] = <[String; 2]>::try_from(page_const(page, "SERIES_NONE")).unwrap();
+    rows.insert("series none".to_owned(), [dark, light]);
+    rows
+}
+
+/// **The page and the doc agree**: each section's status, in order, is the same in both: the
+/// doc's `**In the skeleton.**` and `**To adopt.**`, the page's `status in` and `status todo` (not
+/// the legend's), so a section adopted in one is adopted in the other.
+#[test]
+fn the_ui_substrate_page_and_doc_agree() {
+    let doc: Vec<bool> = asset("docs/app-ui-substrate.md")
+        .text
+        .lines()
+        .filter_map(|l| if l.starts_with("**In the skeleton.**") { Some(true) } else { l.starts_with("**To adopt.**").then_some(false) })
+        .collect();
+    let page_text = asset("docs/app-ui-substrate.html").text;
+    let mut marks: Vec<(usize, bool)> = page_text.match_indices("class=\"status in\"").map(|(at, _)| (at, true)).collect();
+    marks.extend(page_text.match_indices("class=\"status todo\"").map(|(at, _)| (at, false)));
+    marks.sort_unstable();
+    let page: Vec<bool> = marks.into_iter().map(|(_, adopted)| adopted).collect();
+    assert_eq!(doc.len(), 12, "the doc's statuses: sections 2 to 12, and the corner radius");
+    assert_eq!(page, doc, "the page's statuses, in order, are the doc's (true: in the skeleton)");
+}
+
 /// `cargo xtask swarm-core sync-assets [--check]` is served, and refuses other arguments.
 #[test]
 fn the_swarm_core_command_serves_sync_assets() {

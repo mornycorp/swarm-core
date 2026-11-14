@@ -53,4 +53,4 @@ pub use error::{CommandError, ErrorCode, clip};
 pub use registry::{Registry, RegistryError};
 pub use session::{AppInfo, Session};
 pub use spec::{Command, CommandSpec, CommandState, Effects, Requirement, Why};
-pub use ui::{OnChange, UiState, UiStateError};
+pub use ui::{DockNode, DockPart, OnChange, PANE_COMMANDS, PANE_VIEW, PANES, UiState, UiStateError};

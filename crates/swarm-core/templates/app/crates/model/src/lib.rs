@@ -13,5 +13,5 @@ pub mod ids;
 
 /// The version of the shapes {{product}} exposes and persists. A change to one of them that an
 /// older reader can't take bumps it, with a migration from every earlier version
-/// (docs/app-architecture.md › State on disk). `app.info` reports it.
-pub const SCHEMA_VERSION: u32 = 1;
+/// (docs/app-architecture.md › State on disk). `app.info` reports it. 2: the UI state's dock layout.
+pub const SCHEMA_VERSION: u32 = 2;

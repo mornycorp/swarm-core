@@ -13,6 +13,10 @@ layer = "ui"
 # The toolkit is the app's choice (docs/app-architecture.md › The UI is a client): egui, as both
 # reference apps use. Only this crate and the windowed app link one.
 egui = "0.37"
+# The dock (the App UI Substrate › The dock): tabs and splits a person drags and resizes, from
+# rerun-io (MIT OR Apache-2.0), made for egui 0.37. Its own saved state is never loaded: the UI
+# state's layout is the source of truth.
+egui_tiles = { version = "0.18", default-features = false }
 
 [dev-dependencies]
 {{crate_prefix}}testkit = { path = "../testkit" }

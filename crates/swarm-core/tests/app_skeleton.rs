@@ -321,7 +321,7 @@ fn rendered_skeleton_passes(test: &str, ui: bool) {
     let (core, rev) = snapshot(name);
     std::fs::write(root.join("Cargo.toml"), manifest(&rev)).unwrap();
     let written = skeleton::init(&Project::EXAMPLE, &app, &root, "2026-11-02", ui).unwrap();
-    assert_eq!(written.len(), skeleton::FILES.len() + if ui { skeleton::UI_FILES.len() } else { 0 });
+    assert_eq!(written.len(), skeleton::FILES.len() + if ui { skeleton::UI_FILES.len() + skeleton::UI_BINARY_FILES.len() } else { 0 });
     assert_eq!(root.join("crates/ui").exists(), ui, "the UI crate is written with --ui and only then");
     let (build, env) = (target(name), resolve_pin_to(&core));
     lay_lock(&root, name, &rev);

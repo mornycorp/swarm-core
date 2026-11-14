@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-13 · **Change:** minor (the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-14 · **Change:** minor (what the colours, type and chrome are is the App UI Substrate, a pinned doc beside this one; the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -12,6 +12,9 @@ or an agent can run the whole app without a window. The rules below are the same
 this document is pinned: `AGENTS.md` links to it instead of restating it, and a change to it is a
 Swarm Core change and a bump in each app ([swarm-protocol.md](swarm-protocol.md) › The
 coordinator's loop, step 9).
+
+**[The App UI Substrate](app-ui-substrate.md)** ([as a page](app-ui-substrate.html)) is how the
+window looks.
 
 This is the short, generic contract. The app's own long form is its
 [architecture.md](architecture.md) (its crates, its commands, where its state lives) and its own
@@ -490,6 +493,10 @@ theme says so beside it. **The theme is data a command returns**
 (`ui.theme`: each token's name, meaning and value per look, each range's entries), so every
 surface can ask it, and a swatch view draws that answer like any other view.
 
+**What the colours, type and chrome are** (each token and range entry in both looks, egui's
+visuals, the contrast the theme keeps short, and the type, density, icons, dock and window an app
+adopts) is [the App UI Substrate](app-ui-substrate.md).
+
 ### Verify visually
 
 A UI change ships with **pictures**, before and after, in the PR's Screenshots section. Where the
@@ -604,6 +611,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): what the colours, type and chrome are is [the App UI Substrate](app-ui-substrate.md), a pinned doc beside this one (mornycorp/swarm-core#104). |
 | 2026-11-13 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): the skeleton's colours are the palette the swarm's tools share, so an app looks like them: its chrome tokens (surfaces, text, controls and highlights, states, each under a name for what it means), its series (Dark2 dark, Set2 light, `at(n)` as `n % 7` and a grey for none), its markers (Set1 with `#FF7F1C`, then grey) and its darker border for a filled entry; the 16 and 32 ranges are Swarm Core's own beyond them; a value taken from elsewhere that falls short of a contrast minimum is kept and recorded with its measured ratio, or nudged and listed as a divergence, never nudged silently (mornycorp/swarm-core#100). |
 | 2026-11-13 | minor | State on disk: the skeleton's one writer also makes a private file and one that is never written over what is there, so the control socket's token goes through it and no file write is allow-listed; a backend's `Failed` (a deadline, a refusing disk) reaches a caller as `unavailable`, not `internal` (swarm-core#94) |
 | 2026-11-13 | minor | Layers: only `backends` touches the outside. The process module and the one atomic file writer live there (the skeleton's `crates/backends`), so a backend can start a program or write a file through the same two modules; the engine keeps what is stored and when, and turns a backend's error into the command's. The layer is always there; a further backend is the app's choice. The `file-writes` scan reads every crate outside the layer (swarm-core#91) |

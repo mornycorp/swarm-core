@@ -4,9 +4,12 @@
 //! ([`Theme`]), or a command's result's made egui's by the theme ([`Theme::parse`]), and its words
 //! the catalog's ([`catalog`]): `scan` finds a colour or a word made here.
 
-use egui::{Panel, RichText, Ui};
+use egui::{Frame, Margin, Panel, RichText, Ui};
 
 use crate::catalog;
+use crate::density;
+use crate::dock;
+use crate::icons;
 use crate::shell::{Call, MenuNode, Row, Shell, item_row};
 use crate::theme::Theme;
 use crate::views::{Shown, Swatch};
@@ -23,20 +26,22 @@ enum Part {
     Result,
 }
 
-/// The whole window: the menu bar on top, the command list on the left (when the UI's state shows
-/// it), the selected command on the right.
+/// The whole window: the menu bar on top (none when the menus are the system's), and the dock under
+/// it ([`dock`]): the command list (when the UI's state shows it) and the selected command, as the
+/// UI state's layout places them.
 pub(crate) fn shell(shell: &mut Shell, ui: &mut Ui) {
     let theme = Theme::of(ui.visuals());
-    Panel::top(Part::Menu).show(ui, |ui| menu_bar(shell, ui));
-    if shell.state().show_list {
-        Panel::left(Part::Commands).resizable(true).default_size(260.0).show(ui, |ui| list(shell, &theme, ui));
+    if !shell.native_menu() {
+        Panel::top(Part::Menu).show(ui, |ui| menu_bar(shell, ui));
     }
-    egui::CentralPanel::default().show(ui, |ui| detail(shell, &theme, ui));
+    let gap = Frame::NONE.fill(theme.chrome).inner_margin(Margin::same(dock::GAP_MARGIN));
+    egui::CentralPanel::default().frame(gap).show(ui, |ui| dock::show(shell, &theme, ui));
 }
 
 /// The menu bar the shell made from the commands' menu paths; a click activates the command.
 fn menu_bar(shell: &mut Shell, ui: &mut Ui) {
-    let clicked = egui::MenuBar::new().ui(ui, |ui| menu_level(shell.menus(), shell.rows(), ui)).inner;
+    let menus = egui::containers::menu::MenuConfig::new().style(density::menu_style);
+    let clicked = egui::MenuBar::new().style(density::menu_bar_style).config(menus).ui(ui, |ui| menu_level(shell.menus(), shell.rows(), ui)).inner;
     if let Some(at) = clicked {
         shell.activate(at);
     }
@@ -56,9 +61,10 @@ fn menu_level(nodes: &[MenuNode], rows: &[Row], ui: &mut Ui) -> Option<usize> {
     clicked
 }
 
-/// A command's menu item, with its shortcut: whether it was clicked.
+/// A command's menu item, its icon (or the empty icon column) before it and its shortcut after:
+/// whether it was clicked.
 fn menu_item(label: &str, row: &Row, ui: &mut Ui) -> bool {
-    let mut button = egui::Button::new(label);
+    let mut button = egui::Button::new((icons::cell(icons::for_command(row.id)), label));
     if let Some(shortcut) = row.shortcut {
         button = button.shortcut_text(shortcut);
     }
@@ -71,14 +77,15 @@ fn menu_item(label: &str, row: &Row, ui: &mut Ui) -> bool {
 
 /// The command list: a selectable line for each (in the `muted` colour when the UI has no view for
 /// it or it can't run now), and a button that hides it.
-fn list(shell: &mut Shell, theme: &Theme, ui: &mut Ui) {
+pub(crate) fn list(shell: &mut Shell, theme: &Theme, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.heading(catalog::COMMANDS);
-        if ui.small_button(catalog::HIDE_LIST).clicked() {
+        if icons::small_button(ui, icons::EYE_SLASH, catalog::HIDE_LIST).clicked() {
             shell.set_show_list(false);
         }
     });
     let clicked = egui::ScrollArea::vertical()
+        .id_salt(Part::Commands)
         .show(ui, |ui| {
             let selected = shell.selected().map(|row| row.id);
             shell
@@ -100,8 +107,8 @@ fn label(row: &Row, theme: &Theme) -> RichText {
 }
 
 /// The selected command: its summary, the consent box, Run and Cancel, and the call's state.
-fn detail(shell: &mut Shell, theme: &Theme, ui: &mut Ui) {
-    if !shell.state().show_list && ui.button(catalog::SHOW_LIST).clicked() {
+pub(crate) fn detail(shell: &mut Shell, theme: &Theme, ui: &mut Ui) {
+    if !shell.state().show_list && icons::text_button(ui, icons::LIST, catalog::SHOW_LIST).clicked() {
         shell.set_show_list(true);
     }
     let Some(row) = shell.selected().cloned() else {
@@ -133,11 +140,11 @@ fn controls(shell: &mut Shell, row: &Row, theme: &Theme, ui: &mut Ui) {
         ui.label(catalog::fix(&why.remediation));
     }
     ui.horizontal(|ui| {
-        if ui.add_enabled(!shell.is_running() && row.why.is_none(), egui::Button::new(catalog::RUN)).clicked() {
+        if ui.add_enabled(!shell.is_running() && row.why.is_none(), egui::Button::new((icons::atom(icons::PLAY), catalog::RUN))).clicked() {
             shell.run_selected();
         }
         if shell.is_running() {
-            if ui.button(catalog::CANCEL).clicked() {
+            if icons::text_button(ui, icons::CIRCLE_XMARK, catalog::CANCEL).clicked() {
                 shell.cancel();
             }
             ui.spinner();
@@ -168,7 +175,7 @@ fn outcome(call: &Call, theme: &Theme, ui: &mut Ui) {
 
 /// A result's lines: a label and its value a row, in the order the view gave them.
 fn fields(shown: &Shown, ui: &mut Ui) {
-    egui::Grid::new(Part::Result).num_columns(2).striped(true).show(ui, |ui| {
+    egui::Grid::new(Part::Result).num_columns(2).spacing(density::form_spacing()).striped(true).show(ui, |ui| {
         for (label, value) in &shown.fields {
             ui.label(RichText::new(label).strong());
             ui.monospace(value);
