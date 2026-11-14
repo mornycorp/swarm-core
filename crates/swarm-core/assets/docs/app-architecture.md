@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The app architecture contract
 
-> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-14 · **Change:** minor (the conformance run fails `no-panic` on a panic the dispatch caught, and holds a call cancelled before it runs to every check; the App Substrate, this contract explained as a page, moves with it: it names the newest revision it has been read against; what the colours, type and chrome are is the App UI Substrate, a pinned doc beside this one; the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-14 · **Change:** minor (the process module starts a child without the control socket's token, and a secret is its owner's alone from its first byte: both were in the skeleton, now in the rules; the conformance run fails `no-panic` on a panic the dispatch caught, and holds a call cancelled before it runs to every check; the App Substrate, this contract explained as a page, moves with it: it names the newest revision it has been read against; what the colours, type and chrome are is the App UI Substrate, a pinned doc beside this one; the skeleton's colours are the palette the swarm's tools share; only `backends` touches the outside: the process module and the atomic file writer live there; MCP attached to a running app; the `sources` layer is `backends`) · **Target:** M1
 
 How {{product}} is shaped, and what keeps it robust. An app built on Swarm Core is **headless
 first**: every action is a typed command in one registry, every surface (the CLI, JSON lines on
@@ -561,6 +561,7 @@ nothing else:
   child never blocks on a full pipe;
 - puts the child in its own **process group**, and kills the group on a timeout, on cancel and on
   drop, so a grandchild never outlives its caller or holds the caller's pipe;
+- starts the child **without the control socket's token** in its environment;
 - reports every failure (not found, timed out, killed, output over the cap) as a typed error
   with a remediation.
 
@@ -595,6 +596,7 @@ Everything the app persists (settings, UI state, caches, journals) is:
 - **owned** by one module that reads and writes it, and no other;
 - written by **the one atomic writer**, in the `backends` layer (a temporary file in the same
   directory, flushed, then renamed), so a crash leaves the old file or the new, never half of one;
+  a secret (a token) is written its owner's alone from its first byte;
 - **saved before memory changes**: the app writes the new state to disk first, and changes its
   memory only when that succeeded, so a failed save never leaves the screen saying what the file
   doesn't;
@@ -628,6 +630,7 @@ comes from one function that a test points at a temp dir.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Two rules the skeleton already kept, now said: Never hang on another program, the process module starts every child without the control socket's token in its environment; State on disk, the one writer writes a secret (a token) its owner's alone from its first byte (swarm-core#116) |
 | 2026-11-14 | minor | One dispatch: a panic the dispatch caught is an `internal` whose message starts `panicked: ` and whose remediation is the testkit's `conformance::PANICKED`; Never crash's check: `conformance`'s `no-panic` fails on such an `internal` on every surface, valid params and adversarial, as on an uncaught panic, while a plain `internal` doesn't trip it. One dispatch's check: the call cancelled before it runs uses the command's example first, and is held to `no-panic` and `error-shape` as every other call is (swarm-core#110) |
 | 2026-11-14 | minor | [The App Substrate](app-substrate.html), this contract explained as a page beside it. It moves with this contract: it names the newest row here that it has been read against, and `the_app_substrate_page_has_caught_up_with_the_contract` fails when a change adds a row, until the page is re-read and its stamp moved on, in the same pull request (mornycorp/swarm-core#108). |
 | 2026-11-14 | minor | The UI is a client, [Colours from the theme](#colours-from-the-theme-words-from-the-catalog): what the colours, type and chrome are is [the App UI Substrate](app-ui-substrate.md), a pinned doc beside this one (mornycorp/swarm-core#104). |

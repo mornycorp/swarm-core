@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # Lessons for a new swarm
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (lessons 5–15: the robustness mistakes, chained PRs, a timeout rerun with no limit, a squash that reverted `main`; the two after them are now 16 and 17) · **Target:** M1
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-14 · **Change:** minor (each robustness guardrail links its rule in the app architecture contract and names its check; lessons 5–15: the robustness mistakes, chained PRs, a timeout rerun with no limit, a squash that reverted `main`; the two after them are now 16 and 17) · **Target:** M1
 
 The early design mistakes the first two swarms made: how each was found, what it cost, and the
 guardrail now in place (a rule, a check, or an item on the architecture review's checklist). It
@@ -14,7 +14,8 @@ the source of the [architecture review](swarm-protocol.md#the-coordinators-loop)
 known traps: a trap a review finds that isn't listed here is added, with the issue that found it.
 
 Lessons 5–12 are the robustness mistakes apps have already paid for: a hang, a freeze, lost
-settings, a leaked secret. Each is a rule for every app, whatever it does.
+settings, a leaked secret. Each is a rule for every app, whatever it does, and each guardrail
+links the rule in the [app architecture contract](app-architecture.md) that holds it.
 
 ## 1. Untyped contracts at the engine's boundary
 
@@ -35,7 +36,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   - **Check:** `cargo xtask layers` refuses untyped commands and `Value`-indexed replies outside
     the typed adapter.
   - **Review:** the standing architecture review, after the first ~20 merges of a new product or
-    area and at each stage gate, from this file's traps.
+    area and at each stage gate, from [app-architecture.md](app-architecture.md) and this file's
+    traps.
 
 ## 2. A shared target dir tested the wrong tree
 
@@ -107,10 +109,11 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
 - **The guardrail:**
   - **Rule:** one process module starts every child: stdin closed, a wall-clock and an idle
     deadline, the output capped and drained on its own threads, its own process group killed on a
-    timeout, a cancel and a drop, and every failure a typed error.
-  - **Check:** the architecture's scan (swarm-core#46) refuses `std::process::Command` outside
-    that module; the module's tests run a child that ignores its stdin, one that floods its
-    output, one that spawns a grandchild and one that never exits.
+    timeout, a cancel and a drop, and every failure a typed error
+    ([never hang on another program](app-architecture.md#never-hang-on-another-program)).
+  - **Check:** `scan` refuses `std::process::Command` outside that module; the module's tests run a
+    child that ignores its stdin, one that floods its output, one that spawns a grandchild and one
+    that never exits.
 
 ## 6. A second lock taken in one statement froze every run
 
@@ -124,7 +127,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   code to find the one statement; nothing in the code said which locks were involved.
 - **The guardrail:**
   - **Rule:** one lock read per statement: take one, copy out what is needed, drop it, take the
-    next; the app's own mutex errors out on a deadlock instead of waiting, naming the lock.
+    next; the app's own mutex errors out on a deadlock instead of waiting, naming the lock
+    ([never hang on a lock](app-architecture.md#never-hang-on-a-lock)).
   - **Check:** clippy's `disallowed-types` refuses `std::sync::Mutex` and `MutexGuard`; the lock's
     own tests; the architecture review reads for a second lock in a statement.
 
@@ -140,9 +144,9 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
 - **The guardrail:**
   - **Rule:** the UI draws memory and calls commands on workers; it never writes a file, starts a
     program, blocks its own thread or reads the disk while drawing, and a result arrives as a
-    message the next frame draws.
-  - **Check:** the architecture's scan (swarm-core#46) refuses file access and process starts in
-    the UI crate, and `cargo xtask layers` keeps the toolkit in the UI layer.
+    message the next frame draws ([the UI is a client](app-architecture.md#the-ui-is-a-client)).
+  - **Check:** `scan` refuses file access and process starts in the UI crate, and `layers` keeps the
+    toolkit in the UI layer.
 
 ## 8. A non-blocking read's defaults were saved over the person's settings
 
@@ -157,9 +161,9 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
 - **The guardrail:**
   - **Rule:** state is loaded without ever writing defaults over what it couldn't read: a read that
     fails or blocks leaves the person's file alone, and nothing saves until the load has
-    succeeded.
+    succeeded ([state on disk](app-architecture.md#state-on-disk)).
   - **Check:** the state module owns the read and the write, and the one atomic writer is the only
-    writer (the scan, swarm-core#46); a test saves after a failed read and finds the file as it was.
+    writer (`scan`); a test saves after a failed read and finds the file as it was.
 
 ## 9. Memory changed before a failed save
 
@@ -172,9 +176,10 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   could trust to match the disk.
 - **The guardrail:**
   - **Rule:** save before memory changes: write the new state to disk first and change memory only
-    when that succeeded, so a failed save returns its typed error and leaves both as they were.
-  - **Check:** the writer's tests fail a write and find the memory unchanged; the architecture
-    review reads each new command that changes state for the order.
+    when that succeeded, so a failed save returns its typed error and leaves both as they were
+    ([state on disk](app-architecture.md#state-on-disk)).
+  - **Check:** the writer's tests fail a write and find the memory unchanged; `review` reads each
+    new command that changes state for the order.
 
 ## 10. A settings view printed secrets
 
@@ -186,7 +191,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   for every place it had been written.
 - **The guardrail:**
   - **Rule:** a secret setting is stored and shown redacted, a command that needs one reads it from
-    the store, and no result, log line, journal entry or error message carries its value.
+    the store, and no result, log line, journal entry or error message carries its value
+    ([no secrets out](app-architecture.md#no-secrets-out)).
   - **Check:** the tests of every result that holds settings must show the redaction, with obvious
     fakes for secrets; the architecture review asks of every new setting, "is this one?".
 
@@ -201,7 +207,7 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   reproduce on demand.
 - **The guardrail:**
   - **Rule:** every failure is a typed error with a message and a remediation, and a caller that
-    chooses to continue past one logs it and says why.
+    chooses to continue past one logs it and says why ([the error](app-architecture.md#the-error)).
     A step is best-effort only when its failure is reported and the work stays correct without it.
   - **Check:** the architecture review and every PR's reviewer look for a discarded `Result`;
     clippy's `must_use` and unused-result lints hold the rest.
@@ -217,8 +223,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
 - **The guardrail:**
   - **Rule:** a test uses temporary directories for config and state, makes no network call and
     runs no installer or GUI program; the config dir comes from one function a test points at a
-    temp dir.
-  - **Check:** the architecture's scan (swarm-core#46) refuses the real config dir named in a test.
+    temp dir ([tests touch nothing real](app-architecture.md#tests-touch-nothing-real)).
+  - **Check:** `scan` refuses the real config dir named in a test.
 
 ## 13. PRs chained because they touched the same files
 
@@ -289,7 +295,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
     architecture gives the core (layout, hit-testing, interaction state, any mapping between
     pixels and the model), built in a front end.
   - **Rule:** a front end that needs an answer the engine doesn't give asks for the command
-    (an issue, or the algorithm in the core first), rather than computing it.
+    (an issue, or the algorithm in the core first), rather than computing it
+    ([app-architecture.md › The UI is a client](app-architecture.md#the-ui-is-a-client)).
 
 ## 17. Requirements in a spec's tables that never became work
 
@@ -310,7 +317,8 @@ settings, a leaked secret. Each is a rule for every app, whatever it does.
   - **Review:** a new item on the architecture review's checklist: a requirement in the spec
     (any table row or bullet) with no code and no open issue, under a gap marked done.
   - **Rule:** a gap is marked done only when each requirement line of its spec sections cites
-    the issue or the code that meets it, or an owner's decision to drop it.
+    the issue or the code that meets it, or an owner's decision to drop it
+    ([progress-docs.md](progress-docs.md) rule 7).
 
 ## Adding a lesson
 
@@ -327,6 +335,7 @@ there, then bump.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Lessons 5–12, 16 and 17: each guardrail links the rule in the app architecture contract (or the progress docs) that holds it, and names its check as the contract does (`scan`, `layers`, `review`); the architecture review's checklist is made from the contract and this file's traps (swarm-core#116) |
 | 2026-11-12 | minor | Lessons 5–15, from swarm-foundation: the robustness lessons (5–12: a child that outlived its caller, a second lock in one statement, files read while drawing, defaults saved over settings, memory changed before a failed save, secrets in a settings view, a best-effort step's hidden error, a test in the real config dir), PRs chained for touching the same files (13), a timeout repeated alone and rerun with no limit (14), a squash that reverted `main` (15). The lessons that were 5 and 6 are 16 and 17 (swarm-core#28) |
 | 2026-10-31 | minor | Lesson 6: requirements in a spec's tables that never became work, and its checklist item |
 | 2026-10-30 | minor | Lesson 5: a front end building the core's logic (layout, hit-testing, interaction state), and its checklist item |

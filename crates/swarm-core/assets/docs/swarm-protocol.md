@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-13 · **Change:** minor (corrections and a trim: a link, the earlier tracker's issue numbers, any number of swarms; dated notes and old history rows removed) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-14 · **Change:** minor (the architecture review's checklist is the app architecture contract, its traps cite their lessons; a merged base means rebasing a draft stacked on it, never a ready PR; corrections and a trim: a link, the earlier tracker's issue numbers, any number of swarms; dated notes and old history rows removed) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -143,7 +143,7 @@ Keep your PR a draft until then: `ready` is what marks it ready, never `gh pr re
 From your first submit on, watch your PRs with `cargo xtask prwatch --agent <your instance id>`
 (under your harness's monitor, so each line it prints reaches you; else as a background
 process), and run it with `--once` whenever you wake. Act on what it says at once: a merged base
-means rebasing what is stacked on it; a conflict, failed checks or a new comment means you have
+means rebasing a draft PR stacked on it (never a ready one: the gate restacks it); a conflict, failed checks or a new comment means you have
 work (docs/swarm-protocol.md › Watching your PRs).
 Then keep going:
 1. Pick the next open, unclaimed issue (docs/swarm-protocol.md › Picking work › The next
@@ -372,7 +372,7 @@ request. Always pass `--repo {{github.repo}}` to gh.
    The merge closes the
    issue, and the coordinator removes its label (`cargo xtask tidy <n>`). From your first
    submit, watch your PRs with `cargo xtask prwatch --agent <id>` (`--once` on every wake) and act
-   at once: a merged base means rebasing what is stacked on it
+   at once: a merged base means rebasing a draft PR stacked on it, never a ready one
    ([Watching your PRs](#watching-your-prs)).
 6. **Give up cleanly.** Comment what you learned, remove `status::in-progress`, close the draft
    PR. A claim with no activity for 24 hours (no events on the issue, no claim comment, no new
@@ -509,7 +509,7 @@ What each line asks of you:
 
 | Line | Do |
 |---|---|
-| `#m merged: rebase what is stacked on it` | rebase the next PR of the stack onto `main` at once (`git rebase --onto origin/main <the old base's tip>`), gate, push |
+| `#m merged: rebase what is stacked on it` | rebase the next PR of the stack onto `main` at once when it is a draft (`git rebase --onto origin/main <the old base's tip>`), gate, push; a ready one is the gate's to restack, and `land` rebases one whose base merged as other commits |
 | `merge state: … -> dirty` | a conflict: rebase onto `main`, resolve, gate, push |
 | `merge state: … -> behind` | nothing: the coordinator brings it up to `main` at merge |
 | `checks: failure` | GitHub runs no workflows, so a check is something outside the swarm (an app, a hand-added workflow): say so on the PR and tell the owner |
@@ -662,7 +662,8 @@ On each finished pull request:
      conflict, saying to finish the work or close the PR: send it back to its worker, or close
      it. On 2026-10-27 a PR was un-drafted with only its claim commit, and the ready watch,
      `stack`, a 0.4-minute smoke and `land` merged it, closing its issue with none of its work.
-3. **Merge on the local gate:** run `cargo xtask gate --sub gate-<n> --note "local gate: #<m> (#<i>)"`
+3. **Merge on the local gate** (where [the gate daemon](#the-gate-daemon) runs, it does steps 2
+   and 3): run `cargo xtask gate --sub gate-<n> --note "local gate: #<m> (#<i>)"`
    on the stacked tree (it refuses a rebase in progress or conflict markers, and a HEAD
    that isn't the top of the stack record, naming both; picks the gate's kind (below),
    waits for capacity with `--wait` unless it is a docs gate, takes the gate lock, logs
@@ -955,28 +956,32 @@ On each finished pull request:
       PRs, and ends in one issue per finding (evidence with file paths and counts, a proposal,
       an estimate), each linked from the review's issue, which it then closes. The coordinator
       ranks the findings into `docs/gaps.md` like any other.
-    - **It works from the checklist of known traps,** each one a mistake a swarm has already
-      paid for ([lessons.md](lessons.md)):
+    - **Its checklist is [app-architecture.md](app-architecture.md):** the review reads the code
+      against each rule there (layers, commands, one dispatch, the UI as a client, never crash,
+      never hang on another program or a lock, state on disk, no secrets out, tests touch nothing
+      real) and names the check that should hold it and doesn't. Beside it, it works from the
+      traps below, each one a mistake a swarm has already paid for ([lessons.md](lessons.md)):
       - untyped contracts at a boundary: command params and results, protocol messages, errors;
       - a consumer (the UI, the CLI, MCP) reaching past the command layer into engine internals;
       - consumers keeping their own mirrors of engine types;
       - persisted data (settings, UI state, caches) without a version;
       - stringly-typed errors, classified by their message;
       - work on the UI thread that should be a job; shared state with no owner;
-      - the robustness traps (lessons.md 5–12): a child process started outside the one
+      - the robustness traps ([lessons.md](lessons.md) 5–12): a child process started outside the one
         process module, or with no deadline; a second lock taken in a statement that holds
         one; a file read while drawing; defaults saved over state that couldn't be read;
         memory changed before its save succeeded; a secret in a result, a log or an error; a
         discarded `Result`; a test that touches the real config dir;
       - logic the spec or the architecture gives the core (layout, hit-testing, interaction
         state, a pixel-to-model mapping) built in a front end, because the core piece isn't
-        there yet;
+        there yet ([lessons.md](lessons.md) 16);
       - a requirement in the spec (a table row, a bullet) with no code and no open issue, under a
         gap marked done: the review reads the spec line by line against the code, not against
-        the gap list.
+        the gap list ([lessons.md](lessons.md) 17).
 
       A trap it finds that isn't on the list goes on it, and into [lessons.md](lessons.md), with
-      the issue that found it.
+      the issue that found it; a rule it finds missing goes to
+      [app-architecture.md](app-architecture.md) as a change to Swarm Core.
 
 ## The gate daemon
 
@@ -1436,6 +1441,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | The coordinator's loop, step 10: the architecture review's checklist is [app-architecture.md](app-architecture.md), read rule by rule, with the traps beside it, each citing its lesson; a rule it finds missing is a change to Swarm Core. Watching your PRs: a merged base means rebasing a draft PR stacked on it, never a ready one, which the gate restacks. Step 3 says the gate daemon does steps 2 and 3 where it runs (swarm-core#116) |
 | 2026-11-13 | minor | Trimmed: the dated notes of who decided a rule, and this table's rows before 2026-11-12 (they are in git) |
 | 2026-11-13 | minor | Corrections: the two links to Watching your PRs resolve; `sc#3` to `sc#20` are the earlier tracker's numbers; "both swarms" reads as any number of them |
 | 2026-11-13 | minor | What proves a change (new): a project's `Project::proof`. The ready proof (each PR's `ready` runs everything; the coordinator smokes; what every swarm ran until now) or the batch proof (`ready` runs without the project's `ready_env` tests; the coordinator's gate of a stack that needs it is the full gate, and a landed one verifies `main`). Starting a worker, Picking work › Finish, the coordinator's step 3 and the periodic full gate's passes say what each means (sc#53) |

@@ -19,8 +19,8 @@ Once per machine, before an agent starts there:
    <!-- and whatever the product needs: targets, SDKs, a GPU driver -->
 2. **GitHub:** `gh auth login --hostname {{github.host}}`, then `gh auth setup-git`, so git and
    cargo (`.cargo/config.toml` sets `net.git-fetch-with-cli`) fetch with gh's token. The account
-   must read this repository and [swarm-core](https://github.com/mornycorp/swarm-core), a private
-   git dependency. Set `GH_REPO={{github.repo}}`, or always pass `--repo {{github.repo}}` to gh.
+   must read this repository; [swarm-core](https://github.com/mornycorp/swarm-core), a git
+   dependency, is public. Set `GH_REPO={{github.repo}}`, or always pass `--repo {{github.repo}}` to gh.
 3. **The clone:** `gh repo clone {{github.repo}}`, and `git fetch origin tracking` so the
    timeline is there to read.
 4. **The pre-push hook** (optional): `git config core.hooksPath scripts/hooks`.

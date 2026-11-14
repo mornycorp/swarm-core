@@ -1,6 +1,6 @@
 # Starting a new swarm
 
-> **Last updated:** 2026-11-05 · **Change:** minor (no GitHub Actions: CI is local)
+> **Last updated:** 2026-11-14 · **Change:** minor (the table names the app's skeleton and every starting point; Swarm Core is a public repository; the `ci` step's tools and its conformance step; no GitHub Actions: CI is local)
 
 How a new repo starts an agent swarm from Swarm Core alone: the xtask that wires it in, the
 `ci` it needs, the pin and the shared files, GitHub, each machine, and the first coordinator and
@@ -13,9 +13,10 @@ which the repo pins as `docs/swarm-protocol.md`: read it before starting the fir
 
 | What | Whose | How it gets there |
 |---|---|---|
-| `xtask/`: the `Project`, the `Hooks`, the dispatch, `ci` | the repo's | step 2, from [`examples/consumer_xtask.rs`](../crates/swarm-core/examples/consumer_xtask.rs) |
+| `xtask/`: the `Project`, the `Hooks`, the dispatch, `ci`; `rustfmt.toml` | the repo's | step 2, from [`examples/consumer_xtask.rs`](../crates/swarm-core/examples/consumer_xtask.rs) |
 | The pinned copies: the protocol, `app-architecture.md`, `lessons.md`, `progress-docs.md`, the GitHub templates, `scripts/`, the skills | **Swarm Core's**: `sync-assets --check` fails on an edit | step 4, `cargo xtask swarm-core sync-assets` |
-| The starting points: `AGENTS.md`, `docs/swarm.md`, `docs/development.md`, the progress docs, the owner's directions, the merge check's prompt, nextest's `ci` profile | **the repo's**, once copied: edit freely, nothing checks them | step 5, `cargo xtask swarm-core init` |
+| The app's skeleton (an app only): `crates/model`, `backends`, `engine`, `automation` (with the control socket), `testkit`, `apps/<cli>`, `clippy.toml`, `rustfmt.toml`, with the example command `app.info`; with `--ui` also `crates/ui` and the window `apps/<app>` | **the repo's**, once written: edit freely; `cargo xtask layers` keeps it to the contract | step 5, `cargo xtask swarm-core init --app` |
+| The starting points: `AGENTS.md`, `docs/swarm.md`, `docs/development.md`, `docs/architecture.md`, `clippy.toml`, the progress docs, the owner's directions, the merge check's prompt, nextest's `ci` profile | **the repo's**, once copied: edit freely, nothing checks them | step 6, `cargo xtask swarm-core init` |
 
 Why the two kinds: the pinned copies are the process every swarm shares, so a change to them is a
 Swarm Core PR and a bump in each repo. The starting points describe the repo itself (its crates,
@@ -27,9 +28,8 @@ missing, so it never overwrites the repo's own.
 ## 1. Before anything: access
 
 - **A GitHub repository** for the repo, `owner/name`.
-- **Read access to Swarm Core** for every machine and person that builds: it is a private
-  repository, and cargo fetches it from `https://github.com/mornycorp/swarm-core.git`. Ask
-  Swarm Core's owner to add the account as a collaborator on `mornycorp/swarm-core`.
+- **Swarm Core** is fetched by cargo from `https://github.com/mornycorp/swarm-core.git`, a public
+  repository: every machine that builds reaches it with no access to ask for.
 - **gh**, authenticated, and git using its token: `gh auth login`, then `gh auth setup-git`.
 
 ## 2. The xtask
@@ -150,9 +150,13 @@ reads what it prints. [docs/ci-contract.md](ci-contract.md) is everything the tw
 forms it is called with (`--changed --base <ref>`, `--smoke`, none, the rerun's `--test-alone`,
 `--doctests` and `--only`), the `CI summary` it ends with, and nextest's lines and junit file.
 
-- The example's `ci` keeps the contract with fmt, clippy, nextest, `layers` and the pinned copies' check, and
-  narrows `--changed` with Swarm Core's plan (`swarm_core::changed`). Grow it with the
-  repo's own steps (the smoke's golden tests and headless run, generated docs' checks).
+- The example's `ci` keeps the contract with fmt, clippy, nextest, `layers` and the pinned copies'
+  check, and in the full run an app's `conformance` step (the contract's
+  [The steps](ci-contract.md#the-steps); a repo with no app has no such step), and narrows
+  `--changed` with Swarm Core's plan (`swarm_core::changed`). Grow it with the repo's own steps
+  (the smoke's golden tests and headless run, generated docs' checks). Its tools: `rustfmt`,
+  `clippy` and `cargo-nextest` (`cargo install cargo-nextest --locked`, or a prebuilt binary from
+  nexte.st).
 - `ci` records its checkout in the target dir (`swarm_core::checkout::claim`), so two
   checkouts never share one.
 - nextest's `ci` profile writes the junit file the gate keeps: `.config/nextest.toml`, from
@@ -334,17 +338,24 @@ the contract (the layers, the headers, the scans).
 ## 6. The starting points
 
 ```sh
-cargo xtask swarm-core init            # write each one the repo doesn't have yet
+cargo xtask swarm-core init            # write each one the repo doesn't have yet (`init --app`, step 5, wrote them)
 ```
 
 Then make them the repo's own, before the first agent starts:
 
 - `AGENTS.md`: what the product is, its golden rules, its shared files (§6); `cargo xtask layers
   --write` fills in its crate map. Keep §4 and §5: the protocol links to them.
-- `docs/architecture.md`: the layers and what each means for this product, how a command flows,
-  typed contracts, the UI and automation (the CLI, the control channel, MCP). **Decide the layers
-  before the first issue**: every swarm on Swarm Core builds an engine of typed commands that every
-  front end drives, and retrofitting it costs far more ([lessons.md](../crates/swarm-core/assets/docs/lessons.md) §1).
+- `docs/architecture.md`: the repo's long form of the pinned contract
+  ([app-architecture.md](../crates/swarm-core/assets/docs/app-architecture.md)): its crates by
+  layer, how a command flows (every surface into one dispatch), where its state lives, and
+  **Adding a command**, the recipe each new command follows; the pinned `add-command` skill
+  carries the same steps for agents. **Decide the layers before the first issue**: every swarm on
+  Swarm Core builds an engine of typed commands that every front end drives, and retrofitting it
+  costs far more ([lessons.md](../crates/swarm-core/assets/docs/lessons.md) §1).
+- `clippy.toml`: the test allowances and `disallowed-types` for `std::sync::Mutex` and
+  `MutexGuard`, with the code-health limits; the `reason`s point at the skeleton's lock (the
+  engine's `lock::Lock`): name yours instead if the app has another. A repo that already has a
+  `clippy.toml` keeps it: merge these in by hand.
 - `docs/owner-directions.md`: the owner's first directions (step 9).
 - `docs/gaps.md`, `docs/roadmap.md`, `ROADMAP.md`: the first milestone and its gaps, ranked; the
   protocol's workers pick from them ([progress-docs.md](../crates/swarm-core/assets/docs/progress-docs.md)

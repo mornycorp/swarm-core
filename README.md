@@ -148,18 +148,22 @@ overwrites. Nothing lists or checks them after ([docs/new-swarm.md](docs/new-swa
 
 **The app skeleton** (`skeleton`, `crates/swarm-core/templates/app/`) is a small workspace in
 which one example command (`app.info`) already runs through every surface and the checks pass:
-`crates/model` (the id rule), `engine` (the session, the typed registry, the one dispatch),
-`automation` (JSON lines with the contract's caps, the loopback control socket with token auth, an
+`crates/model` (the id rule), `backends` (the one crate that touches the outside: the process
+module, the one atomic file writer, the cancel token), `engine` (the session, the typed registry,
+the one dispatch, the app's own lock), `automation` (JSON lines with the contract's caps, the loopback control socket with token auth, an
 MCP server generated from the registry), `testkit` (temp dirs, hostile request lines, a port no app answers on; the
 conformance run is this repo's testkit) and `apps/<cli>` (`run`, `commands`, `enabled`,
 `serve [--socket]`, `mcp`), with the lint headers and each crate's layer.
 `cargo xtask swarm-core init --app` writes it (and the starting points) where files are missing,
 never editing the app's root manifest: it reads it, writes nothing when the workspace dependencies
 or lints the crates inherit are missing, and fails after writing until the manifest's `members`
-cover the crates. **`init --app --ui`** adds the UI shell, `crates/ui` (an egui shell that lists
+cover the crates. `skeleton::SCANS` points the architecture's scans at its files, and
+`examples/consumer_xtask.rs` has the `layers` command. **`init --app --ui`** adds the UI shell, `crates/ui` (an egui shell that lists
 the commands, runs one on a worker thread and draws its typed result; the toolkit is the app's
-choice), and `apps/<app>`, the window that hosts it. `skeleton::is_app(root)` and
-`skeleton::scans_at(root)` read which of these the workspace has, so the example xtask runs the
+choice), and `apps/<app>`, the window that hosts it and can serve the control socket on the same
+session. `skeleton::is_app(root)` and `skeleton::scans_at(root)` read which of these the workspace
+has (an app without `crates/backends`, written by an earlier skeleton, keeps
+`skeleton::EARLIER_SCANS`), so the example xtask runs the
 skeleton's scans and the `conformance` step only in an app and serves a repo with no app unchanged.
 
 The tests that build it (`tests/app_skeleton.rs`: the rendered skeleton's own tests and checks,
