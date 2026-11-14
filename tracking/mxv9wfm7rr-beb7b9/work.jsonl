@@ -30,3 +30,4 @@
 {"event":"sub.stop","note":"rc=0","sub":"ready-b67cd33","t":"2026-11-14T13:23:19Z"}
 {"event":"submit","issue":110,"mr":111,"t":"2026-11-14T13:23:28Z"}
 {"event":"claim","issue":112,"t":"2026-11-14T13:43:18Z"}
+{"event":"work","issue":112,"mr":113,"t":"2026-11-14T13:43:31Z"}
