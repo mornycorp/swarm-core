@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use {{crate_prefix_ident}}engine::commands::{UiInspectCommand, UiInspectParams, UiSetCommand, UiSetParams};
-use {{crate_prefix_ident}}engine::{CallOpts, Caller, Command, CommandError, Session, UiState};
+use {{crate_prefix_ident}}engine::{CallOpts, Caller, Command, CommandError, DockNode, Session, UiState};
 
+use crate::dock::Dock;
 use crate::draw;
 use crate::jobs::{Finished, Jobs, Started, Wake};
 use crate::views::{Shown, View};
@@ -48,7 +49,7 @@ pub struct MenuNode {
 
 /// The menu bar of `rows`: a menu per first part of their menu paths, in the order the commands
 /// first name it, a submenu per middle part, and an item per command.
-fn menu_bar(rows: &[Row]) -> Vec<MenuNode> {
+pub(crate) fn menu_bar(rows: &[Row]) -> Vec<MenuNode> {
     let mut bar: Vec<MenuNode> = Vec::new();
     'rows: for (at, row) in rows.iter().enumerate() {
         let Some(path) = row.menu else { continue };
@@ -90,7 +91,7 @@ pub enum Call {
     Failed { id: &'static str, error: CommandError },
 }
 
-/// The UI shell: a menu bar, a command list, the UI's state, a consent box and the call's state.
+/// The UI shell: a menu bar (the window's, or the system's), a command list, the UI's state, a consent box and the call's state.
 #[derive(Debug)]
 pub struct Shell {
     session: Arc<Session>,
@@ -105,6 +106,10 @@ pub struct Shell {
     jobs: Jobs,
     running: Option<Started>,
     call: Call,
+    /// The dock's tiles, as last drawn ([`crate::dock`]): out of the shell while a frame draws them.
+    dock: Option<Dock>,
+    /// The menus are the system menu bar's ([`crate::native_menu`]), so the window draws none.
+    native_menu: bool,
 }
 
 impl Shell {
@@ -129,7 +134,7 @@ impl Shell {
         let menus = menu_bar(&rows);
         let jobs = Jobs::new(Arc::clone(&session), wake);
         let state = UiState::default();
-        let mut shell = Shell { session, rows, menus, views, state, consent: None, jobs, running: None, call: Call::Idle };
+        let mut shell = Shell { session, rows, menus, views, state, consent: None, jobs, running: None, call: Call::Idle, dock: None, native_menu: false };
         shell.refresh();
         shell
     }
@@ -142,6 +147,17 @@ impl Shell {
     /// The menu bar, made from the commands' menu paths.
     pub fn menus(&self) -> &[MenuNode] {
         &self.menus
+    }
+
+    /// Whether the menus are the system menu bar's, so the window draws no bar of its own.
+    pub fn native_menu(&self) -> bool {
+        self.native_menu
+    }
+
+    /// Says the menus are the system menu bar's (`true`: the app made one from [`Shell::menus`] with
+    /// [`crate::native_menu::bar`]) or the window's own (`false`, the default).
+    pub fn set_native_menu(&mut self, native: bool) {
+        self.native_menu = native;
     }
 
     /// The UI's state, as of the last [`Shell::refresh`] or change.
@@ -202,13 +218,38 @@ impl Shell {
     pub fn select(&mut self, index: usize) {
         if let Some(id) = self.rows.get(index).map(|row| row.id) {
             self.consent = None;
-            self.set_state(UiSetParams { selected: Some(id.to_owned()), show_list: None });
+            self.set_state(UiSetParams { selected: Some(id.to_owned()), ..UiSetParams::default() });
         }
     }
 
     /// Shows or hides the command list: `ui.set`.
     pub fn set_show_list(&mut self, show: bool) {
-        self.set_state(UiSetParams { selected: None, show_list: Some(show) });
+        self.set_state(UiSetParams { show_list: Some(show), ..UiSetParams::default() });
+    }
+
+    /// Lays out the dock as `layout` (what a person dragged), through `ui.set` as an agent would.
+    pub fn set_dock(&mut self, layout: DockNode) {
+        self.set_state(UiSetParams { dock: Some(layout), ..UiSetParams::default() });
+    }
+
+    /// The dock's tiles, taken out while a frame draws them.
+    pub(crate) fn take_dock(&mut self) -> Option<Dock> {
+        self.dock.take()
+    }
+
+    /// The dock's tiles, put back after a frame.
+    pub(crate) fn put_dock(&mut self, dock: Dock) {
+        self.dock = Some(dock);
+    }
+
+    /// The dock's tiles as last drawn: none before the first frame.
+    pub fn dock(&self) -> Option<&Dock> {
+        self.dock.as_ref()
+    }
+
+    /// The same, to change as a person's drag would (a test's).
+    pub fn dock_mut(&mut self) -> Option<&mut Dock> {
+        self.dock.as_mut()
     }
 
     pub fn call(&self) -> &Call {
@@ -274,8 +315,16 @@ impl Shell {
     }
 
     /// Draws the shell into `ui`: it takes in what workers have finished, which commands can run
-    /// now and the UI's state, then draws them.
+    /// now and the UI's state, then draws them. On a frame whose context hasn't bound the theme's
+    /// faces yet (a host that drew before [`crate::theme::apply`]), it installs the theme and asks
+    /// for the next frame instead: an icon drawn before its face is bound would panic in egui
+    /// (the App UI Substrate › Type, Wait for the fonts to bind).
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if !crate::fonts::bound(ui.ctx()) {
+            crate::theme::apply(ui.ctx());
+            ui.ctx().request_repaint();
+            return;
+        }
         self.poll();
         self.refresh();
         draw::shell(self, ui);

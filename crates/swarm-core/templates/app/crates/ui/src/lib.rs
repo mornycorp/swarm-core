@@ -26,6 +26,15 @@
 //!   colour (a row, a bar, a badge) is a categorical range's pick (`theme.range16.pick(id)`), the
 //!   same on every run; the swatch view (`ui.theme`, View › Theme) shows every token and range. The
 //!   colours are the palette the swarm's tools share, and `theme::apply` styles egui in them.
+//! - **Its faces are embedded** ([`fonts`]): Roboto for text, Cascadia Mono for code and Font
+//!   Awesome's solid face for icons, from `assets/fonts/` with their licences, and the text styles
+//!   on a 12 pt body (the App UI Substrate › Type). `theme::apply` installs them, and the density
+//!   ([`density`]: an 18 pt row, the spacing, the menus' padding).
+//! - **Icons** ([`icons`]): Font Awesome glyphs by name, a command's from [`icons::BY_COMMAND`] by
+//!   its id, in a fixed column on the menus; a widget is still named by its text alone.
+//! - **On macOS the menus can be the system's** ([`native_menu`]): the same menu paths and
+//!   shortcuts as a bar of plain data, which the windowed app hands to the platform; it then tells
+//!   the shell ([`Shell::set_native_menu`]) and the window draws no bar of its own.
 //! - **It never writes a file and never starts a program.** A button that does something calls a
 //!   command whose effects say so, and the user's consent (a checkbox) is what lets it run.
 //!   `scan` holds the crate to this and to the theme and the catalog (`skeleton::UI_SCANS`).
@@ -44,8 +53,14 @@
 #![cfg_attr(test, allow(clippy::cognitive_complexity, clippy::too_many_lines))]
 
 pub mod catalog;
+pub mod density;
+pub mod dock;
 mod draw;
+pub mod fonts;
+pub mod icon;
+pub mod icons;
 pub mod jobs;
+pub mod native_menu;
 mod shell;
 pub mod theme;
 pub mod views;

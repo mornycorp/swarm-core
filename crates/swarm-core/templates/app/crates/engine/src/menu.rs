@@ -78,6 +78,34 @@ fn is_function_key(key: &str) -> bool {
     key.strip_prefix('F').is_some_and(|n| !n.starts_with('0') && n.parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)))
 }
 
+/// A shortcut as macOS's menus take it (the UI's system menu bar, the App UI Substrate › Menus):
+/// `Mod` is Command (`Cmd`), `Ctrl` is Control, and the key is named by its key code, as the W3C's
+/// `KeyboardEvent.code` and `muda`'s accelerator text name it (`Up` is `ArrowUp`, `Plus` the `=`
+/// key's `Equal`, where macOS's Zoom In sits). Plain text, so no layer below the UI names a toolkit
+/// type. `None` for text that isn't a shortcut ([`shortcut_problem`]).
+pub fn macos_accelerator(shortcut: &str) -> Option<String> {
+    if shortcut_problem(shortcut).is_some() {
+        return None;
+    }
+    let mut parts: Vec<&str> = shortcut.split('+').collect();
+    let key = key_code(parts.pop()?);
+    let modifiers = parts.into_iter().map(|modifier| if modifier == "Mod" { "Cmd" } else { modifier });
+    Some(modifiers.chain([key]).collect::<Vec<_>>().join("+"))
+}
+
+/// A shortcut's key ([`shortcut_problem`] has checked it) as its key code's name: a letter, a digit,
+/// `F1`-`F24` and the other named keys are their own.
+fn key_code(key: &str) -> &str {
+    match key {
+        "Up" => "ArrowUp",
+        "Down" => "ArrowDown",
+        "Left" => "ArrowLeft",
+        "Right" => "ArrowRight",
+        "Plus" => "Equal",
+        _ => key,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

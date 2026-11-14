@@ -57,9 +57,11 @@ fn every_file_under_app_templates_is_listed() {
     let mut found = Vec::new();
     walk(&root, &root, &mut found);
     found.sort();
-    let mut listed: Vec<&str> = FILES.iter().chain(UI_FILES).map(|f| f.path).collect();
+    let mut listed: Vec<&str> = FILES.iter().chain(UI_FILES).map(|f| f.path).chain(UI_BINARY_FILES.iter().map(|&(path, _)| path)).collect();
     listed.sort_unstable();
     assert_eq!(found, listed, "skeleton::FILES and UI_FILES list every file under templates/app/");
+    let binary: Vec<&str> = UI_BINARY_FILES.iter().map(|&(path, _)| path).collect();
+    assert!(binary.is_sorted(), "UI_BINARY_FILES is sorted");
     for list in [FILES, UI_FILES] {
         let paths: Vec<&str> = list.iter().map(|f| f.path).collect();
         let mut sorted = paths.clone();
@@ -193,13 +195,16 @@ fn init_with_ui_writes_the_ui_crate_and_the_window_and_headless_writes_neither()
     assert!(!headless.join("crates/ui").exists() && !headless.join("apps/app-swarm").exists());
     let root = root_with("core-skeleton-init-ui", MANIFEST);
     let written = init(&APP_SWARM, &FirstApp, &root, TODAY, true).unwrap();
-    assert_eq!(written.len(), FILES.len() + UI_FILES.len());
+    assert_eq!(written.len(), FILES.len() + UI_FILES.len() + UI_BINARY_FILES.len());
     for path in ["crates/ui/src/shell.rs", "crates/ui/Cargo.toml", "apps/app-swarm/src/main.rs", "apps/swarm-cli/src/main.rs"] {
         assert!(root.join(path).is_file(), "{path}");
     }
+    for &(path, bytes) in UI_BINARY_FILES {
+        assert_eq!(std::fs::read(root.join(path)).unwrap(), bytes, "{path} is written as it is");
+    }
     assert!(init(&APP_SWARM, &FirstApp, &root, TODAY, true).unwrap().is_empty(), "a second run writes nothing");
     let later = init(&APP_SWARM, &FirstApp, &headless, TODAY, true).unwrap();
-    assert_eq!(later.len(), UI_FILES.len(), "`--ui` on a headless app writes only the UI's files");
+    assert_eq!(later.len(), UI_FILES.len() + UI_BINARY_FILES.len(), "`--ui` on a headless app writes only the UI's files");
 }
 
 /// A root manifest without what the crates inherit writes nothing and says which lines to add.

@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn app_info_over_the_frame() {
         let got = replies(b"{\"id\": 1, \"method\": \"app.info\", \"params\": {}}\n{\"id\": \"b\", \"method\": \"app.info\"}\n");
-        let info = json!({"name": "demo", "version": "0.3.0", "schema_version": 1});
+        let info = json!({"name": "demo", "version": "0.3.0", "schema_version": 2});
         assert_eq!(got, [json!({"id": 1, "ok": true, "result": info}), json!({"id": "b", "ok": true, "result": info})]);
     }
 

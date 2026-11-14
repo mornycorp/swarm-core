@@ -16,7 +16,7 @@
 
 use std::fmt::Display;
 
-use egui::{Color32, Stroke, Visuals};
+use egui::{Color32, CornerRadius, Stroke, Visuals};
 use {{crate_prefix_ident}}engine::theme::{self as palette, Look, Rgb, Shades};
 
 /// The colours the shell draws with, by what they mean, and the ranges for identifiers, in one look.
@@ -72,6 +72,8 @@ pub struct Theme {
     pub range16: Colours,
     /// Up to 32 identifiers side by side (Swarm Core's own range).
     pub range32: Colours,
+    /// The corner radius of windows, menus and widgets, in points ([`palette::CORNER_RADIUS`]).
+    pub radius: u8,
 }
 
 impl Theme {
@@ -110,6 +112,7 @@ impl Theme {
             markers: range(palette::MARKERS),
             range16: range(palette::RANGE_16),
             range32: range(palette::RANGE_32),
+            radius: palette::CORNER_RADIUS,
         }
     }
 
@@ -149,6 +152,12 @@ impl Theme {
         v.error_fg_color = self.error;
         v.override_text_color = None;
         v.weak_text_color = Some(self.muted);
+        let radius = CornerRadius::same(self.radius);
+        v.window_corner_radius = radius;
+        v.menu_corner_radius = radius;
+        for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+            w.corner_radius = radius;
+        }
         for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.open] {
             w.fg_stroke.color = self.text;
         }
@@ -164,13 +173,20 @@ impl Theme {
     }
 }
 
-/// Styles `ctx` in the theme: each of egui's looks gets the theme's visuals for it, and egui keeps
-/// choosing between them (the system's, or what the app asks for). Called once, when the window
-/// starts.
+/// Styles `ctx` in the theme: it installs the faces ([`crate::fonts`]), and each of egui's looks gets
+/// the theme's visuals for it, the text styles and the density ([`crate::density`]), and egui keeps
+/// choosing between them (the
+/// system's, or what the app asks for). Called once, when the window starts; the named families bind
+/// on the next pass ([`crate::fonts::bound`]).
 pub fn apply(ctx: &egui::Context) {
+    ctx.set_fonts(crate::fonts::definitions());
     for (appearance, look) in [(egui::Theme::Dark, Look::Dark), (egui::Theme::Light, Look::Light)] {
         let visuals = Theme::in_look(look).visuals();
-        ctx.style_mut_of(appearance, |style| style.visuals = visuals);
+        ctx.style_mut_of(appearance, |style| {
+            style.visuals = visuals;
+            style.text_styles = crate::fonts::text_styles();
+            style.spacing = crate::density::spacing();
+        });
     }
 }
 
@@ -245,7 +261,8 @@ mod tests {
     }
 
     /// **egui draws in the theme**: once applied, each of egui's looks has the tokens for its
-    /// surfaces, text, selection, widgets and states, so what the window shows is the theme's.
+    /// surfaces, text, selection, widgets and states, and the theme's corner radius on windows, menus
+    /// and every widget state, so what the window shows is the theme's.
     #[test]
     fn egui_draws_with_the_tokens_once_applied() {
         let ctx = egui::Context::default();
@@ -274,6 +291,10 @@ mod tests {
             for (name, egui, ours) in drawn {
                 assert_eq!(egui, ours, "{look:?} {name}");
             }
+            let radius = CornerRadius::same(palette::CORNER_RADIUS);
+            let widgets = [&v.widgets.noninteractive, &v.widgets.inactive, &v.widgets.hovered, &v.widgets.active, &v.widgets.open];
+            assert_eq!((v.window_corner_radius, v.menu_corner_radius), (radius, radius), "{look:?} windows and menus");
+            assert!(widgets.iter().all(|w| w.corner_radius == radius), "{look:?} every widget state");
         }
     }
 

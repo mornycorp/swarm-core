@@ -62,11 +62,12 @@ impl Session {
         self.ui.watch(on_change)
     }
 
-    /// Puts back a state the app saved: a selection of a command this version doesn't have is
-    /// dropped, and the rest kept. The state now.
+    /// Puts back a state the app saved: a selection of a command this version doesn't have, or a dock
+    /// layout it can't build, is dropped, and the rest kept. The state now.
     pub fn restore_ui(&self, saved: UiState) -> Result<UiState, CommandError> {
         let selected = saved.selected.filter(|id| self.registry.lookup(id).is_some());
-        self.ui.update(|state| *state = UiState { selected, ..saved })
+        let dock = saved.dock.filter(|dock| dock.check().is_ok());
+        self.ui.update(|state| *state = UiState { selected, dock, ..saved })
     }
 
     /// Whether each command can run now, in id order: one call, for a menu or a toolbar

@@ -17,12 +17,19 @@
 //!
 //! The UI's state (which command's view is open, whether the list is shown) is the session's:
 //! `ui.inspect` and `ui.set` read and set it over the socket as the window's clicks do, and with
-//! `--ui-state` it outlives the window ([`ui_state`]).
+//! `--ui-state` it outlives the window ([`ui_state`]), and so do the window's size and place, in a
+//! file beside it ([`place`]).
+//!
+//! On macOS the menus are the system menu bar's (`macos_menu`), made from the same menu paths, and
+//! the window draws none; elsewhere the window draws its own bar.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![warn(clippy::cognitive_complexity, clippy::too_many_lines)]
 #![cfg_attr(test, allow(clippy::cognitive_complexity, clippy::too_many_lines))]
 
+#[cfg(target_os = "macos")]
+mod macos_menu;
+mod place;
 mod ui_state;
 mod window;
 

@@ -484,7 +484,7 @@ mod tests {
         let result = &got[0]["result"];
         assert_eq!(result["isError"], false);
         let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(text, json!({"name": "demo", "version": "0.3.0", "schema_version": 1}));
+        assert_eq!(text, json!({"name": "demo", "version": "0.3.0", "schema_version": 2}));
     }
 
     #[test]

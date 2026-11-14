@@ -436,6 +436,7 @@ fn a_colour_is_written_and_read_as_hex() {
 #[test]
 fn the_data_is_the_palette() {
     let data = data();
+    assert_eq!(data.corner_radius, CORNER_RADIUS);
     let tokens: Vec<(&str, String, String)> = data.tokens.iter().map(|t| (t.name.as_str(), t.dark.clone(), t.light.clone())).collect();
     let want: Vec<(&str, String, String)> = TOKENS.iter().map(|t| (t.name, t.dark.to_hex(), t.light.to_hex())).collect();
     assert_eq!(tokens, want);

@@ -174,6 +174,25 @@ fn the_menu_bar_is_made_from_the_registrys_menu_paths() {
     assert_eq!(in_a_menu, 3, "only the commands with a menu path are in the menus: {:?}", shell.menus());
 }
 
+/// With the menus in the system menu bar (macOS), the window draws no bar of its own, and the rest
+/// as it was; the menus to draw are the same either way.
+#[test]
+fn a_native_menu_leaves_the_window_without_a_bar() {
+    let session = session();
+    let (mut shell, _) = shell_of(&session, &[]);
+    let menus = shell.menus().to_vec();
+    let own = drawn(&mut shell);
+    for menu in ["Help", "Test", "View"] {
+        assert!(own.iter().any(|t| t == menu), "the window's bar has {menu}: {own:?}");
+    }
+    shell.set_native_menu(true);
+    assert!(shell.native_menu());
+    let native = drawn(&mut shell);
+    let rest: Vec<&String> = own.iter().filter(|t| !["Help", "Test", "View"].contains(&t.as_str())).collect();
+    assert_eq!(native.iter().collect::<Vec<_>>(), rest, "only the bar is gone");
+    assert_eq!(shell.menus(), menus, "the menus are the system bar's to draw now");
+}
+
 /// A command that can't run now is greyed out with the reason the dispatch gives: its menu item, run,
 /// fails `unavailable` with that very reason. Unlocked, the next refresh enables it, and it runs.
 #[test]
@@ -278,6 +297,26 @@ fn drawn_in(shell: &mut Shell, look: egui::Theme) -> Drawn {
         frame.textures_delta.clear();
     }
     out
+}
+
+/// A host that draws before it applies the theme gets a blank frame, not a panic: the shell installs
+/// the theme's faces, and draws once they are bound, icons and all.
+#[test]
+fn a_frame_before_the_theme_is_applied_is_blank_not_a_panic() {
+    let session = session();
+    let (mut shell, _) = shell_of(&session, &[]);
+    let ctx = egui::Context::default();
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| shell.ui(ui));
+        let mut drawn = Drawn::default();
+        frame.shapes.iter().for_each(|clipped| drawn.walk(&clipped.shape));
+        frame.textures_delta.clear();
+        texts.push(drawn.texts);
+    }
+    assert!(texts[0].is_empty(), "the first frame draws nothing: {:?}", texts[0]);
+    assert!(crate::fonts::bound(&ctx), "the faces are bound by then");
+    assert!(texts[2].iter().any(|t| t == catalog::COMMANDS), "then the shell draws: {:?}", texts[2]);
 }
 
 /// **What is drawn is what the command returns**: the view of `app.info`, run from the shell, draws
@@ -412,6 +451,33 @@ fn the_ui_state_is_the_sessions_and_ui_set_drives_what_is_drawn() {
     assert_eq!((inspected["selected"].clone(), inspected["show_list"].clone()), (json!("test.write"), json!(true)), "the clicks were `ui.set`s");
 }
 
+/// The dock is laid out by the UI state: a layout set over the socket is what the next frame builds,
+/// and a person's resize goes back to the state through `ui.set`, as the agent's change came.
+#[test]
+fn the_dock_is_laid_out_by_the_ui_state_and_a_resize_goes_back_to_it() {
+    use egui_tiles::{Container, Tile};
+    use {{crate_prefix_ident}}engine::DockNode;
+    let session = session();
+    let (mut shell, _) = shell_of(&session, &[]);
+    drawn(&mut shell);
+    assert_eq!(shell.dock().and_then(crate::dock::Dock::layout), Some(DockNode::default_layout()));
+    let stacked = json!({"kind": "split", "across": false, "parts": [
+        {"share": 400, "node": {"kind": "tabs", "panes": ["view"], "active": 0}},
+        {"share": 600, "node": {"kind": "tabs", "panes": ["commands"], "active": 0}}]});
+    let agent = CallOpts::new(Caller::Socket);
+    session.call("ui.set", json!({"dock": stacked.clone()}), &agent).unwrap();
+    drawn(&mut shell);
+    assert_eq!(shell.dock().and_then(crate::dock::Dock::layout).map(|l| serde_json::to_value(l).unwrap()), Some(stacked));
+    let tree = shell.dock_mut().unwrap().tree_mut();
+    let root = tree.root().unwrap();
+    let Some(Tile::Container(Container::Linear(split))) = tree.tiles.get_mut(root) else { panic!("the root is a split") };
+    let view = split.children[0];
+    split.shares.set_share(view, 900.0);
+    drawn(&mut shell);
+    let inspected = session.call("ui.inspect", json!({}), &agent).unwrap();
+    assert_eq!(inspected["dock"]["parts"][0]["share"], json!(600), "900 of 1500 is 600 per mille: {inspected}");
+}
+
 /// A consent is for the command it was given for: a selection changed over the socket leaves it unused.
 #[test]
 fn a_selection_changed_elsewhere_withdraws_the_consent() {
@@ -535,6 +601,7 @@ fn a_frame_draws_headlessly_in_every_state() {
     let session = session();
     let (mut shell, _) = shell_of(&session, &[View { id: Write::ID, run: show_write }]);
     let ctx = egui::Context::default();
+    crate::theme::apply(&ctx);
     let frame = |shell: &mut Shell| {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| shell.ui(ui));
         assert!(!output.shapes.is_empty(), "something was drawn");

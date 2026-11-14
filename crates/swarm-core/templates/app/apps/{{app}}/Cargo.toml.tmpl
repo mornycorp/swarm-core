@@ -20,6 +20,20 @@ path = "src/main.rs"
 # The window host: the toolkit's own crate, linked only here and in the UI layer. The renderer
 # (glow) and the Linux windowing backends are chosen here; change them to the app's needs.
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+# The event loop the window runs on (`place::Launch`): eframe's own winit, its features set by
+# eframe, so the monitors are read before the window opens and its saved place is checked on them.
+winit = { version = "0.30", default-features = false }
+# The window's size and place, as JSON beside the UI state (`place`).
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# macOS: the menus in the system menu bar (the App UI Substrate › Menus): muda (tauri-apps, MIT OR
+# Apache-2.0) makes AppKit's menus, and objc2's AppKit turns window tabbing off, both already locked
+# through winit and muda. No GTK on Linux: these are macOS's only.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+objc2 = "0.6.1"
+objc2-app-kit = { version = "0.3.0", default-features = false, features = ["std", "NSResponder", "NSWindow"] }
 
 [dev-dependencies]
 {{crate_prefix}}testkit = { path = "../../crates/testkit" }
