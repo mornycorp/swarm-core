@@ -16,3 +16,4 @@
 {"event":"sub.stop","note":"rc=0; kind=full; main=2e5f2814bbc5b5270ef7b7313c3d13d858b2e20e; merged #109","sub":"gate-109","t":"2026-11-14T11:01:27Z"}
 {"event":"sub.start","name":"gate","note":"Conformance checks #110; capacity=3 free=9.8; kind=full (batch proof; the project plans no gate kind: unsure)","sub":"gate-111","t":"2026-11-14T13:24:20Z"}
 {"event":"merge","issue":110,"mr":111,"sub":"gate-111","t":"2026-11-14T13:25:45Z"}
+{"event":"sub.stop","note":"rc=0; kind=full; main=e9e5d6bd1f2d3a107dff8bb67b9ba151ed044f38; merged #111","sub":"gate-111","t":"2026-11-14T13:25:50Z"}
