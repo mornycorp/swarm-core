@@ -93,11 +93,12 @@ pub struct Rerun {
 }
 
 impl Rerun {
-    /// `ci`'s arguments: the gate's scope, each test alone, the doctests for a full gate (nextest
-    /// runs none, and the workspace's test step runs them after it), then only the skipped steps.
+    /// `ci`'s arguments: the gate's scope, each test alone, the doctests for a full or a changed
+    /// gate (nextest runs none, and their test step runs them after it, as `ready`'s rerun does),
+    /// then only the skipped steps.
     pub fn ci_args(&self) -> Vec<String> {
         let scope: Vec<String> = self.kind.ci_args().iter().map(|s| (*s).to_owned()).collect();
-        self.ci_args_in(&scope, self.kind == Kind::Full)
+        self.ci_args_in(&scope, matches!(self.kind, Kind::Changed | Kind::Full))
     }
 
     /// [`Self::ci_args`] over `scope` instead of its kind's, with the doctests when `doctests`:
@@ -387,6 +388,12 @@ mod tests {
         let r = plan(GOLDEN, "g", &failed_rc("git-temp").replace("kind=full", "kind=tooling"), &log, HEAD, None).unwrap();
         assert_eq!(r.ci_args().get(..3).unwrap(), ["--changed", "--base", "origin/main"]);
         assert!(!r.ci_args().contains(&"--doctests".to_owned()), "the tooling gate runs no doctests");
+        // A changed gate (a `--no-ci` stack's) keeps its scope and runs the doctests, as
+        // `ready`'s own rerun of the same `ci --changed` does.
+        let r = plan(GOLDEN, "g", &failed_rc("test").replace("kind=full", "kind=changed"), &log, HEAD, None).unwrap();
+        assert_eq!(r.kind, Kind::Changed);
+        assert_eq!(r.ci_args().get(..3).unwrap(), ["--changed", "--base", "origin/main"]);
+        assert!(r.ci_args().contains(&"--doctests".to_owned()), "a changed gate's test step runs the doctests");
     }
 
     #[test]
