@@ -23,7 +23,10 @@
 //!   surface panics nowhere, and so does a pass of **valid** params generated from each command's
 //!   params schema (each property in turn with its edge values: empty and huge strings, path
 //!   tricks, unicode, the ends of an integer's range, large and deep arrays and maps), which gets
-//!   past the params check and reaches `run`.
+//!   past the params check and reaches `run`. A panic the app's dispatch caught counts as one: an
+//!   `internal` failure whose remediation is [`PANICKED`], which the skeleton's dispatch gives a
+//!   panic in a command's `run` (docs/app-architecture.md › One dispatch), fails this rule as an
+//!   uncaught panic does.
 //! - **`error-shape`**: every failure has a code and a remediation.
 //! - **`same-result`**: for the same call, every surface gives the same result, or the same failure
 //!   code and key.
@@ -38,17 +41,18 @@
 //!   ([`App::enabled`]) gives one state per command and the same states as the others, each
 //!   disabled one with the code `unavailable` and a remediation; and a call of a disabled command
 //!   with valid params and consent fails `unavailable` with that remediation on every surface.
-//!
-//! - **`cancelled`**: a call that is cancelled before it runs fails `cancelled`, on every surface
-//!   the app can cancel a call through ([`App::cancelled`]: the session's call, by its token; none
-//!   by default, and the rule then checks nothing). A cancel is a token the surfaces set from
-//!   their own events (a dropped connection, the UI's button), which a request can't carry, so
-//!   the app makes the cancelled call itself.
+//! - **`cancelled`**: a call of each enabled command, with params that get past its params check
+//!   and consent, but **cancelled before it runs**, fails `cancelled` and never runs, on every
+//!   surface the app can make such a call through ([`App::cancelled`]: at least the session's own
+//!   call, by its token; none by default, and the rule then checks nothing). A cancel is a token the
+//!   surfaces set from their own events (a dropped connection, a server's stop, the UI's button),
+//!   which a request can't carry, so the app makes the cancelled call itself.
 //!
 //! Not checked: the reverse of `enabled` (an enabled command's `run` may still answer `unavailable`
-//! for its own reasons), and a cancel that arrives while a command runs: whether a slow `run`
-//! polls its token is that command's own test. Either code may answer a call of the run: it is
-//! then held to `error-shape` and `same-result` like any other. Which state a fresh session is in is the app's: a command disabled
+//! for its own reasons), and a cancel that arrives while a command runs: whether a slow `run` polls
+//! its token is that command's own test, and a transport's cancel (a dropped connection) is the
+//! transport's. Either code may answer a call of the run: it is then held to `error-shape` and
+//! `same-result` like any other. Which state a fresh session is in is the app's: a command disabled
 //! there is checked to be refused; one enabled there has its refusal tested by the command's own
 //! tests.
 
@@ -63,6 +67,13 @@ mod tests;
 mod values;
 
 pub use cases::adversarial_params;
+
+/// The remediation of the `internal` failure an app's dispatch gives for a panic it caught in a
+/// command's `run` (docs/app-architecture.md › One dispatch): `no-panic` fails on it as on a panic
+/// that reached the run. The skeleton's dispatch sets it in one place, and a skeleton test holds
+/// the two texts equal. A plain `internal` (a lock's deadline, a bug the code said) has another.
+pub const PANICKED: &str =
+    "the command panicked, a bug in the app and not in the call: report it with what the app's stderr says; the app goes on, and other calls still work";
 
 /// The caps of docs/app-architecture.md › The JSON-lines frame: a request line of 1 MiB at most.
 pub const REQUEST_CAP: usize = 1024 * 1024;
@@ -237,10 +248,11 @@ pub trait App {
     }
 
     /// The same call as [`App::call`], **cancelled before it runs**: its cancel token already set
-    /// (the session's `CallOpts`, with `cancel.cancel()` called). `None`: this surface has no way
-    /// to make a call cancelled from the start (a request can't carry a cancel; a dropped
-    /// connection is the transport's own test), and the `cancelled` rule leaves it out. The default
-    /// is `None` on every surface, for an app made before the rule: it then checks nothing.
+    /// (the session's `CallOpts`, with `cancel.cancel()` called before the call), on a fresh
+    /// session as [`App::call`]'s are. `None`: `surface` has no way to make a call cancelled from
+    /// the start (a request can't carry a cancel; a dropped connection is the transport's own
+    /// test), and the `cancelled` rule leaves it out. The default is `None` on every surface, for an
+    /// app made before the rule: it then checks nothing.
     fn cancelled(&self, _call: Call<'_>) -> Option<Outcome> {
         None
     }
@@ -354,7 +366,6 @@ pub fn run(app: &dyn App) -> Result<Report, Violations> {
     }
     check::over_cap(app, &commands, &mut found);
     let disabled = check::enabled(app, &commands, &mut found);
-    let calls = check::every_surface_agrees(app, &commands, &disabled, &mut found);
-    let calls = calls + check::cancelled(app, &commands, &disabled, &mut found);
+    let calls = check::every_surface_agrees(app, &commands, &disabled, &mut found) + check::cancelled(app, &commands, &disabled, &mut found);
     if found.is_empty() { Ok(Report { commands: commands.len(), calls }) } else { Err(found.into_violations()) }
 }

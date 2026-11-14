@@ -29,10 +29,19 @@ enum Fault {
     McpConsents,
     StatesDifferOnServe,
     LockedRunsOnCli,
-    RunsThoughCancelled,
     LockedOtherReasonOnSocket,
     NoStateOnCli,
     DisabledNotUnavailable,
+    /// `demo.echo` with an empty `text` panics, and the dispatch catches it: `internal`, [`PANICKED`].
+    CaughtPanicOnEmpty,
+    /// `demo.echo` with an empty `text` is a plain `internal`: an error the code said, no panic.
+    PlainInternalOnEmpty,
+    /// The socket runs a `demo.echo` call that was cancelled before it ran.
+    RunsThoughCancelledOnSocket,
+    /// The session's `demo.ping`, cancelled before it ran, fails `internal`, not `cancelled`.
+    CancelledOtherCodeInProcess,
+    /// The session's `demo.write`, cancelled before it ran, panics.
+    CancelledPanicsInProcess,
 }
 
 /// What `demo.locked`'s state and its call say to do.
@@ -48,14 +57,14 @@ struct Fake {
     names_type_key: bool,
     /// Whether the app opts out of the run requiring that key ([`App::names_key_for_wrong_type`]).
     opts_out_of_type_key: bool,
-    /// Whether the app can make a call that is cancelled before it runs ([`App::cancelled`]).
-    cancels: bool,
     surfaces: Vec<Surface>,
+    /// The surfaces the app can make a call cancelled before it runs through ([`App::cancelled`]).
+    cancels: Vec<Surface>,
 }
 
 impl Fake {
     fn good() -> Fake {
-        Fake { fault: None, names_type_key: true, opts_out_of_type_key: false, cancels: false, surfaces: Surface::ALL.to_vec() }
+        Fake { fault: None, names_type_key: true, opts_out_of_type_key: false, surfaces: Surface::ALL.to_vec(), cancels: Vec::new() }
     }
 
     fn with(fault: Fault) -> Fake {
@@ -92,6 +101,12 @@ impl Fake {
             let unnamed = self.is(Fault::WrongTypeUnnamed) || !self.names_type_key;
             return Fake::failure("bad_params", if unnamed { None } else { Some("text") });
         };
+        if text.is_empty() && self.is(Fault::CaughtPanicOnEmpty) {
+            return Err(Failure::new("internal", PANICKED, None));
+        }
+        if text.is_empty() && self.is(Fault::PlainInternalOnEmpty) {
+            return Fake::failure("internal", None);
+        }
         let text = if self.is(Fault::CliDiffers) && surface == Surface::Cli { text.to_uppercase() } else { text.to_owned() };
         Ok(json!({ "text": text }))
     }
@@ -216,29 +231,47 @@ impl App for Fake {
         (surface != Surface::Mcp && self.surfaces.contains(&surface)).then(|| Ok(self.states(surface)))
     }
 
-    /// Only the session's own call can be cancelled from the start.
+    /// The call, cancelled before it runs, on the surfaces in `cancels`: `cancelled`, unless a
+    /// fault runs it or answers otherwise.
     fn cancelled(&self, call: Call<'_>) -> Option<Outcome> {
-        if !self.cancels || call.surface != Surface::InProcess {
+        if !self.cancels.contains(&call.surface) {
             return None;
         }
-        Some(if self.is(Fault::RunsThoughCancelled) && call.id == "demo.echo" { self.call(call) } else { Fake::failure("cancelled", None) })
+        let (surface, id) = (call.surface, call.id);
+        Some(match id {
+            "demo.echo" if self.is(Fault::RunsThoughCancelledOnSocket) && surface == Surface::Socket => self.call(call),
+            "demo.ping" if self.is(Fault::CancelledOtherCodeInProcess) && surface == Surface::InProcess => Fake::failure("internal", None),
+            "demo.write" if self.is(Fault::CancelledPanicsInProcess) && surface == Surface::InProcess => panic!("the cancel token was unwrapped"),
+            _ => Fake::failure("cancelled", None),
+        })
     }
 }
 
-/// A cancelled call fails `cancelled` on the surfaces that can make one; an app that makes none
-/// (the default) has nothing checked, and one whose command runs all the same fails the rule.
+/// A call cancelled before it runs fails `cancelled` on the surfaces the app can make one
+/// through; an app that makes none (the default) has nothing checked; and a surface that runs it
+/// anyway, answers another code or panics fails, named with the command.
 #[test]
-fn a_cancelled_call_is_cancelled_where_the_app_can_cancel_one() {
-    let cancels = Fake { cancels: true, ..Fake::good() };
-    let with = run(&cancels).unwrap_or_else(|v| panic!("{v}"));
+fn a_call_cancelled_before_it_runs_fails_cancelled_where_the_app_can_cancel_one() {
     let without = run(&Fake::good()).unwrap_or_else(|v| panic!("{v}"));
-    // `demo.echo`, `demo.ping` and `demo.write` in process; `demo.locked` is disabled.
-    assert_eq!(with.calls, without.calls + 3);
-    let broken = run(&Fake { cancels: true, ..Fake::with(Fault::RunsThoughCancelled) }).unwrap_err();
-    let lines: Vec<String> = broken.0.iter().map(ToString::to_string).collect();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].starts_with("[cancelled] demo.echo on in-process: a call cancelled before it ran: it succeeded with "), "{lines:?}");
-    assert!(lines[0].ends_with("but should fail `cancelled`"), "{lines:?}");
+    let in_process = run(&Fake { cancels: vec![Surface::InProcess], ..Fake::good() }).unwrap_or_else(|v| panic!("{v}"));
+    // `demo.echo` (its example), `demo.ping` and `demo.write`; `demo.locked` is disabled.
+    assert_eq!(in_process.calls, without.calls + 3);
+    let two = Fake { cancels: vec![Surface::InProcess, Surface::Socket], ..Fake::good() };
+    assert_eq!(run(&two).unwrap_or_else(|v| panic!("{v}")).calls, without.calls + 6);
+
+    let lines = |fault: Fault| -> Vec<String> {
+        let fake = Fake { cancels: vec![Surface::InProcess, Surface::Socket], ..Fake::with(fault) };
+        run(&fake).unwrap_err().0.iter().map(ToString::to_string).collect()
+    };
+    let ran = lines(Fault::RunsThoughCancelledOnSocket);
+    assert_eq!(ran.len(), 1, "{ran:?}");
+    assert!(ran[0].starts_with("[cancelled] demo.echo on socket: a call cancelled before it ran: it succeeded with "), "{ran:?}");
+    assert!(ran[0].ends_with("but should fail `cancelled`"), "{ran:?}");
+    let other = lines(Fault::CancelledOtherCodeInProcess);
+    assert_eq!(other, ["[cancelled] demo.ping on in-process: a call cancelled before it ran: it failed `internal` but should fail `cancelled`"], "{other:?}");
+    let panicked = lines(Fault::CancelledPanicsInProcess);
+    assert_eq!(panicked.len(), 1, "{panicked:?}");
+    assert!(panicked[0].starts_with("[no-panic] demo.write on in-process: the call panicked: "), "{panicked:?}");
     assert_eq!(Rule::Cancelled.to_string(), "cancelled");
 }
 
@@ -318,6 +351,7 @@ fn each_broken_rule_fails_with_a_message_naming_the_rule_and_the_command() {
         (Fault::NoCapOnSocket, "over-cap", "demo.echo"),
         (Fault::PanicOnNullOnServe, "no-panic", "demo.echo"),
         (Fault::PanicInCli, "no-panic", "demo.echo"),
+        (Fault::CaughtPanicOnEmpty, "no-panic", "demo.echo on in-process: the call panicked"),
         (Fault::CliDiffers, "same-result", "demo.echo"),
         (Fault::CliErrorsDiffer, "same-result", "demo.echo"),
         (Fault::EmptyRemediation, "error-shape", "conformance.no_such_command"),
@@ -335,6 +369,21 @@ fn each_broken_rule_fails_with_a_message_naming_the_rule_and_the_command() {
         let text = found.to_string();
         assert!(text.contains(&format!("[{rule}] {command}")), "{fault:?} should break [{rule}] {command}:\n{text}");
     }
+}
+
+/// A panic the app's dispatch caught (`internal`, [`PANICKED`]) fails `no-panic` on every surface,
+/// naming the command, the surface and the params, as an uncaught one does; a plain `internal`
+/// does not.
+#[test]
+fn a_panic_the_dispatch_caught_fails_no_panic_and_a_plain_internal_does_not() {
+    let Err(found) = run(&Fake::with(Fault::CaughtPanicOnEmpty)) else { panic!("a caught panic passed") };
+    let text = found.to_string();
+    for surface in Surface::ALL {
+        let want = format!("[no-panic] demo.echo on {surface}: the call panicked: with {{\"text\":\"\"}}");
+        assert!(text.contains(&want), "no `{want}` in:\n{text}");
+    }
+    assert!(found.0.iter().all(|v| v.rule == Rule::NoPanic), "only no-panic: {text}");
+    assert!(run(&Fake::with(Fault::PlainInternalOnEmpty)).is_ok(), "{}", run(&Fake::with(Fault::PlainInternalOnEmpty)).unwrap_err());
 }
 
 /// A defect that every call meets is one line: a failure message is read, not scrolled.

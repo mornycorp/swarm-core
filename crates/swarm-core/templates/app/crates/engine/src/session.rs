@@ -144,11 +144,18 @@ fn object(params: Value) -> Result<Value, CommandError> {
 /// dependency, an arithmetic overflow or a slice index can still raise one. The panic's own text
 /// goes to stderr with the default hook, not into the error: it may hold a param's value. State
 /// the command changed before it panicked stays as it left it, which is why a command saves
-/// before it changes memory (› State on disk).
+/// before it changes memory (› State on disk). The remediation is [`PANICKED`].
 fn guarded<T>(id: &str, run: impl FnOnce() -> Result<T, CommandError>) -> Result<T, CommandError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
-        .unwrap_or_else(|_| Err(CommandError::internal(format!("{id} failed with a bug (a panic): it is on the app's stderr"))))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| {
+        Err(CommandError::new(crate::ErrorCode::Internal, format!("panicked: {id} failed with a bug (a panic): it is on the app's stderr"), PANICKED))
+    })
 }
+
+/// The remediation of a panic the dispatch caught: fixed, so that the conformance run knows a
+/// caught panic from a plain `internal` and fails `no-panic` on it (`conformance::PANICKED`, which a
+/// test holds equal).
+const PANICKED: &str =
+    "the command panicked, a bug in the app and not in the call: report it with what the app's stderr says; the app goes on, and other calls still work";
 
 #[cfg(test)]
 mod tests {
@@ -355,8 +362,9 @@ mod tests {
     }
 
     /// A panic in a command's `run` is the app's fault, said as `internal` on both forms of the
-    /// call; the session goes on serving the next call, and the panic's own text (which may hold a
-    /// param) is not in the error.
+    /// call, with the one remediation the conformance run knows a caught panic by; the session goes
+    /// on serving the next call, and the panic's own text (which may hold a param) is not in the
+    /// error.
     #[test]
     fn a_panic_in_a_command_is_an_internal_error_and_the_session_goes_on() {
         let mut registry = Registry::new();
@@ -365,7 +373,9 @@ mod tests {
         let s = Session::with_registry(AppInfo { name: "test".into(), version: "1.2.3".into() }, registry);
         let wire = call(&s, "test.panics", json!({"text": "secret-not-real"})).unwrap_err();
         assert_eq!(wire.code, ErrorCode::Internal);
-        assert!(wire.message.contains("test.panics") && !wire.message.contains("secret-not-real") && !wire.remediation.is_empty(), "{wire}");
+        assert!(wire.message.contains("test.panics") && !wire.message.contains("secret-not-real"), "{wire}");
+        assert!(wire.message.starts_with("panicked: ") && wire.remediation == PANICKED && wire.key.is_none(), "{wire:?}");
+        assert_eq!(PANICKED, swarm_core_testkit::conformance::PANICKED, "the conformance run knows a caught panic by it");
         let typed = s.call_typed::<Panics>(EchoParams { text: "x".into() }, &CallOpts::new(Caller::Test)).unwrap_err();
         assert_eq!(typed.code, ErrorCode::Internal);
         assert_eq!(call(&s, "test.echo", json!({"text": "after"})).unwrap()["text"], "after");
