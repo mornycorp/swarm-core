@@ -1,3 +1,4 @@
 {"effort":"high","event":"session.start","format":3,"machine":"mxv9wfm7rr","model":"claude-fable-5-2","name":"claude","role":"worker","t":"2026-11-16T09:43:55Z"}
 {"event":"claim","issue":118,"t":"2026-11-16T09:44:23Z"}
 {"event":"work","issue":118,"mr":119,"t":"2026-11-16T09:44:44Z"}
+{"event":"sub.start","name":"ready","note":"ci --changed before submitting; batch proof","sub":"ready-a291ef4","t":"2026-11-16T09:51:21Z"}
