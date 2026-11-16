@@ -5,7 +5,8 @@
 //!
 //! - **When** ([`due`]): nobody's full gate is open, `main` hasn't already failed one for the
 //!   change's cause since its last pass (its `main-red` issue covers it), and either `main` moved
-//!   since the last passed full gate, which is more than [`MIN_AGE`] old, or the drift interval
+//!   since the last passed full gate, which is more than the project's minimum age old
+//!   ([`Hooks::full_gate_min_age_secs`]: [`MIN_AGE`], an hour, by default), or the drift interval
 //!   passed since it ([`Drift`], a day by default), or the gate's inputs changed. A landed
 //!   `--full` gate that left `main` at its tree is a pass of that commit
 //!   (mornycorp/swarm-core#15, [`landed`]), so only merges no full gate verified move `main`
@@ -62,7 +63,8 @@ use crate::{Hooks, Project, capacity, event, lock, machine_lock};
 
 pub mod lock_ref;
 
-/// A passed full gate younger than this leaves `main` alone, however far it moved.
+/// A passed full gate younger than this leaves `main` alone, however far it moved: the minimum
+/// age ([`Hooks::full_gate_min_age_secs`]'s default, mornycorp/swarm-core#118).
 pub const MIN_AGE: i64 = 3600;
 /// A passed full gate older than this is due again, whether or not `main` moved: the drift
 /// interval ([`Hooks::full_gate_drift_secs`]'s default, mornycorp/swarm-core#15).
@@ -236,12 +238,12 @@ pub enum Due {
 }
 
 /// A full gate of `commit` that failed in a way that holds it at `now`: for the change's cause
-/// (its main-red issue covers it), or the machine's within the hour (no rerun storm on a loaded
-/// machine).
-fn failure_at<'a>(gates: &'a [FullGate], commit: &str, now: i64) -> Option<(&'a FullGate, &'a End)> {
+/// (its main-red issue covers it), or the machine's within `min_age` seconds (the project's
+/// minimum age, [`Drift::min_age`]: no rerun storm on a loaded machine).
+fn failure_at<'a>(gates: &'a [FullGate], commit: &str, now: i64, min_age: i64) -> Option<(&'a FullGate, &'a End)> {
     gates.iter().filter(|g| g.commit == commit).find_map(|g| {
         let e = g.end.as_ref()?;
-        let recent = now.saturating_sub(e.t) < MIN_AGE;
+        let recent = now.saturating_sub(e.t) < min_age;
         (e.rc? != 0 && (recent || !e.cause.is_some_and(Cause::transient))).then_some((g, e))
     })
 }
@@ -249,16 +251,20 @@ fn failure_at<'a>(gates: &'a [FullGate], commit: &str, now: i64) -> Option<(&'a 
 /// What makes a full gate due whatever `main` did (mornycorp/swarm-core#15): a pass older
 /// than `every` seconds (the drift interval, [`Hooks::full_gate_drift_secs`]), or inputs the
 /// gate reads that changed since the last pass, and why (`changed`: a driver, a reference build,
-/// pinned tools; [`Hooks::full_gate_inputs_changed`], or `{prefix}_FULLGATE_DRIFT=<why>`).
+/// pinned tools; [`Hooks::full_gate_inputs_changed`], or `{prefix}_FULLGATE_DRIFT=<why>`). With
+/// it, the project's other interval (mornycorp/swarm-core#118): a pass younger than `min_age`
+/// seconds (the minimum age, [`Hooks::full_gate_min_age_secs`]) leaves a `main` that moved alone,
+/// and a failure for the machine's cause is due again after it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drift {
     pub every: i64,
     pub changed: Option<String>,
+    pub min_age: i64,
 }
 
 impl Default for Drift {
     fn default() -> Self {
-        Drift { every: DRIFT, changed: None }
+        Drift { every: DRIFT, changed: None, min_age: MIN_AGE }
     }
 }
 
@@ -270,14 +276,15 @@ impl Default for Drift {
 /// - for a `main` unchanged since its last pass, only once that pass is older than the drift
 ///   interval;
 /// - for a `main` that moved since (merges no landed full gate verified: a smoke's, a docs or
-///   tooling gate's, a stack landed in part), once that pass is [`MIN_AGE`] old.
+///   tooling gate's, a stack landed in part), once that pass is `drift.min_age` old (the
+///   project's minimum age: [`MIN_AGE`] by default).
 pub fn due(gates: &[FullGate], main: &str, now: i64, drift: &Drift) -> Due {
     if let Some(g) = open(gates, now).first() {
         return Due::No(format!("{} is gating {} ({} {} ago)", g.instance, short(&g.commit), g.sub, age(now - g.started)));
     }
     let pass = last_pass_at(gates);
     let since = pass.map_or(i64::MIN, |(_, t)| t);
-    if let Some((g, e)) = failure_at(gates, main, now).filter(|(_, e)| e.t > since) {
+    if let Some((g, e)) = failure_at(gates, main, now, drift.min_age).filter(|(_, e)| e.t > since) {
         let cause = e.cause.map_or("?", Cause::name);
         return Due::No(format!("main ({}) failed its full gate {} ago ({}, cause {cause}): it waits for main to move", short(main), age(now - e.t), g.sub));
     }
@@ -295,8 +302,8 @@ pub fn due(gates: &[FullGate], main: &str, now: i64, drift: &Drift) -> Due {
         Some((p, t)) if p.commit == main => {
             Due::Yes(format!("main ({}) is unchanged, but its last full gate passed {} ago (over {}): drift", short(main), age(now - t), age(drift.every)))
         }
-        Some((p, t)) if now.saturating_sub(t) < MIN_AGE => {
-            Due::No(format!("main moved since {}, but its full gate passed only {} ago (under {})", short(&p.commit), age(now - t), age(MIN_AGE)))
+        Some((p, t)) if now.saturating_sub(t) < drift.min_age => {
+            Due::No(format!("main moved since {}, but its full gate passed only {} ago (under {})", short(&p.commit), age(now - t), age(drift.min_age)))
         }
         Some((p, t)) => Due::Yes(format!(
             "main ({}) moved since {} ({}, {} ago) by merges no landed full gate verified",
@@ -309,12 +316,14 @@ pub fn due(gates: &[FullGate], main: &str, now: i64, drift: &Drift) -> Due {
     }
 }
 
-/// The drift a full gate of this checkout reads ([`Drift`]): the project's interval, and why its
-/// inputs changed since the last pass (`last_pass`, when it stopped), if they did:
-/// `{prefix}_FULLGATE_DRIFT=<why>` first, then [`Hooks::full_gate_inputs_changed`].
+/// The drift a full gate of this checkout reads ([`Drift`]): the project's intervals (the drift
+/// interval and the minimum age), and why its inputs changed since the last pass (`last_pass`,
+/// when it stopped), if they did: `{prefix}_FULLGATE_DRIFT=<why>` first, then
+/// [`Hooks::full_gate_inputs_changed`].
 pub fn drift(ctx: &Ctx<'_>, last_pass: Option<i64>) -> Drift {
     let forced = ctx.project.env("FULLGATE_DRIFT").map(|why| why.trim().to_owned()).filter(|why| !why.is_empty());
-    Drift { every: ctx.hooks.full_gate_drift_secs(), changed: forced.or_else(|| ctx.hooks.full_gate_inputs_changed(ctx.root, last_pass)) }
+    let changed = forced.or_else(|| ctx.hooks.full_gate_inputs_changed(ctx.root, last_pass));
+    Drift { every: ctx.hooks.full_gate_drift_secs(), changed, min_age: ctx.hooks.full_gate_min_age_secs() }
 }
 
 /// [`drift`] for `gates`.
@@ -930,7 +939,7 @@ pub fn before_claim(ctx: &Ctx<'_>, agent: &str) -> Option<Outcome> {
     }
     match take_if_due(ctx, agent, false) {
         Ok(o) => {
-            println!("fullgate: {}", describe(&o));
+            println!("fullgate: {}", describe(&o, ctx.hooks.full_gate_min_age_secs()));
             Some(o)
         }
         Err(e) => {
@@ -940,13 +949,14 @@ pub fn before_claim(ctx: &Ctx<'_>, agent: &str) -> Option<Outcome> {
     }
 }
 
-/// One line for an outcome.
-pub fn describe(o: &Outcome) -> String {
+/// One line for an outcome; `min_age` is the project's minimum age
+/// ([`Hooks::full_gate_min_age_secs`]), after which a failure for the machine's cause is due again.
+pub fn describe(o: &Outcome, min_age: i64) -> String {
     match o {
         Outcome::NotDue(why) => format!("not due: {why}"),
         Outcome::Yielded(why) => format!("not this agent's: {why}"),
         Outcome::Passed(c) => format!("passed: main {} is green", short(c)),
-        Outcome::Machine(c) => format!("failed for the machine's cause ({}): nothing filed; it is due again in {}", c.name(), age(MIN_AGE)),
+        Outcome::Machine(c) => format!("failed for the machine's cause ({}): nothing filed; it is due again in {}", c.name(), age(min_age)),
         Outcome::Red(Some(n)) => format!("failed: filed main-red #{n}"),
         Outcome::Red(None) => "failed: main-red is open already".to_owned(),
     }
@@ -969,6 +979,7 @@ pub fn report(gates: &[FullGate], main: &str, now: i64, drift: &Drift) -> String
         s += &format!("abandoned: {} of {} ({} ago, over {})\n", g.sub, g.instance, age(now - g.started), age(STALE));
     }
     s += &format!("drift: due again {} after a pass, whatever main did\n", age(drift.every));
+    s += &format!("min age: due at most every {} while main moves\n", age(drift.min_age));
     match due(gates, main, now, drift) {
         Due::Yes(why) => s += &format!("due: yes ({why})\n"),
         Due::No(why) => s += &format!("due: no ({why})\n"),
@@ -1016,7 +1027,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     if let Some((sub, commit)) = run {
         let agent = lock::agent(project, agent, "fullgate")?;
         let outcome = run_here(&ctx, &agent, &sub, &commit)?;
-        println!("fullgate: {}", describe(&outcome));
+        println!("fullgate: {}", describe(&outcome, hooks.full_gate_min_age_secs()));
         println!("{}", outcome_line(&outcome));
         return Ok(());
     }
@@ -1036,7 +1047,7 @@ pub fn run(project: &Project, hooks: &dyn Hooks, root: &Path, args: &[&str]) -> 
     }
     let agent = lock::agent(project, agent, "fullgate")?;
     let outcome = take_if_due(&ctx, &agent, here)?;
-    println!("fullgate: {}", describe(&outcome));
+    println!("fullgate: {}", describe(&outcome, hooks.full_gate_min_age_secs()));
     if here {
         println!("{}", outcome_line(&outcome));
     }
@@ -1240,8 +1251,8 @@ mod tests {
         assert_eq!(last_pass(&gates).unwrap().commit, A);
     }
 
-    /// The project's defaults: a day's drift, no inputs changed.
-    const D: Drift = Drift { every: DRIFT, changed: None };
+    /// The project's defaults: a day's drift, no inputs changed, an hour's minimum age.
+    const D: Drift = Drift { every: DRIFT, changed: None, min_age: MIN_AGE };
 
     /// An unchanged `main` isn't gated again within the drift interval, however long; past it, it
     /// is, once (#15). A moved one is due once its pass is an hour old.
@@ -1252,7 +1263,7 @@ mod tests {
             assert!(matches!(due(&gates, A, T0 + later, &D), Due::No(w) if w.contains("unchanged")), "{later}");
         }
         assert!(matches!(due(&gates, A, T0 + 900 + DRIFT, &D), Due::Yes(w) if w.contains("drift")));
-        let hourly = Drift { every: 3600, changed: None };
+        let hourly = Drift { every: 3600, ..D };
         assert!(matches!(due(&gates, A, T0 + 900 + 3600, &hourly), Due::Yes(_)), "the project's own interval");
         // The drift gate passed: unchanged again for a day.
         let again = parse_gates(&files(&[(
@@ -1324,7 +1335,7 @@ mod tests {
     /// `{prefix}_FULLGATE_DRIFT`; but not while one is open, nor for a `main` that failed one since.
     #[test]
     fn changed_inputs_make_it_due() {
-        let changed = Drift { every: DRIFT, changed: Some("the driver moved to 999.1".into()) };
+        let changed = Drift { changed: Some("the driver moved to 999.1".into()), ..D };
         let passed = parse_gates(&files(&[("w-1", &[start("gate-full-aaaaaaa", 0, A), stop("gate-full-aaaaaaa", 900, "rc=0", A)])]));
         assert!(matches!(due(&passed, A, T0 + 1000, &changed), Due::Yes(w) if w.contains("inputs changed: the driver moved to 999.1")));
         let running = parse_gates(&files(&[("w-1", &[start("gate-full-aaaaaaa", 0, A)])]));
@@ -1338,6 +1349,59 @@ mod tests {
         assert!(matches!(due(&green, A, T0 + 1900 + DRIFT, &D), Due::Yes(w) if w.contains("drift")));
         let r = report(&green, A, T0 + 2000, &D);
         assert!(r.contains("drift: due again 24.0 h after a pass") && r.contains("due: no"), "{r}");
+    }
+
+    /// A project whose full gate is long: four hours between periodic gates while `main` moves.
+    struct FourHours;
+    impl Hooks for FourHours {
+        fn full_gate_min_age_secs(&self) -> i64 {
+            4 * 3600
+        }
+    }
+
+    /// #118: the minimum age is the project's ([`Hooks::full_gate_min_age_secs`]), an hour by
+    /// default. With four hours a `main` that moved is left alone at 3 h 59 min after a pass and
+    /// due at 4 h; an unchanged one still waits for the drift interval; `--check` says the value.
+    #[test]
+    fn a_moved_main_is_due_once_its_pass_is_the_projects_minimum_age_old() {
+        let root = Path::new(".");
+        assert_eq!(drift(&Ctx { project: &P, hooks: &crate::Defaults, root }, None).min_age, MIN_AGE, "the default: an hour, as before");
+        let four = drift(&Ctx { project: &P, hooks: &FourHours, root }, None);
+        assert_eq!((four.min_age, four.every), (4 * 3600, DRIFT), "the project's minimum age, beside the default drift interval");
+        let four = Drift { changed: None, ..four };
+        let gates = parse_gates(&files(&[("w-1", &[start("gate-full-aaaaaaa", 0, A), stop("gate-full-aaaaaaa", 900, "rc=0", A)])]));
+        let passed = T0 + 900;
+        assert!(matches!(due(&gates, B, passed + 4 * 3600 - 60, &four), Due::No(w) if w.contains("moved since aaaaaaa") && w.contains("(under 4.0 h)")));
+        assert!(matches!(due(&gates, B, passed + 4 * 3600, &four), Due::Yes(w) if w.contains("moved since aaaaaaa")));
+        // The default's hour is as it was: no at 59 min, yes at an hour, long before the four.
+        assert!(matches!(due(&gates, B, passed + MIN_AGE - 60, &D), Due::No(w) if w.contains("passed only 59 min ago (under 60 min)")));
+        assert!(matches!(due(&gates, B, passed + MIN_AGE, &D), Due::Yes(_)));
+        // An unchanged main is the drift interval's, whatever the minimum age.
+        assert!(matches!(due(&gates, A, passed + 5 * 3600, &four), Due::No(w) if w.contains("unchanged")));
+        let r = report(&gates, B, passed + 2 * 3600, &four);
+        assert!(r.contains("min age: due at most every 4.0 h while main moves\n") && r.contains("due: no (main moved since aaaaaaa"), "{r}");
+        let r = report(&gates, B, passed + 2 * 3600, &D);
+        assert!(r.contains("min age: due at most every 60 min while main moves\n") && r.contains("due: yes"), "{r}");
+    }
+
+    /// #118: a commit that failed for the machine's cause is held for the project's minimum age,
+    /// and the outcome's line says so; the change's cause waits for `main` to move, as ever.
+    #[test]
+    fn a_machine_cause_failure_is_held_for_the_projects_minimum_age() {
+        let four = Drift { min_age: 4 * 3600, ..D };
+        let gates = |cause: &str| {
+            let lines = [start("gate-full-bbbbbbb", 0, B), stop("gate-full-bbbbbbb", 600, &format!("rc=101; cause={cause}"), B)];
+            parse_gates(&files(&[("w-1", &lines)]))
+        };
+        let failed = T0 + 600;
+        assert!(matches!(due(&gates("link"), B, failed + MIN_AGE, &four), Due::No(w) if w.contains("cause link")), "past the default's hour: still held");
+        assert!(matches!(due(&gates("link"), B, failed + 4 * 3600 - 60, &four), Due::No(w) if w.contains("cause link")));
+        assert!(matches!(due(&gates("link"), B, failed + 4 * 3600, &four), Due::Yes(_)));
+        assert!(matches!(due(&gates("test"), B, failed + 100 * 3600, &four), Due::No(w) if w.contains("waits for main to move")));
+        let line = describe(&Outcome::Machine(Cause::Link), four.min_age);
+        assert!(line.ends_with("nothing filed; it is due again in 4.0 h"), "{line}");
+        let line = describe(&Outcome::Machine(Cause::Link), MIN_AGE);
+        assert!(line.ends_with("nothing filed; it is due again in 60 min"), "{line}");
     }
 
     /// mornycorp/swarm-core#3: a full gate stopped part way (`gate --stop` before its `.rc`,

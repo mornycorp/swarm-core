@@ -3,7 +3,7 @@
      `sync-assets --check` fails on a copy that differs. -->
 # The swarm protocol
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-14 · **Change:** minor (the architecture review's checklist is the app architecture contract, its traps cite their lessons; a merged base means rebasing a draft stacked on it, never a ready PR; corrections and a trim: a link, the earlier tracker's issue numbers, any number of swarms; dated notes and old history rows removed) · **Target:** M1
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-16 · **Change:** minor (the periodic full gate's minimum age is the project's, `Hooks::full_gate_min_age_secs`, an hour by default; the architecture review's checklist is the app architecture contract, its traps cite their lessons; a merged base means rebasing a draft stacked on it, never a ready PR; corrections and a trim: a link, the earlier tracker's issue numbers, any number of swarms; dated notes and old history rows removed) · **Target:** M1
 
 How a swarm of agents builds {{product}}: the roles, the claim, the tracking timeline, the
 gates, the coordinator's loop and the periodic full gate. Every swarm that shares Swarm Core
@@ -240,7 +240,7 @@ request. Always pass `--repo {{github.repo}}` to gh.
    - **Then the periodic full gate**: on a machine with the
      `full-gate` capability ([swarm.md › Capabilities](swarm.md#capabilities)), once it holds the
      issue, it runs the full gate of `main` when it is due (`main` moved since the last
-     passed one, and that pass is over an hour old; one agent at a time): the whole
+     passed one, and that pass is over {{full_gate_min_age}} old; one agent at a time): the whole
      `cargo xtask ci`. Let it finish. When `main` fails it for the change's cause, it files a
      `main-red` issue and claims it for you, and releases your task's claim (its draft PR closed,
      the label off, `release --reason main-red`): work on that instead. `cargo xtask fullgate
@@ -1290,8 +1290,10 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 - **When** (owner, 2026-10-29, sc#15: "Our periodic hourly gate feels unnecessary with all of
   this testing"):
   - `main` moved since the last pass, by merges no landed full gate verified (a smoke's, a docs
-    or tooling gate's, a stack landed in part), and that pass is **more than an hour old**
-    (`MIN_AGE`);
+    or tooling gate's, a stack landed in part), and that pass is
+    **more than {{full_gate_min_age}} old**: the minimum age, the project's
+    `Hooks::full_gate_min_age_secs`, an hour by default (`MIN_AGE`). A project whose
+    full gate is long sets more, so the gate runs at most that often while merges land;
   - or `main` is unchanged, but the last pass is older than the **drift interval**: a day by
     default, the project's `Hooks::full_gate_drift_secs`. A driver, a reference build or the
     machine may have moved while `main` didn't, and a `--full` gate may not read what the
@@ -1302,7 +1304,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
   Never while one is open, nor for a commit of `main` that failed one since its last pass for
   the change's cause: its `main-red` issue covers it until `main` moves; one that failed for the
-  machine's is due again an hour later. Within the drift interval an unchanged `main` is never
+  machine's is due again {{full_gate_min_age}} later. Within the drift interval an unchanged `main` is never
   gated twice, and a run of `--full` batches leaves nothing to gate.
 - **Who:** `cargo xtask claim` runs it, on a machine that can and has room for a build, when
   it is due (the coordinator's claims while it merges pass `--no-fullgate`; a claim while a
@@ -1319,7 +1321,8 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
   `release --reason main-red` event, and a comment `released: <name>, <why>`. `cargo xtask
   fullgate --check` says whether one is due and
   why: `main`, the last passed full gate's commit and age, whether `main` moved since, any open
-  or abandoned start. `cargo xtask fullgate` runs one when it is due.
+  or abandoned start, and the project's drift interval and minimum age (`drift:`, `min age:`).
+  `cargo xtask fullgate` runs one when it is due.
 - **Tell the owner**: a whole `ci` takes 10 to 15
   minutes on a cold checkout, longer in a project whose gate runs GPU tests
   ([swarm.md](swarm.md) gives the project's), and holds the desktop's machine gate lock, so the agent whose claim
@@ -1441,6 +1444,7 @@ unverified too long. Workers keep testing their own branches, with `cargo xtask 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | The periodic full gate › When: the minimum age (a pass younger than it leaves a `main` that moved alone, and a failure for the machine's cause is due again after it) is the project's, `Hooks::full_gate_min_age_secs`, an hour by default (`MIN_AGE`), as the drift interval is; this copy says the project's value, and `fullgate --check` prints it (`min age:`) beside the drift interval |
 | 2026-11-14 | minor | The coordinator's loop, step 10: the architecture review's checklist is [app-architecture.md](app-architecture.md), read rule by rule, with the traps beside it, each citing its lesson; a rule it finds missing is a change to Swarm Core. Watching your PRs: a merged base means rebasing a draft PR stacked on it, never a ready one, which the gate restacks. Step 3 says the gate daemon does steps 2 and 3 where it runs (swarm-core#116) |
 | 2026-11-13 | minor | Trimmed: the dated notes of who decided a rule, and this table's rows before 2026-11-12 (they are in git) |
 | 2026-11-13 | minor | Corrections: the two links to Watching your PRs resolve; `sc#3` to `sc#20` are the earlier tracker's numbers; "both swarms" reads as any number of them |

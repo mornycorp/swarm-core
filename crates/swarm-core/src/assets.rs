@@ -12,7 +12,8 @@
 //! - **Placeholders.** The docs, templates and scripts are templates: `{{name}}` takes the
 //!   consumer's value, from its [`Project`] (`env`, `project`, `github.host`, `github.repo`,
 //!   `checkout_marker`, `stack_state`, `full_gate_worktree`, and
-//!   `gate_lock_max_age`, its `limits.gate_lock_max_age_secs` in words) or its
+//!   `gate_lock_max_age`, its `limits.gate_lock_max_age_secs` in words), an interval its hooks set
+//!   (`full_gate_min_age`, [`Hooks::full_gate_min_age_secs`] in words) or its
 //!   [`Hooks::asset_vars`] (such as `product`, `cli`, `ui_crate`), or the prefix of its package
 //!   names (`crate_prefix`, `crate_prefix_ident`: [`Hooks::changed`]'s `package_prefix`, as `my-`
 //!   and `my_`, for the app skeleton, [`crate::skeleton`]; or, when that is empty, a `crate_prefix`
@@ -74,6 +75,7 @@ pub(crate) fn var(project: &Project, hooks: &dyn Hooks, name: &str) -> Option<St
     match name {
         "crate_prefix" => return crate_prefix(hooks).map(str::to_owned),
         "crate_prefix_ident" => return crate_prefix(hooks).map(|p| p.replace('-', "_")),
+        "full_gate_min_age" => return Some(duration(hooks.full_gate_min_age_secs())),
         _ => {}
     }
     let builtin = match name {

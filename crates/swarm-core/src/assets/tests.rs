@@ -43,6 +43,11 @@ impl Hooks for Gpu {
             ),
         ]
     }
+
+    /// Its full gate is long: at most one every four hours while `main` moves (#118).
+    fn full_gate_min_age_secs(&self) -> i64 {
+        4 * 3600
+    }
 }
 
 fn asset(path: &str) -> &'static Asset {
@@ -134,6 +139,18 @@ fn both_consumers_render_every_asset() {
         protocol.contains("`gpu-stack.json`") && protocol.contains("3 hours, the project's `Limits::gate_lock_max_age_secs`"),
         "the second project's settings"
     );
+    // A hook's value in words, each consumer's (mornycorp/swarm-core#118): the periodic full
+    // gate's minimum age, four hours for the second project and the default's hour for the first.
+    let min_age = |age: &str| {
+        [
+            format!("that pass is over {age} old; one agent at a time"),
+            format!("**more than {age} old**: the minimum age, the project's\n    `Hooks::full_gate_min_age_secs`, an hour by default (`MIN_AGE`)"),
+            format!("machine's is due again {age} later"),
+        ]
+    };
+    for said in min_age("4 hours") {
+        assert!(protocol.contains(&said), "the second project's minimum age: {said}");
+    }
     let si = render(&APP_SWARM, &App, asset("docs/swarm-protocol.md")).unwrap();
     assert!(
         si.contains("`swarm-stack.json`")
@@ -141,6 +158,9 @@ fn both_consumers_render_every_asset() {
             && si.contains("`.claude/worktrees/fullgate`"),
         "the first project's settings"
     );
+    for said in min_age("1 hour") {
+        assert!(si.contains(&said), "the first project's minimum age, the default's: {said}");
+    }
 }
 
 /// GitHub refuses a label whose description is over 100 characters, and the script stops there.
