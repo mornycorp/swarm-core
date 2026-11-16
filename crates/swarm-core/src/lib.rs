@@ -155,6 +155,14 @@ pub trait Hooks {
         fullgate::DRIFT
     }
 
+    /// The minimum age (mornycorp/swarm-core#118): a passed full gate younger than this many
+    /// seconds leaves a `main` that moved alone, so the periodic full gate runs at most this
+    /// often while merges land; a failure for the machine's cause is due again after it too. A
+    /// project whose full gate is long sets more. The default: [`fullgate::MIN_AGE`], an hour.
+    fn full_gate_min_age_secs(&self) -> i64 {
+        fullgate::MIN_AGE
+    }
+
     /// Why the inputs the full gate reads beyond `main` changed since its last pass stopped at
     /// `last_pass` (a Unix time; `None`: none passed), if they did: a driver, a reference build,
     /// pinned tools (mornycorp/swarm-core#15). Some: the gate is due now. The default: none.

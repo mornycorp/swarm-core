@@ -71,6 +71,9 @@ proves a change"). The hooks:
   own xtask, a leftover test process, say).
 - `full_gate_capable`, `full_gate_env`: whether this machine runs the periodic full gate, and what
   the project adds to it (a GPU, the path to its test data, say).
+- `full_gate_min_age_secs`, `full_gate_drift_secs`: how often the periodic full gate runs: at most
+  once every minimum age while `main` moves (an hour by default), and again after the drift
+  interval on a `main` that didn't (a day by default).
 - `claim_holds_first`: a claim holds its issue on the tracking branch before it makes anything,
   so of two claims at once one holds it and the other is refused naming the holder
   (`claim::hold`). Off by default: the claim's events after its PR, as before. This repo's own
